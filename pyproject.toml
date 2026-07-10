@@ -1,0 +1,25 @@
+[project]
+name = "camp-tools"
+version = "0.1.0"
+description = "Registry tooling for camp, a community-governed plugin repository for Moodle: index validation, deterministic artifact builds, source verification, and Composer metadata generation."
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+dependencies = [
+    "PyYAML>=6.0",
+    "jsonschema>=4.21",
+    "markdown-it-py>=3.0",
+]
+
+[project.optional-dependencies]
+screenshots = ["Pillow>=10.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+camp = "camp.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["camp*"]
