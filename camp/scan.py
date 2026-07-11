@@ -164,8 +164,12 @@ def _request(url: str, token: str | None) -> tuple[int, bytes, dict]:
 
 
 def _search(query: str, limit: int, token: str | None, log,
-            sort: str = "stars") -> list[Candidate]:
+            sort: str = "stars") -> tuple[list[Candidate], int]:
+    """Returns (candidates, total_count). total_count is GitHub's reported
+    match count for the query — used to decide whether the 1000-result cap
+    is being hit and date-window sharding is needed."""
     candidates: list[Candidate] = []
+    total = 0
     page = 1
     while len(candidates) < limit:
         per_page = min(100, limit - len(candidates))
@@ -183,7 +187,9 @@ def _search(query: str, limit: int, token: str | None, log,
         if status != 200:
             log(f"  search failed (HTTP {status}): {body[:200]!r}")
             break
-        items = json.loads(body).get("items", [])
+        payload = json.loads(body)
+        total = payload.get("total_count", total)
+        items = payload.get("items", [])
         if not items:
             break
         for repo in items:
@@ -198,19 +204,54 @@ def _search(query: str, limit: int, token: str | None, log,
                 archived=repo.get("archived", False),
             ))
         page += 1
-    return candidates[:limit]
+    return candidates[:limit], total
 
 
-def _fetch_component(candidate: Candidate, token: str | None) -> tuple[str, str | None, str]:
+# GitHub caps search results at 1000 per query. When a query matches more,
+# split its pushed-date range into windows each under the cap (recursive
+# bisection), so every match is reachable by paginating the windows. Used
+# for the largest frankenstyle prefixes (local_ ~2.2k, mod_/block_ ~1.5k).
+SEARCH_RESULT_CAP = 1000
+SHARD_TARGET = 900  # leave margin: counts drift between check and fetch
+GITHUB_EPOCH = "2010-01-01"  # earliest plausible Moodle plugin on GitHub
+
+
+def _date_windows(base_query: str, token: str | None, log,
+                  target: int = SHARD_TARGET) -> list[str]:
+    """Bisect base_query's pushed-date range until each window matches fewer
+    than `target` repos; return the windowed query strings."""
+    lo = datetime.date.fromisoformat(GITHUB_EPOCH)
+    hi = datetime.date.today() + datetime.timedelta(days=1)
+    windows: list[str] = []
+    stack = [(lo, hi)]
+    while stack:
+        start, end = stack.pop()
+        wq = f"{base_query} pushed:{start.isoformat()}..{end.isoformat()}"
+        _, count = _search(wq, 1, token, log, sort="updated")
+        if count < target or (end - start).days <= 1:
+            if count > 0:
+                windows.append(wq)
+        else:
+            mid = start + (end - start) // 2
+            stack.append((start, mid))
+            stack.append((mid, end))
+    return sorted(windows)
+
+
+def _fetch_component(candidate: Candidate, token: str | None,
+                     log=lambda *_: None) -> tuple[str, str | None, str]:
     """Read version.php at the repo root and extract the component name.
 
     Returns (status, component, text): status is "ok", "missing" (file
     genuinely absent or unparseable — a recordable rejection), or "transient"
-    (rate limit / server error — must NOT be recorded as a rejection). The
-    file text is returned so the caller can classify the license from the
-    Moodle GPL header, which GitHub's detector misses when a plugin ships no
-    LICENSE file (the common case). With a token, uses the authenticated
-    contents API (5000/hr core quota); the anonymous raw host throttles hard.
+    (server error — must NOT be recorded as a rejection). Core rate-limit
+    exhaustion (403/429 with a zero remaining-quota header) is NOT transient:
+    the fetcher waits for the reset and retries, so a long sweep completes
+    instead of mass-failing once quota runs out. The file text is returned so
+    the caller can classify the license from the Moodle GPL header, which
+    GitHub's detector misses when a plugin ships no LICENSE file (the common
+    case). With a token, uses the authenticated contents API (5000/hr core
+    quota); the anonymous raw host throttles hard.
     """
     if token:
         url = (f"https://api.github.com/repos/{candidate.full_name}/contents/"
@@ -225,13 +266,28 @@ def _fetch_component(candidate: Candidate, token: str | None) -> tuple[str, str 
         "User-Agent": USER_AGENT, **headers_accept,
         **({"Authorization": f"Bearer {req_token}"} if req_token else {}),
     })
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = response.read()
-    except urllib.error.HTTPError as exc:
-        return ("missing" if exc.code == 404 else "transient", None, "")
-    except urllib.error.URLError:
-        return ("transient", None, "")
+    while True:
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read()
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return ("missing", None, "")
+            if exc.code in (403, 429) and exc.headers.get("X-RateLimit-Remaining") == "0":
+                reset = int(exc.headers.get("X-RateLimit-Reset", "0"))
+                wait = min(max(0, reset - int(time.time())) + 1, 3600)
+                log(f"  core quota exhausted; waiting {wait}s for reset")
+                time.sleep(wait)
+                continue
+            if exc.code == 429:  # secondary rate limit, no reset header
+                wait = int(exc.headers.get("Retry-After", "30")) + 1
+                log(f"  secondary rate limit; waiting {wait}s")
+                time.sleep(wait)
+                continue
+            return ("transient", None, "")
+        except urllib.error.URLError:
+            return ("transient", None, "")
     text = body.decode(errors="replace")
     match = COMPONENT_RE.search(text)
     return ("ok", match.group(1), text) if match else ("missing", None, text)
@@ -349,7 +405,7 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             results.append(ScanResult(candidate, "bad-license"))
             continue
 
-        fetch_status, component, _version_text = _fetch_component(candidate, token)
+        fetch_status, component, _version_text = _fetch_component(candidate, token, log)
         if fetch_status == "transient":
             results.append(ScanResult(candidate, "fetch-error"))
             continue
@@ -600,7 +656,19 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
 
     for query, sort in specs:
         log(f"searching: {query}  (by {sort})")
-        for candidate in _search(query, limit, token, log, sort=sort):
+        candidates, total = _search(query, limit, token, log, sort=sort)
+        # Beyond the 1000-result cap the plain search can't reach the older
+        # tail; date-shard the query so every match is paginable. Only name
+        # searches are sharded (topic queries are small and the --limit is a
+        # deliberate cap on those).
+        if total > SEARCH_RESULT_CAP and "in:name" in query:
+            windows = _date_windows(query, token, log)
+            log(f"  {total} matches > cap; sharding into {len(windows)} date windows")
+            for window in windows:
+                extra, _ = _search(window, SEARCH_RESULT_CAP, token, log, sort=sort)
+                candidates.extend(extra)
+
+        for candidate in candidates:
             if candidate.full_name in seen_repos:
                 continue
             seen_repos.add(candidate.full_name)
@@ -614,7 +682,7 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
             # reports no license for the many plugins that ship the GPL grant
             # as a file header rather than a root LICENSE file, so a
             # license-first gate would wrongly reject them.
-            fetch_status, component, version_text = _fetch_component(candidate, token)
+            fetch_status, component, version_text = _fetch_component(candidate, token, log)
             if fetch_status == "transient":
                 # Rate limit or server error: leave the ledger untouched so
                 # the repo is re-evaluated on the next scan.

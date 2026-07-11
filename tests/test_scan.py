@@ -198,9 +198,9 @@ def test_scan_admits_license_from_version_php_header(tmp_path, monkeypatch):
     version_php = ("<?php\n// it under the terms of the GNU General Public License as\n"
                    "// published by the Free Software Foundation, either version 3.\n"
                    "$plugin->component = 'local_recompletion';\n")
-    monkeypatch.setattr(scan, "_search", lambda *a, **k: [candidate])
+    monkeypatch.setattr(scan, "_search", lambda *a, **k: ([candidate], 1))
     monkeypatch.setattr(scan, "_fetch_component",
-                        lambda c, t: ("ok", "local_recompletion", version_php))
+                        lambda c, t, log=None: ("ok", "local_recompletion", version_php))
 
     results = scan.scan(index, queries=["x"], limit=1, token="fake")
     assert results[0].outcome == "written"
@@ -218,3 +218,32 @@ def test_default_query_specs_include_frankenstyle_by_updated():
     # every prefix query is a name search sorted by updated
     prefix_specs = [(q, s) for q, s in DEFAULT_QUERY_SPECS if q.startswith("moodle-")]
     assert prefix_specs and all(s == "updated" and "in:name" in q for q, s in prefix_specs)
+
+
+def test_date_windows_partition_until_under_target(monkeypatch):
+    """Bisection must keep splitting until every window is under the target,
+    and cover the whole range. Simulate a corpus of 3000 evenly-spread repos."""
+    import camp.scan as scan
+
+    def fake_search(query, limit, token, log, sort="stars"):
+        # parse the pushed:START..END window and return a count proportional
+        # to the span (3000 repos spread evenly over the 2010..today range).
+        import datetime as dt
+        span = query.split("pushed:")[1]
+        a, b = (dt.date.fromisoformat(x) for x in span.split(".."))
+        total_days = (dt.date.today() + dt.timedelta(days=1)
+                      - dt.date.fromisoformat(scan.GITHUB_EPOCH)).days
+        count = round(3000 * (b - a).days / total_days)
+        return [], count
+
+    monkeypatch.setattr(scan, "_search", fake_search)
+    windows = scan._date_windows("moodle-local_ in:name", token=None, log=lambda *_: None)
+    assert len(windows) >= 4  # 3000 / 900 -> at least 4 windows
+    # every window is under the target when re-counted
+    for w in windows:
+        _, n = fake_search(w, 1, None, lambda *_: None)
+        assert n < scan.SHARD_TARGET
+    # windows are contiguous and span the full range (ignoring shared boundaries)
+    import datetime as dt
+    spans = sorted((w.split("pushed:")[1].split("..") for w in windows))
+    assert spans[0][0] == scan.GITHUB_EPOCH
