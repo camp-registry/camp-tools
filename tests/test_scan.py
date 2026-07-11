@@ -147,3 +147,35 @@ def test_name_matches_component():
     assert _name_matches_component("x/moodle-theme_boost_union", "theme_boost_union")
     assert not _name_matches_component("onyetapp/WORDPRESS-02-onyetmpdf", "mod_ompdf")
     assert not _name_matches_component("someone/random-repo", "mod_quiz")
+
+
+def test_gitlab_entry_uses_gitlab_maintainer():
+    from camp.scan import _entry_for
+    c = Candidate(full_name="grp/moodle-mod_x", html_url="https://gitlab.com/grp/moodle-mod_x",
+                  owner="grp", description="", license_spdx="GPL-3.0", stars=2,
+                  default_branch="main", archived=False, platform="gitlab")
+    entry = _entry_for(c, "mod_x", "2026-07-11")
+    assert entry["maintainers"] == [{"gitlab": "grp"}]
+    assert entry["source"] == "https://gitlab.com/grp/moodle-mod_x"
+
+
+def test_gitlab_license_map():
+    from camp.scan import GITLAB_LICENSE_MAP
+    assert GITLAB_LICENSE_MAP["gpl-3.0"] == "GPL-3.0"
+    assert GITLAB_LICENSE_MAP["apache-2.0"] == "Apache-2.0"
+    assert "cc-by-sa-4.0" not in GITLAB_LICENSE_MAP
+
+
+def test_gitlab_maintainer_validates(index_dir, tmp_path):
+    """A gitlab-only maintainer must satisfy the schema."""
+    import yaml
+    from camp.validate import validate_entry
+    entry_path = index_dir / "plugins" / "mod" / "mod_gl.yml"
+    entry = {
+        "component": "mod_gl",
+        "source": "https://gitlab.com/grp/moodle-mod_gl",
+        "maintainers": [{"gitlab": "grp"}],
+        "tier": 0, "status": "active", "discovered": "2026-07-11", "releases": [],
+    }
+    entry_path.write_text(yaml.safe_dump(entry))
+    assert validate_entry(entry_path) == []

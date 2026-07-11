@@ -416,6 +416,21 @@ def _cmd_validate_advisory(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
+    from . import scan as scan_mod
+    results = scan_mod.scan_gitlab(args.index_dir, terms=args.term or None,
+                                   limit=args.limit, dry_run=args.dry_run,
+                                   recheck_days=args.recheck_days)
+    by_outcome: dict[str, int] = {}
+    for result in results:
+        by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
+    print(f"\n{len(results)} candidates: " +
+          ", ".join(f"{count} {outcome}" for outcome, count in sorted(by_outcome.items())))
+    if args.dry_run:
+        print("(dry run: nothing written)")
+    return 0
+
+
 def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
     from .scan import recheck_noassertion
     results = recheck_noassertion(args.index_dir, dry_run=args.dry_run)
@@ -578,6 +593,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("advisories", nargs="+")
     p.add_argument("--index-dir", help="also cross-check the component exists in this index")
     p.set_defaults(func=_cmd_validate_advisory)
+
+    p = sub.add_parser("scan-gitlab", help="discover Moodle plugins on GitLab.com and write Tier 0 entries")
+    p.add_argument("index_dir")
+    p.add_argument("--term", action="append",
+                   help="GitLab project search term (repeatable; default: frankenstyle prefixes)")
+    p.add_argument("--limit", type=int, default=50, help="max results per term (default 50)")
+    p.add_argument("--dry-run", action="store_true", help="report without writing entries")
+    p.add_argument("--recheck-days", type=int, default=30,
+                   help="re-evaluate ledger-rejected repos older than this (0 = always recheck)")
+    p.set_defaults(func=_cmd_scan_gitlab)
 
     p = sub.add_parser("recheck-licenses",
                        help="re-check NOASSERTION rejections by classifying license file text")

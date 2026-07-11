@@ -64,6 +64,7 @@ class Candidate:
     stars: int
     default_branch: str
     archived: bool
+    platform: str = "github"
 
 
 @dataclass
@@ -261,10 +262,11 @@ def _name_matches_component(full_name: str, component: str) -> bool:
 
 
 def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
+    maintainer = {("gitlab" if candidate.platform == "gitlab" else "github"): candidate.owner}
     entry: dict = {
         "component": component,
         "source": candidate.html_url,
-        "maintainers": [{"github": candidate.owner}],
+        "maintainers": [maintainer],
         "tier": 0,
         "status": "active",
         "discovered": today,
@@ -359,6 +361,198 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
                        f"listed as {component}; license {spdx} classified from text", today)
         results.append(ScanResult(candidate, "written", component))
         log(f"  + {component}  ({full_name}, {spdx} from text)")
+
+    if not dry_run:
+        save_ledger(index, ledger)
+    return results
+
+
+# --- GitLab discovery --------------------------------------------------------
+# GitLab.com is the second-largest home for Moodle plugins after GitHub.
+# The project search API is usable unauthenticated (rate-limited); set
+# GITLAB_TOKEN for headroom. License comes from the projects API with
+# license=true; its lowercase key maps to our SPDX forms, and unrecognized
+# licenses fall back to the same license-text classifier used for GitHub.
+
+GITLAB_API = "https://gitlab.com/api/v4"
+GITLAB_DEFAULT_TERMS = ["moodle-mod_", "moodle-local_", "moodle-block_",
+                        "moodle-theme_", "moodle-tool_", "moodle-qtype_",
+                        "moodle-auth_", "moodle-enrol_", "moodle-format_",
+                        "moodle-filter_", "moodle-atto_", "moodle-report_"]
+# GitLab license "key" (lowercase) -> our SPDX form.
+GITLAB_LICENSE_MAP = {
+    "mit": "MIT", "apache-2.0": "Apache-2.0", "gpl-3.0": "GPL-3.0",
+    "gpl-2.0": "GPL-2.0", "agpl-3.0": "AGPL-3.0", "lgpl-3.0": "LGPL-3.0",
+    "lgpl-2.1": "LGPL-2.1", "bsd-3-clause": "BSD-3-Clause",
+    "bsd-2-clause": "BSD-2-Clause", "unlicense": "Unlicense", "0bsd": "0BSD",
+    "isc": "ISC", "cc0-1.0": "CC0-1.0", "zlib": "Zlib",
+}
+
+
+def _gitlab_request(url: str, token: str | None) -> tuple[int, bytes, dict]:
+    req = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
+        **({"PRIVATE-TOKEN": token} if token else {}),
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, resp.read(), dict(resp.headers)
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read(), dict(exc.headers)
+    except urllib.error.URLError:
+        return 0, b"", {}
+
+
+def _gitlab_search(term: str, limit: int, token: str | None, log) -> list[Candidate]:
+    candidates: list[Candidate] = []
+    page = 1
+    while len(candidates) < limit:
+        per_page = min(100, limit - len(candidates))
+        url = (f"{GITLAB_API}/projects?" + urllib.parse.urlencode({
+            "search": term, "order_by": "star_count", "sort": "desc",
+            "per_page": per_page, "page": page, "archived": "false",
+            "license": "true",
+        }))
+        status, body, headers = _gitlab_request(url, token)
+        if status == 429:
+            wait = int(headers.get("Retry-After", "30")) + 1
+            log(f"  rate-limited; sleeping {wait}s")
+            time.sleep(wait)
+            continue
+        if status != 200:
+            log(f"  gitlab search failed (HTTP {status})")
+            break
+        projects = json.loads(body)
+        if not projects:
+            break
+        for project in projects:
+            license_key = (project.get("license") or {}).get("key")
+            candidates.append(Candidate(
+                full_name=project["path_with_namespace"],
+                html_url=project["web_url"],
+                owner=project["namespace"].get("full_path") or project["namespace"]["path"],
+                description=(project.get("description") or "").strip(),
+                license_spdx=GITLAB_LICENSE_MAP.get(license_key),
+                stars=project.get("star_count", 0),
+                default_branch=project.get("default_branch") or "HEAD",
+                archived=project.get("archived", False),
+                platform="gitlab",
+            ))
+        if len(projects) < per_page:
+            break
+        page += 1
+        time.sleep(0.3)  # politeness between pages
+    return candidates[:limit]
+
+
+def _gitlab_fetch_file(project_path: str, path: str, ref: str,
+                       token: str | None) -> tuple[str, bytes | None]:
+    encoded_project = urllib.parse.quote(project_path, safe="")
+    encoded_path = urllib.parse.quote(path, safe="")
+    url = f"{GITLAB_API}/projects/{encoded_project}/repository/files/{encoded_path}/raw?ref={ref}"
+    status, body, _ = _gitlab_request(url, token)
+    if status == 200:
+        return "ok", body
+    if status == 404:
+        return "missing", None
+    return "transient", None
+
+
+def _gitlab_component(candidate: Candidate, token: str | None) -> tuple[str, str | None, str]:
+    """(status, component, version_php_text). The version.php text is returned
+    so the caller can classify the license from its header — Moodle plugins
+    conventionally carry the GPL grant as a per-file header comment rather
+    than a LICENSE file, so GitLab's file-based detector usually finds none."""
+    status, body = _gitlab_fetch_file(candidate.full_name, "version.php",
+                                      candidate.default_branch, token)
+    if status != "ok":
+        return status, None, ""
+    text = body.decode(errors="replace")
+    match = COMPONENT_RE.search(text)
+    return ("ok", match.group(1), text) if match else ("missing", None, text)
+
+
+def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: int = 50,
+                token: str | None = None, dry_run: bool = False, log=print,
+                recheck_days: int = DEFAULT_RECHECK_DAYS) -> list[ScanResult]:
+    """Discover Moodle plugins on GitLab.com and write Tier 0 entries."""
+    token = token or os.environ.get("GITLAB_TOKEN")
+    terms = terms or GITLAB_DEFAULT_TERMS
+    index = Path(index_dir)
+    today = datetime.date.today().isoformat()
+    ledger = load_ledger(index)
+
+    seen_repos: set[str] = set()
+    seen_components: set[str] = set()
+    results: list[ScanResult] = []
+
+    for term in terms:
+        log(f"gitlab search: {term}")
+        for candidate in _gitlab_search(term, limit, token, log):
+            ledger_key = f"gitlab.com/{candidate.full_name}"
+            if ledger_key in seen_repos:
+                continue
+            seen_repos.add(ledger_key)
+
+            if should_skip(ledger, ledger_key, today, recheck_days):
+                results.append(ScanResult(candidate, "skipped-known"))
+                continue
+
+            # Fetch version.php first: it yields the component name and, via
+            # its Moodle GPL header, the license — which GitLab's file-based
+            # detector usually misses (plugins rarely ship a LICENSE file).
+            fetch_status, component, version_text = _gitlab_component(candidate, token)
+            if fetch_status == "transient":
+                results.append(ScanResult(candidate, "fetch-error"))
+                continue
+            if fetch_status == "missing":
+                record_outcome(ledger, candidate, "no-version-php",
+                               f"no parseable version.php at root of branch "
+                               f"{candidate.default_branch}", today)
+                results.append(ScanResult(candidate, "no-version-php"))
+                continue
+
+            # License precedence: GitLab API value, else the version.php header.
+            spdx = candidate.license_spdx
+            if not _is_acceptable_license(spdx):
+                spdx = classify_license_text(version_text) or spdx
+                candidate.license_spdx = spdx
+            if not _is_acceptable_license(spdx):
+                record_outcome(ledger, candidate, "bad-license",
+                               f"license: {spdx or 'none detected'}", today)
+                results.append(ScanResult(candidate, "bad-license"))
+                continue
+            if component in seen_components:
+                record_outcome(ledger, candidate, "exists",
+                               f"component {component} already indexed this run", today)
+                results.append(ScanResult(candidate, "exists", component))
+                continue
+
+            plugintype = component.partition("_")[0]
+            out_path = index / "plugins" / plugintype / f"{component}.yml"
+            if out_path.exists():
+                record_outcome(ledger, candidate, "exists",
+                               f"component {component} already registered "
+                               f"(first-come, RFC §8)", today)
+                results.append(ScanResult(candidate, "exists", component))
+                seen_components.add(component)
+                continue
+            if not _name_matches_component(candidate.full_name, component):
+                record_outcome(ledger, candidate, "needs-review",
+                               f"declares {component} but repo name does not correspond; "
+                               f"human sign-off required before listing (RFC §8)", today)
+                results.append(ScanResult(candidate, "needs-review", component))
+                continue
+
+            if not dry_run:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(out_path, "w") as f:
+                    yaml.safe_dump(_entry_for(candidate, component, today), f,
+                                   sort_keys=False, allow_unicode=True)
+            record_outcome(ledger, candidate, "written", f"listed as {component}", today)
+            seen_components.add(component)
+            results.append(ScanResult(candidate, "written", component))
+            log(f"  + {component}  ({candidate.full_name}, ★{candidate.stars}, {spdx})")
 
     if not dry_run:
         save_ledger(index, ledger)

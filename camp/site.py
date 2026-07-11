@@ -277,7 +277,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     latest = entry["releases"][-1] if entry["releases"] else None
     package = _package_name(entry)
     maintainer = entry["maintainers"][0]
-    maintainer_name = maintainer.get("name") or maintainer.get("github") or "maintainer"
+    maintainer_name = (maintainer.get("name") or maintainer.get("github")
+                       or maintainer.get("gitlab") or "maintainer")
 
     header = f"""
 <header class="p">
