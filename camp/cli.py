@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import datetime
 import re
 import subprocess
@@ -155,6 +156,86 @@ def _print_report(report, limit: int = 40) -> None:
             print(f"    | {finding.excerpt}")
     if len(report.findings) > limit:
         print(f"  … and {len(report.findings) - limit} more findings")
+
+
+def _cmd_rekor(args: argparse.Namespace) -> int:
+    from . import rekor
+    key_path = Path(args.key)
+    if not key_path.exists():
+        rekor.generate_key(key_path)
+        print(f"generated signing key {key_path} (dev key — see module docstring)")
+    entry = rekor.build_entry(args.artifact, key_path)
+    assert rekor.verify_entry_locally(entry, args.artifact), "entry self-check failed"
+    print(json.dumps(entry, indent=2))
+    if not args.submit:
+        print("\nDRY RUN — entry verified locally but NOT submitted. "
+              "Submission to the public log is permanent; use --submit to publish.")
+        return 0
+    receipt = rekor.submit(entry)
+    print(f"submitted: {json.dumps(receipt)[:400]}")
+    return 0
+
+
+def _cmd_tuf(args: argparse.Namespace) -> int:
+    from . import tuf_repo
+    if args.tuf_command == "init":
+        written = tuf_repo.init_keys(args.keys_dir, root_keys=args.root_keys,
+                                     threshold=args.threshold)
+        for path in written:
+            print(f"wrote {path}")
+        print(f"root threshold: {args.threshold} of {args.root_keys}")
+        print("WARNING: plaintext dev/staging keys — see WARNING.txt")
+        return 0
+    if args.tuf_command == "sign":
+        versions = tuf_repo.sign_repository(args.targets_dir, args.keys_dir,
+                                            args.metadata_dir)
+        for role, version in versions.items():
+            print(f"{role}: v{version}" if role != "target-files"
+                  else f"{version} target files signed")
+        return 0
+    if args.tuf_command == "verify":
+        problems = tuf_repo.verify_repository(args.metadata_dir, args.targets_dir)
+        if problems:
+            for problem in problems:
+                print(f"  - {problem}")
+            return 1
+        print("ok: signature chain valid, all targets match signed hashes")
+        return 0
+    raise AssertionError(args.tuf_command)
+
+
+def _cmd_scan_malware(args: argparse.Namespace) -> int:
+    from .malware import scan
+    if args.entry:
+        entry = load_entry(args.entry)
+        if not entry["releases"]:
+            print("no releases to scan (tier 0)")
+            return 0
+        release = entry["releases"][-1]
+        with tempfile.TemporaryDirectory(prefix="camp-malware-") as tmp:
+            repo = args.source or str(Path(tmp) / "source")
+            if not args.source:
+                subprocess.run(["git", "clone", "--quiet", entry["source"], repo], check=True)
+            artifact = build_mod.build_zip(repo, release["tag"], entry["component"])
+            zip_path = Path(tmp) / "artifact.zip"
+            zip_path.write_bytes(artifact.data)
+            result = scan(zip_path, entry["component"], release["zip-sha256"])
+    else:
+        result = scan(args.path)
+
+    for warning in result.warnings:
+        print(f"  ! {warning}")
+    for detection in result.detections:
+        print(f"  - DETECTED: {detection}")
+    print(f"engines run: {', '.join(result.engines_run) or 'none'}")
+    if not result.clean:
+        print("MALWARE DETECTED — this is a hard failure")
+        return 1
+    if args.require_engine and not result.engines_run:
+        print("no scan engine available and --require-engine set")
+        return 1
+    print("clean" + (" (no engine ran — advisory only)" if not result.engines_run else ""))
+    return 0
 
 
 def _cmd_scaffold(args: argparse.Namespace) -> int:
@@ -316,6 +397,39 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("base_url")
     p.add_argument("out")
     p.set_defaults(func=_cmd_composer)
+
+    p = sub.add_parser("rekor", help="build a Rekor transparency-log entry (dry-run unless --submit)")
+    p.add_argument("artifact")
+    p.add_argument("--key", default="rekor-signing.pem",
+                   help="ECDSA P-256 signing key (generated if missing)")
+    p.add_argument("--submit", action="store_true",
+                   help="actually publish to the public log — PERMANENT")
+    p.set_defaults(func=_cmd_rekor)
+
+    p = sub.add_parser("tuf", help="TUF metadata signing over the published file tree")
+    tuf_sub = p.add_subparsers(dest="tuf_command", required=True)
+    q = tuf_sub.add_parser("init", help="generate role keys (dev/staging)")
+    q.add_argument("keys_dir")
+    q.add_argument("--root-keys", type=int, default=1)
+    q.add_argument("--threshold", type=int, default=1)
+    q.set_defaults(func=_cmd_tuf)
+    q = tuf_sub.add_parser("sign", help="sign the target tree, writing versioned metadata")
+    q.add_argument("targets_dir")
+    q.add_argument("keys_dir")
+    q.add_argument("metadata_dir")
+    q.set_defaults(func=_cmd_tuf)
+    q = tuf_sub.add_parser("verify", help="client-style verification of metadata + targets")
+    q.add_argument("metadata_dir")
+    q.add_argument("targets_dir")
+    q.set_defaults(func=_cmd_tuf)
+
+    p = sub.add_parser("scan-malware", help="malware-scan an artifact or an entry's latest release")
+    p.add_argument("path", nargs="?", help="ZIP or directory to scan")
+    p.add_argument("--entry", help="index entry: rebuild latest release and scan it")
+    p.add_argument("--source", help="local checkout for --entry (skips cloning)")
+    p.add_argument("--require-engine", action="store_true",
+                   help="fail if no scan engine is available (CI mode)")
+    p.set_defaults(func=_cmd_scan_malware)
 
     p = sub.add_parser("scaffold", help="scaffold .camp/listing.yml + .gitattributes in a plugin repo")
     p.add_argument("source_dir")
