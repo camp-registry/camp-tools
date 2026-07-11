@@ -1,5 +1,7 @@
 """Scanner parsing and acceptance logic (no network)."""
 
+import yaml
+
 from camp.scan import COMPONENT_RE, Candidate, _entry_for, _is_gpl
 
 
@@ -179,3 +181,28 @@ def test_gitlab_maintainer_validates(index_dir, tmp_path):
     }
     entry_path.write_text(yaml.safe_dump(entry))
     assert validate_entry(entry_path) == []
+
+
+def test_scan_admits_license_from_version_php_header(tmp_path, monkeypatch):
+    """A repo GitHub reports as license=None must still be admitted when its
+    version.php carries the standard Moodle GPL header (the local_recompletion
+    case: no LICENSE file, GPL grant in the header)."""
+    import camp.scan as scan
+    index = tmp_path / "index"
+    (index / "plugins").mkdir(parents=True)
+
+    candidate = _candidate(full_name="danmarsden/moodle-local_recompletion",
+                           html_url="https://github.com/danmarsden/moodle-local_recompletion",
+                           owner="danmarsden", license_spdx=None,
+                           default_branch="MOODLE_405_STABLE")
+    version_php = ("<?php\n// it under the terms of the GNU General Public License as\n"
+                   "// published by the Free Software Foundation, either version 3.\n"
+                   "$plugin->component = 'local_recompletion';\n")
+    monkeypatch.setattr(scan, "_search", lambda *a, **k: [candidate])
+    monkeypatch.setattr(scan, "_fetch_component",
+                        lambda c, t: ("ok", "local_recompletion", version_php))
+
+    results = scan.scan(index, queries=["x"], limit=1, token="fake")
+    assert results[0].outcome == "written"
+    written = yaml.safe_load((index / "plugins" / "local" / "local_recompletion.yml").read_text())
+    assert written["license"] == "GPL-3.0"

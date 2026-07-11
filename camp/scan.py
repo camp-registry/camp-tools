@@ -181,14 +181,16 @@ def _search(query: str, limit: int, token: str | None, log) -> list[Candidate]:
     return candidates[:limit]
 
 
-def _fetch_component(candidate: Candidate, token: str | None) -> tuple[str, str | None]:
+def _fetch_component(candidate: Candidate, token: str | None) -> tuple[str, str | None, str]:
     """Read version.php at the repo root and extract the component name.
 
-    Returns (status, component): status is "ok", "missing" (file genuinely
-    absent or unparseable — a recordable rejection), or "transient" (rate
-    limit / server error — must NOT be recorded as a rejection). With a
-    token, uses the authenticated contents API (5000/hr core quota); the
-    anonymous raw host throttles bursts hard.
+    Returns (status, component, text): status is "ok", "missing" (file
+    genuinely absent or unparseable — a recordable rejection), or "transient"
+    (rate limit / server error — must NOT be recorded as a rejection). The
+    file text is returned so the caller can classify the license from the
+    Moodle GPL header, which GitHub's detector misses when a plugin ships no
+    LICENSE file (the common case). With a token, uses the authenticated
+    contents API (5000/hr core quota); the anonymous raw host throttles hard.
     """
     if token:
         url = (f"https://api.github.com/repos/{candidate.full_name}/contents/"
@@ -207,11 +209,12 @@ def _fetch_component(candidate: Candidate, token: str | None) -> tuple[str, str 
         with urllib.request.urlopen(request, timeout=30) as response:
             body = response.read()
     except urllib.error.HTTPError as exc:
-        return ("missing" if exc.code == 404 else "transient", None)
+        return ("missing" if exc.code == 404 else "transient", None, "")
     except urllib.error.URLError:
-        return ("transient", None)
-    match = COMPONENT_RE.search(body.decode(errors="replace"))
-    return ("ok", match.group(1)) if match else ("missing", None)
+        return ("transient", None, "")
+    text = body.decode(errors="replace")
+    match = COMPONENT_RE.search(text)
+    return ("ok", match.group(1), text) if match else ("missing", None, text)
 
 
 def _is_gpl(spdx: str | None) -> bool:
@@ -326,7 +329,7 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             results.append(ScanResult(candidate, "bad-license"))
             continue
 
-        fetch_status, component = _fetch_component(candidate, token)
+        fetch_status, component, _version_text = _fetch_component(candidate, token)
         if fetch_status == "transient":
             results.append(ScanResult(candidate, "fetch-error"))
             continue
@@ -584,13 +587,12 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 results.append(ScanResult(candidate, "skipped-known"))
                 continue
 
-            if not _is_acceptable_license(candidate.license_spdx):
-                record_outcome(ledger, candidate, "bad-license",
-                               f"license: {candidate.license_spdx or 'none detected'}", today)
-                results.append(ScanResult(candidate, "bad-license"))
-                continue
-
-            fetch_status, component = _fetch_component(candidate, token)
+            # Fetch version.php first: it yields both the component name and,
+            # via its Moodle GPL header, the license. GitHub's detector
+            # reports no license for the many plugins that ship the GPL grant
+            # as a file header rather than a root LICENSE file, so a
+            # license-first gate would wrongly reject them.
+            fetch_status, component, version_text = _fetch_component(candidate, token)
             if fetch_status == "transient":
                 # Rate limit or server error: leave the ledger untouched so
                 # the repo is re-evaluated on the next scan.
@@ -602,6 +604,18 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                                f"{candidate.default_branch}", today)
                 results.append(ScanResult(candidate, "no-version-php"))
                 continue
+
+            # License precedence: the GitHub API value, else the GPL header.
+            spdx = candidate.license_spdx
+            if not _is_acceptable_license(spdx):
+                spdx = classify_license_text(version_text) or spdx
+                candidate.license_spdx = spdx
+            if not _is_acceptable_license(spdx):
+                record_outcome(ledger, candidate, "bad-license",
+                               f"license: {spdx or 'none detected'}", today)
+                results.append(ScanResult(candidate, "bad-license"))
+                continue
+
             if component in seen_components:
                 record_outcome(ledger, candidate, "exists",
                                f"component {component} already indexed this run", today)
