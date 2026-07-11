@@ -92,6 +92,27 @@ def _version_php_field(repo: str, commit: str, field: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def derive_supported_moodle(repo: str, commit: str) -> list[str]:
+    """Supported branches from version.php: the explicit $plugin->supported
+    range when declared, else just the branch $plugin->requires maps to
+    (conservative — the registry doesn't invent claims the author didn't
+    make). Empty list if version.php declares neither."""
+    from .moodleversions import branch_from_requires, branches_from_supported
+
+    supported_raw = _version_php_field(repo, commit, "supported")
+    if supported_raw:
+        codes = [int(n) for n in re.findall(r"\d+", supported_raw)]
+        branches = branches_from_supported(codes)
+        if branches:
+            return branches
+    requires_raw = _version_php_field(repo, commit, "requires")
+    if requires_raw and requires_raw.isdigit():
+        branch = branch_from_requires(int(requires_raw))
+        if branch:
+            return [branch]
+    return []
+
+
 def _cmd_release(args: argparse.Namespace) -> int:
     """Compute a new release record and append it to the entry file."""
     entry_path = Path(args.entry)
@@ -115,8 +136,15 @@ def _cmd_release(args: argparse.Namespace) -> int:
         php_min = _version_php_field(repo, artifact.commit, "php")
         listing_hash = build_mod.file_sha256_at_commit(repo, artifact.commit, ".camp/listing.yml")
 
+        supported = (args.supported_moodle.split(",") if args.supported_moodle
+                     else derive_supported_moodle(repo, artifact.commit))
+
     if any(r["tag"] == args.tag for r in entry["releases"]):
         print(f"error: tag {args.tag} is already in the ledger; releases are immutable", file=sys.stderr)
+        return 1
+    if not supported:
+        print("error: version.php declares neither $plugin->supported nor a mappable "
+              "$plugin->requires; pass --supported-moodle explicitly", file=sys.stderr)
         return 1
 
     record: dict = {
@@ -124,7 +152,7 @@ def _cmd_release(args: argparse.Namespace) -> int:
         "tag": args.tag,
         "commit": artifact.commit,
         "moodle-version": int(moodle_version) if moodle_version else 0,
-        "supported-moodle": args.supported_moodle.split(",") if args.supported_moodle else ["4.3"],
+        "supported-moodle": supported,
         "zip-sha256": artifact.sha256,
         "published": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
