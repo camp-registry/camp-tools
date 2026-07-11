@@ -416,6 +416,19 @@ def _cmd_validate_advisory(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
+    from .scan import recheck_noassertion
+    results = recheck_noassertion(args.index_dir, dry_run=args.dry_run)
+    by_outcome: dict[str, int] = {}
+    for result in results:
+        by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
+    print(f"\n{len(results)} re-checked: " +
+          ", ".join(f"{count} {outcome}" for outcome, count in sorted(by_outcome.items())))
+    if args.dry_run:
+        print("(dry run: nothing written)")
+    return 0
+
+
 def _cmd_scan_report(args: argparse.Namespace) -> int:
     from .scan import load_ledger
     ledger = load_ledger(args.index_dir)
@@ -565,6 +578,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("advisories", nargs="+")
     p.add_argument("--index-dir", help="also cross-check the component exists in this index")
     p.set_defaults(func=_cmd_validate_advisory)
+
+    p = sub.add_parser("recheck-licenses",
+                       help="re-check NOASSERTION rejections by classifying license file text")
+    p.add_argument("index_dir")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=_cmd_recheck_licenses)
 
     p = sub.add_parser("scan-report", help="summarize the scan ledger (rejections and why)")
     p.add_argument("index_dir")

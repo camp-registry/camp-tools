@@ -115,3 +115,35 @@ def test_site_shows_compatible_license_badge(index_dir, tmp_path):
     site_generate(index_dir, "https://repo.test", out)
     html = (out / "plugin" / "mod_example.html").read_text()
     assert "GPL-compatible" not in html
+
+
+def test_classify_license_text():
+    from camp.scan import classify_license_text
+    gpl3 = "Preamble blah.\nGNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n..."
+    assert classify_license_text(gpl3) == "GPL-3.0"
+    gpl2 = "GNU GENERAL PUBLIC LICENSE\n   Version 2, June 1991"
+    assert classify_license_text(gpl2) == "GPL-2.0"
+    agpl = "custom header\nGNU AFFERO GENERAL PUBLIC LICENSE Version 3"
+    assert classify_license_text(agpl) == "AGPL-3.0"
+    mit = "MyPlugin License\n\nPermission is hereby granted, free of charge, to any person..."
+    assert classify_license_text(mit) == "MIT"
+    apache = "Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/"
+    assert classify_license_text(apache) == "Apache-2.0"
+    bsd3 = ("Redistribution and use in source and binary forms, with or without "
+            "modification... Neither the name of the copyright holder...")
+    assert classify_license_text(bsd3) == "BSD-3-Clause"
+    bsd2 = "Redistribution and use in source and binary forms, with or without modification"
+    assert classify_license_text(bsd2) == "BSD-2-Clause"
+    assert classify_license_text("All rights reserved. Proprietary.") is None
+    # whitespace/case robustness (reflowed text is the common NOASSERTION cause)
+    assert classify_license_text("gnu   general\n\npublic  LICENSE  ...  version 3") == "GPL-3.0"
+
+
+def test_name_matches_component():
+    from camp.scan import _name_matches_component
+    assert _name_matches_component("o/moodle-mod_googlemeet", "mod_googlemeet")
+    assert _name_matches_component("trampgeek/moodle-qtype_coderunner", "qtype_coderunner")
+    assert _name_matches_component("me/coderunner", "qtype_coderunner")  # short name alone
+    assert _name_matches_component("x/moodle-theme_boost_union", "theme_boost_union")
+    assert not _name_matches_component("onyetapp/WORDPRESS-02-onyetmpdf", "mod_ompdf")
+    assert not _name_matches_component("someone/random-repo", "mod_quiz")

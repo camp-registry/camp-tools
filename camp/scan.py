@@ -221,6 +221,45 @@ def _is_acceptable_license(spdx: str | None) -> bool:
     return _is_gpl(spdx) or (spdx in COMPATIBLE_LICENSES)
 
 
+# Distinctive phrases from canonical license texts, for repos whose license
+# file GitHub cannot fingerprint (NOASSERTION) — usually because of an added
+# preamble, reflowed text, or a copyright header. Order matters: more
+# specific variants (AGPL/LESSER, version numbers, BSD-3's extra clause)
+# must precede the generic ones. First match wins.
+LICENSE_TEXT_PATTERNS = [
+    ("AGPL-3.0", ["gnu affero general public license"]),
+    ("LGPL-3.0", ["gnu lesser general public license", "version 3"]),
+    ("LGPL-2.1", ["gnu lesser general public license", "version 2.1"]),
+    ("GPL-3.0", ["gnu general public license", "version 3"]),
+    ("GPL-2.0", ["gnu general public license", "version 2"]),
+    ("Apache-2.0", ["apache license", "version 2.0"]),
+    ("MIT", ["permission is hereby granted, free of charge"]),
+    ("BSD-3-Clause", ["redistribution and use in source and binary forms",
+                      "neither the name"]),
+    ("BSD-2-Clause", ["redistribution and use in source and binary forms"]),
+]
+
+
+def classify_license_text(text: str) -> str | None:
+    """Best-effort SPDX id from a license file's text, None if unrecognized."""
+    normalized = " ".join(text.lower().split())
+    for spdx, phrases in LICENSE_TEXT_PATTERNS:
+        if all(phrase in normalized for phrase in phrases):
+            return spdx
+    return None
+
+
+def _name_matches_component(full_name: str, component: str) -> bool:
+    """Weak-canonicality check (RFC §8): auto-listing requires the repository
+    name to plausibly correspond to the component it declares. Repos that
+    fail (e.g. a repo named WORDPRESS-02-x declaring mod_y) are recorded as
+    needs-review for human sign-off rather than silently claiming the name."""
+    repo_name = re.sub(r"[-_.]", "", full_name.split("/", 1)[1].lower())
+    short_name = re.sub(r"[-_.]", "", component.partition("_")[2])
+    full = re.sub(r"[-_.]", "", component)
+    return short_name in repo_name or full in repo_name
+
+
 def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
     entry: dict = {
         "component": component,
@@ -236,6 +275,94 @@ def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
     if candidate.description:
         entry["summary"] = candidate.description[:300]
     return entry
+
+
+def recheck_noassertion(index_dir: str | Path, token: str | None = None,
+                        dry_run: bool = False, log=print) -> list[ScanResult]:
+    """Re-examine ledger rejections whose license GitHub couldn't classify
+    (NOASSERTION): fetch the actual license file, pattern-match its text,
+    and admit repos that turn out to be GPL-family or GPL-compatible."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    index = Path(index_dir)
+    today = datetime.date.today().isoformat()
+    ledger = load_ledger(index)
+    results: list[ScanResult] = []
+
+    targets = [name for name, record in ledger.items()
+               if record["outcome"] == "bad-license" and "NOASSERTION" in record["detail"]]
+    log(f"re-checking {len(targets)} NOASSERTION repositories by license text")
+
+    for full_name in targets:
+        status, body, _ = _request(f"https://api.github.com/repos/{full_name}/license", token)
+        if status == 404:
+            spdx = None
+        elif status != 200:
+            log(f"  ? {full_name}: license fetch HTTP {status}, skipped")
+            continue
+        else:
+            import base64
+            text = base64.b64decode(json.loads(body).get("content", "")).decode(errors="replace")
+            spdx = classify_license_text(text)
+
+        status, body, _ = _request(f"https://api.github.com/repos/{full_name}", token)
+        if status != 200:
+            log(f"  ? {full_name}: repo fetch HTTP {status}, skipped")
+            continue
+        repo = json.loads(body)
+        candidate = Candidate(
+            full_name=full_name, html_url=repo["html_url"], owner=repo["owner"]["login"],
+            description=(repo.get("description") or "").strip(), license_spdx=spdx,
+            stars=repo.get("stargazers_count", 0),
+            default_branch=repo.get("default_branch", "HEAD"),
+            archived=repo.get("archived", False),
+        )
+
+        if not _is_acceptable_license(spdx):
+            record_outcome(ledger, candidate, "bad-license",
+                           "license: NOASSERTION (text unclassified)" if spdx is None
+                           else f"license: {spdx} (from text; not GPL-compatible)", today)
+            results.append(ScanResult(candidate, "bad-license"))
+            continue
+
+        fetch_status, component = _fetch_component(candidate, token)
+        if fetch_status == "transient":
+            results.append(ScanResult(candidate, "fetch-error"))
+            continue
+        if fetch_status == "missing":
+            record_outcome(ledger, candidate, "no-version-php",
+                           f"license {spdx} recovered from text, but no parseable "
+                           f"version.php at root of branch {candidate.default_branch}", today)
+            results.append(ScanResult(candidate, "no-version-php"))
+            continue
+
+        if not _name_matches_component(candidate.full_name, component):
+            record_outcome(ledger, candidate, "needs-review",
+                           f"declares {component} but repo name does not correspond; "
+                           f"human sign-off required before listing (RFC §8)", today)
+            results.append(ScanResult(candidate, "needs-review", component))
+            continue
+
+        plugintype = component.partition("_")[0]
+        out_path = index / "plugins" / plugintype / f"{component}.yml"
+        if out_path.exists():
+            record_outcome(ledger, candidate, "exists",
+                           f"component {component} already registered (first-come, RFC §8)", today)
+            results.append(ScanResult(candidate, "exists", component))
+            continue
+
+        if not dry_run:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w") as f:
+                yaml.safe_dump(_entry_for(candidate, component, today), f,
+                               sort_keys=False, allow_unicode=True)
+        record_outcome(ledger, candidate, "written",
+                       f"listed as {component}; license {spdx} classified from text", today)
+        results.append(ScanResult(candidate, "written", component))
+        log(f"  + {component}  ({full_name}, {spdx} from text)")
+
+    if not dry_run:
+        save_ledger(index, ledger)
+    return results
 
 
 def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 30,
@@ -285,6 +412,13 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 record_outcome(ledger, candidate, "exists",
                                f"component {component} already indexed this run", today)
                 results.append(ScanResult(candidate, "exists", component))
+                continue
+
+            if not _name_matches_component(candidate.full_name, component):
+                record_outcome(ledger, candidate, "needs-review",
+                               f"declares {component} but repo name does not correspond; "
+                               f"human sign-off required before listing (RFC §8)", today)
+                results.append(ScanResult(candidate, "needs-review", component))
                 continue
 
             plugintype = component.partition("_")[0]
