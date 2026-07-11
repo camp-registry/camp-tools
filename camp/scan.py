@@ -61,8 +61,65 @@ class Candidate:
 @dataclass
 class ScanResult:
     candidate: Candidate
-    outcome: str  # written | exists | no-version-php | no-component | bad-license
+    outcome: str  # written | exists | no-version-php | no-component | bad-license | skipped-known
     component: str | None = None
+
+
+# --- scan ledger -------------------------------------------------------------
+# Every evaluated repository is recorded in a ledger committed alongside the
+# index (index/discovery/scan-ledger.yml): outcome, human-readable detail,
+# first-seen and last-checked dates. This makes rejections auditable ("why
+# isn't X listed?"), lets re-scans skip recently-checked repos instead of
+# re-fetching them, and gives outreach a list of nearly-eligible plugins
+# (e.g. rejected only for a missing license). Entries are re-evaluated once
+# they are older than the recheck window.
+
+LEDGER_RELPATH = Path("discovery") / "scan-ledger.yml"
+DEFAULT_RECHECK_DAYS = 30
+
+
+def load_ledger(index_dir: str | Path) -> dict:
+    path = Path(index_dir) / LEDGER_RELPATH
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    return data.get("repos", {})
+
+
+def save_ledger(index_dir: str | Path, repos: dict) -> None:
+    path = Path(index_dir) / LEDGER_RELPATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        f.write("# Scan ledger: every repository the discovery scan has evaluated,\n"
+                "# with the outcome and why. Maintained by `camp scan`; do not edit\n"
+                "# release data here — this file never affects installed artifacts.\n")
+        yaml.safe_dump({"repos": dict(sorted(repos.items()))}, f,
+                       sort_keys=False, allow_unicode=True)
+
+
+def should_skip(ledger: dict, full_name: str, today: str,
+                recheck_days: int = DEFAULT_RECHECK_DAYS) -> bool:
+    """Skip repos already evaluated within the recheck window. 'written'
+    entries are never skipped by the ledger (the index itself is the
+    authority for those)."""
+    record = ledger.get(full_name)
+    if record is None or record.get("outcome") == "written":
+        return False
+    last = datetime.date.fromisoformat(record["last-checked"])
+    age = (datetime.date.fromisoformat(today) - last).days
+    return age < recheck_days
+
+
+def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
+                   detail: str, today: str) -> None:
+    previous = ledger.get(candidate.full_name, {})
+    ledger[candidate.full_name] = {
+        "outcome": outcome,
+        "detail": detail,
+        "first-seen": previous.get("first-seen", today),
+        "last-checked": today,
+    }
 
 
 def _request(url: str, token: str | None) -> tuple[int, bytes, dict]:
@@ -146,12 +203,14 @@ def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
 
 
 def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 30,
-         token: str | None = None, dry_run: bool = False, log=print) -> list[ScanResult]:
+         token: str | None = None, dry_run: bool = False, log=print,
+         recheck_days: int = DEFAULT_RECHECK_DAYS) -> list[ScanResult]:
     """Run discovery and write Tier 0 entries into the index tree."""
     token = token or os.environ.get("GITHUB_TOKEN")
     queries = queries or DEFAULT_QUERIES
     index = Path(index_dir)
     today = datetime.date.today().isoformat()
+    ledger = load_ledger(index)
 
     seen_repos: set[str] = set()
     seen_components: set[str] = set()
@@ -164,21 +223,35 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 continue
             seen_repos.add(candidate.full_name)
 
+            if should_skip(ledger, candidate.full_name, today, recheck_days):
+                results.append(ScanResult(candidate, "skipped-known"))
+                continue
+
             if not _is_gpl(candidate.license_spdx):
+                record_outcome(ledger, candidate, "bad-license",
+                               f"license: {candidate.license_spdx or 'none detected'}", today)
                 results.append(ScanResult(candidate, "bad-license"))
                 continue
 
             component = _fetch_component(candidate, token)
             if component is None:
+                record_outcome(ledger, candidate, "no-version-php",
+                               f"no parseable version.php at root of branch "
+                               f"{candidate.default_branch}", today)
                 results.append(ScanResult(candidate, "no-version-php"))
                 continue
             if component in seen_components:
+                record_outcome(ledger, candidate, "exists",
+                               f"component {component} already indexed this run", today)
                 results.append(ScanResult(candidate, "exists", component))
                 continue
 
             plugintype = component.partition("_")[0]
             out_path = index / "plugins" / plugintype / f"{component}.yml"
             if out_path.exists():
+                record_outcome(ledger, candidate, "exists",
+                               f"component {component} already registered "
+                               f"(first-come, RFC §8)", today)
                 results.append(ScanResult(candidate, "exists", component))
                 seen_components.add(component)
                 continue
@@ -188,8 +261,11 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 with open(out_path, "w") as f:
                     yaml.safe_dump(_entry_for(candidate, component, today), f,
                                    sort_keys=False, allow_unicode=True)
+            record_outcome(ledger, candidate, "written", f"listed as {component}", today)
             seen_components.add(component)
             results.append(ScanResult(candidate, "written", component))
             log(f"  + {component}  ({candidate.full_name}, ★{candidate.stars}, {candidate.license_spdx})")
 
+    if not dry_run:
+        save_ledger(index, ledger)
     return results

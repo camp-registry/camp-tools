@@ -336,7 +336,8 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
 def _cmd_scan(args: argparse.Namespace) -> int:
     from . import scan as scan_mod
     results = scan_mod.scan(args.index_dir, queries=args.query or None,
-                            limit=args.limit, dry_run=args.dry_run)
+                            limit=args.limit, dry_run=args.dry_run,
+                            recheck_days=args.recheck_days)
     by_outcome: dict[str, int] = {}
     for result in results:
         by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
@@ -344,6 +345,25 @@ def _cmd_scan(args: argparse.Namespace) -> int:
           ", ".join(f"{count} {outcome}" for outcome, count in sorted(by_outcome.items())))
     if args.dry_run:
         print("(dry run: nothing written)")
+    return 0
+
+
+def _cmd_scan_report(args: argparse.Namespace) -> int:
+    from .scan import load_ledger
+    ledger = load_ledger(args.index_dir)
+    if not ledger:
+        print("scan ledger is empty — run `camp scan` first")
+        return 0
+    by_outcome: dict[str, list[tuple[str, dict]]] = {}
+    for repo, record in ledger.items():
+        by_outcome.setdefault(record["outcome"], []).append((repo, record))
+    print(f"{len(ledger)} repositories evaluated:")
+    for outcome, records in sorted(by_outcome.items()):
+        print(f"  {len(records):4d} {outcome}")
+    if args.outcome:
+        print()
+        for repo, record in sorted(by_outcome.get(args.outcome, [])):
+            print(f"  {repo:<55} {record['detail']}  (last checked {record['last-checked']})")
     return 0
 
 
@@ -460,7 +480,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="GitHub search query (repeatable; default: topic + naming convention)")
     p.add_argument("--limit", type=int, default=30, help="max results per query (default 30)")
     p.add_argument("--dry-run", action="store_true", help="report without writing entries")
+    p.add_argument("--recheck-days", type=int, default=30,
+                   help="re-evaluate ledger-rejected repos older than this (0 = always recheck)")
     p.set_defaults(func=_cmd_scan)
+
+    p = sub.add_parser("scan-report", help="summarize the scan ledger (rejections and why)")
+    p.add_argument("index_dir")
+    p.add_argument("--outcome", help="list all repos with this outcome (e.g. bad-license)")
+    p.set_defaults(func=_cmd_scan_report)
 
     p = sub.add_parser("site", help="generate the static browse/detail website from the index")
     p.add_argument("index_dir")
