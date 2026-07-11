@@ -36,10 +36,29 @@ from pathlib import Path
 import yaml
 
 USER_AGENT = "camp-seeding-scanner/0.1 (community Moodle plugin repository)"
-DEFAULT_QUERIES = [
-    "topic:moodle-plugin fork:false",
-    "moodle in:name fork:false",
+# Frankenstyle plugin-type prefixes, used to build targeted name searches.
+# A prefix search (e.g. "moodle-mod_ in:name") returns a corpus small enough
+# to paginate near-fully, and sorting it by recent activity surfaces new and
+# low-star plugins that a stars-sorted "moodle in:name" (27k+ results, hard-
+# capped at 1000 by GitHub) never reaches.
+FRANKENSTYLE_PREFIXES = [
+    "mod", "local", "block", "theme", "tool", "qtype", "auth", "enrol",
+    "format", "filter", "atto", "tiny", "report", "availability",
+    "profilefield", "paygw", "assignsubmission", "assignfeedback",
+    "gradingform", "customfield", "datafield", "editor", "message",
+    "quiz", "quizaccess", "repository", "search", "webservice", "logstore",
+    "antivirus", "cachestore", "contenttype", "fileconverter", "media",
+    "mlbackend", "plagiarism", "portfolio", "qbehaviour", "coursereport",
 ]
+# (query, sort) pairs. Topic queries by stars (popular first); frankenstyle
+# name queries by recent push (new/low-star plugins first).
+DEFAULT_QUERY_SPECS = (
+    [("topic:moodle-plugin fork:false", "stars"),
+     ("moodle in:name fork:false", "stars")]
+    + [(f"moodle-{prefix}_ in:name fork:false", "updated")
+       for prefix in FRANKENSTYLE_PREFIXES]
+)
+DEFAULT_QUERIES = [spec[0] for spec in DEFAULT_QUERY_SPECS]  # names only, back-compat
 GPL_PREFIXES = ("GPL-", "AGPL-", "LGPL-")
 # GPL-compatible permissive licenses (FSF compatibility list). Listed at
 # Tier 0 with the license surfaced as a badge — disclosure, not gatekeeping.
@@ -144,14 +163,15 @@ def _request(url: str, token: str | None) -> tuple[int, bytes, dict]:
         return exc.code, exc.read(), dict(exc.headers)
 
 
-def _search(query: str, limit: int, token: str | None, log) -> list[Candidate]:
+def _search(query: str, limit: int, token: str | None, log,
+            sort: str = "stars") -> list[Candidate]:
     candidates: list[Candidate] = []
     page = 1
     while len(candidates) < limit:
         per_page = min(100, limit - len(candidates))
         url = ("https://api.github.com/search/repositories?"
                + urllib.parse.urlencode({
-                   "q": query, "sort": "stars", "order": "desc",
+                   "q": query, "sort": sort, "order": "desc",
                    "per_page": per_page, "page": page,
                }))
         status, body, headers = _request(url, token)
@@ -567,7 +587,9 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
          recheck_days: int = DEFAULT_RECHECK_DAYS) -> list[ScanResult]:
     """Run discovery and write Tier 0 entries into the index tree."""
     token = token or os.environ.get("GITHUB_TOKEN")
-    queries = queries or DEFAULT_QUERIES
+    # Explicit --query overrides use stars sort; the default set pairs each
+    # query with the sort that best surfaces its long tail.
+    specs = [(q, "stars") for q in queries] if queries else DEFAULT_QUERY_SPECS
     index = Path(index_dir)
     today = datetime.date.today().isoformat()
     ledger = load_ledger(index)
@@ -576,9 +598,9 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
     seen_components: set[str] = set()
     results: list[ScanResult] = []
 
-    for query in queries:
-        log(f"searching: {query}")
-        for candidate in _search(query, limit, token, log):
+    for query, sort in specs:
+        log(f"searching: {query}  (by {sort})")
+        for candidate in _search(query, limit, token, log, sort=sort):
             if candidate.full_name in seen_repos:
                 continue
             seen_repos.add(candidate.full_name)

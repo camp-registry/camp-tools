@@ -206,3 +206,15 @@ def test_scan_admits_license_from_version_php_header(tmp_path, monkeypatch):
     assert results[0].outcome == "written"
     written = yaml.safe_load((index / "plugins" / "local" / "local_recompletion.yml").read_text())
     assert written["license"] == "GPL-3.0"
+
+
+def test_default_query_specs_include_frankenstyle_by_updated():
+    from camp.scan import DEFAULT_QUERY_SPECS
+    specs = dict(DEFAULT_QUERY_SPECS)
+    # topic queries stay stars-sorted; name-prefix queries use recent activity
+    assert specs["moodle in:name fork:false"] == "stars"
+    assert specs["moodle-mod_ in:name fork:false"] == "updated"
+    assert specs["moodle-local_ in:name fork:false"] == "updated"
+    # every prefix query is a name search sorted by updated
+    prefix_specs = [(q, s) for q, s in DEFAULT_QUERY_SPECS if q.startswith("moodle-")]
+    assert prefix_specs and all(s == "updated" and "in:name" in q for q, s in prefix_specs)
