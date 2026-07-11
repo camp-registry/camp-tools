@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .advisory import AdvisorySet
 from .validate import load_entry
 
 PLUGIN_TYPE_PREFIX = "moodle-"
@@ -38,14 +39,19 @@ def _composer_type(component: str) -> str:
     return f"moodle-{plugintype}"
 
 
-def package_definition(entry: dict, base_url: str) -> tuple[str, dict]:
-    """(package name, {version: definition}) for one index entry."""
+def package_definition(entry: dict, base_url: str,
+                       advisories: AdvisorySet | None = None) -> tuple[str, dict]:
+    """(package name, {version: definition}) for one index entry. Versions
+    revoked by a security advisory (RFC §5.3) are omitted from installation
+    metadata; the release ledger and archive are untouched."""
     component = entry["component"]
     name = _package_name(entry)
     versions: dict[str, dict] = {}
 
     for release in entry["releases"]:
         version = release["version"].split(" ")[0]
+        if advisories is not None and advisories.is_revoked(component, version):
+            continue
         versions[version] = {
             "name": name,
             "version": version,
@@ -83,21 +89,58 @@ def package_definition(entry: dict, base_url: str) -> tuple[str, dict]:
 
 def generate(index_dir: str | Path, base_url: str) -> dict:
     """Build the full packages.json document from an index tree."""
+    advisories = AdvisorySet.load(index_dir)
     packages: dict[str, dict] = {}
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
         entry = load_entry(entry_path)
         if entry.get("status", "active") != "active" or entry["tier"] < 1:
             continue
-        name, versions = package_definition(entry, base_url)
+        name, versions = package_definition(entry, base_url, advisories)
         if versions:
             packages[name] = versions
     return {"packages": packages}
 
 
+def generate_advisories(index_dir: str | Path, base_url: str) -> dict:
+    """Security advisories in Packagist-compatible shape, so `composer
+    audit` surfaces them for installed packages (RFC §6.1)."""
+    advisories = AdvisorySet.load(index_dir)
+    entries_by_component = {}
+    for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
+        entry = load_entry(entry_path)
+        entries_by_component[entry["component"]] = entry
+
+    document: dict[str, list] = {}
+    for component, component_advisories in sorted(advisories.by_component.items()):
+        entry = entries_by_component.get(component)
+        if entry is None:
+            continue
+        name = _package_name(entry)
+        document[name] = [{
+            "advisoryId": advisory["id"],
+            "packageName": name,
+            "title": advisory["title"],
+            "severity": advisory["severity"],
+            "affectedVersions": advisory["affected-versions"],
+            "link": f"{base_url}/advisories/{advisory['id']}",
+            "cve": advisory.get("cve"),
+            "reportedAt": advisory["published"],
+            "sources": [{"name": "camp", "remoteId": advisory["id"]}],
+        } for advisory in component_advisories]
+    return {"advisories": document}
+
+
 def write(index_dir: str | Path, base_url: str, out_path: str | Path) -> int:
     document = generate(index_dir, base_url)
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as f:
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w") as f:
         json.dump(document, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+    advisories_doc = generate_advisories(index_dir, base_url)
+    advisories_path = out.parent / "security-advisories.json"
+    with open(advisories_path, "w") as f:
+        json.dump(advisories_doc, f, indent=2, sort_keys=True)
         f.write("\n")
     return len(document["packages"])

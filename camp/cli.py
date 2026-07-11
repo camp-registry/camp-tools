@@ -348,6 +348,46 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_advisory_new(args: argparse.Namespace) -> int:
+    from .advisory import ADVISORIES_RELPATH, next_id
+    year = int(args.year) if args.year else datetime.datetime.now(datetime.UTC).year
+    advisory_id = next_id(args.index_dir, year)
+    out_path = (Path(args.index_dir) / ADVISORIES_RELPATH / args.component
+                / f"{advisory_id}.yml")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    scaffold = {
+        "id": advisory_id,
+        "component": args.component,
+        "title": args.title or "TODO: one-line summary",
+        "severity": args.severity,
+        "affected-versions": args.affected or "<0.0.1",
+        "revoke": False,
+        "published": now,
+        "description": "TODO: impact and what administrators should do.\n",
+    }
+    with open(out_path, "w") as f:
+        yaml.safe_dump(scaffold, f, sort_keys=False, allow_unicode=True)
+    print(f"scaffolded {out_path}")
+    print("edit it, then run: camp validate-advisory " + str(out_path))
+    return 0
+
+
+def _cmd_validate_advisory(args: argparse.Namespace) -> int:
+    from .advisory import validate_advisory
+    failed = False
+    for path in args.advisories:
+        problems = validate_advisory(path, index_dir=args.index_dir)
+        if problems:
+            failed = True
+            print(f"FAIL {path}")
+            for problem in problems:
+                print(f"  - {problem}")
+        else:
+            print(f"ok   {path}")
+    return 1 if failed else 0
+
+
 def _cmd_scan_report(args: argparse.Namespace) -> int:
     from .scan import load_ledger
     ledger = load_ledger(args.index_dir)
@@ -483,6 +523,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--recheck-days", type=int, default=30,
                    help="re-evaluate ledger-rejected repos older than this (0 = always recheck)")
     p.set_defaults(func=_cmd_scan)
+
+    p = sub.add_parser("advisory", help="scaffold a security advisory (RFC §5.3)")
+    p.add_argument("index_dir")
+    p.add_argument("component")
+    p.add_argument("--severity", choices=["low", "medium", "high", "critical"], required=True)
+    p.add_argument("--title")
+    p.add_argument("--affected", help='constraint, e.g. ">=1.0,<1.4.2"')
+    p.add_argument("--year", help="advisory-id year (default: current)")
+    p.set_defaults(func=_cmd_advisory_new)
+
+    p = sub.add_parser("validate-advisory", help="validate advisory files")
+    p.add_argument("advisories", nargs="+")
+    p.add_argument("--index-dir", help="also cross-check the component exists in this index")
+    p.set_defaults(func=_cmd_validate_advisory)
 
     p = sub.add_parser("scan-report", help="summarize the scan ledger (rejections and why)")
     p.add_argument("index_dir")

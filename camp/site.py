@@ -22,6 +22,7 @@ from pathlib import Path
 
 import yaml
 
+from .advisory import AdvisorySet
 from .composer import _package_name
 from .validate import load_entry
 
@@ -120,6 +121,8 @@ CSS = """
   .step p{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:2px;word-break:break-all}
   .ledger-note{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--muted)}
   .adv{border-left:3px solid var(--verd);background:var(--verd-soft);border-radius:0 8px 8px 0;padding:12px 14px;font-size:13.5px}
+  .adv.open{border-left-color:var(--amber);background:var(--amber-soft)}
+  .adv .id{font-family:var(--mono);font-size:11px;color:var(--muted);display:block;margin-top:3px}
   footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
   .plist{display:flex;flex-direction:column;gap:10px;margin-top:16px}
   .pcard{display:block;text-decoration:none;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
@@ -242,7 +245,26 @@ def _zip_url(base_url: str, component: str, version: str) -> str:
     return f"{base_url}/artifacts/{component}/{component}-{version}.zip"
 
 
-def _detail_page(entry: dict, listing: dict, base_url: str) -> str:
+def _advisory_cards(component: str, advisories: AdvisorySet) -> str:
+    items = advisories.for_component(component)
+    if not items:
+        return '<div class="adv"><b>No published advisories</b></div>'
+    cards = []
+    for advisory in sorted(items, key=lambda a: a["id"], reverse=True):
+        fixed = advisory.get("fixed-in")
+        status = f"fixed in {escape(fixed)}" if fixed else "no fixed version"
+        if advisory.get("revoke"):
+            status += " · affected versions revoked from installation"
+        cards.append(
+            f'<div class="adv open"><b>{escape(advisory["severity"].upper())}: '
+            f'{escape(advisory["title"])}</b>'
+            f'<span class="id">{escape(advisory["id"])} · affects '
+            f'{escape(advisory["affected-versions"])} · {status}</span></div>')
+    return "\n".join(cards)
+
+
+def _detail_page(entry: dict, listing: dict, base_url: str,
+                 advisories: AdvisorySet) -> str:
     component = entry["component"]
     plugintype = component.partition("_")[0]
     name = listing.get("name") or component
@@ -337,7 +359,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str) -> str:
     <div class="ledger-note">Every step is independently verifiable. CAMP never modifies plugin code; it proves the ZIP you install is exactly what the maintainer published.</div>
   </div>
   <h2>Security advisories</h2>
-  <div class="adv"><b>No open advisories</b></div>
+  {_advisory_cards(component, advisories)}
 </div>
 """
 
@@ -392,6 +414,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     out = Path(out_dir)
     (out / "plugin").mkdir(parents=True, exist_ok=True)
     listings = Path(listings_dir) if listings_dir else None
+    advisories = AdvisorySet.load(index_dir)
 
     entries: list[tuple[dict, dict]] = []
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
@@ -404,7 +427,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     entries.sort(key=lambda pair: (pair[1].get("name") or pair[0]["component"]).lower())
 
     for entry, listing in entries:
-        page = _detail_page(entry, listing, base_url)
+        page = _detail_page(entry, listing, base_url, advisories)
         (out / "plugin" / f"{entry['component']}.html").write_text(page)
 
     (out / "index.html").write_text(_browse_page(entries))
