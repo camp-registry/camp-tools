@@ -76,3 +76,42 @@ def test_ledger_preserves_first_seen(tmp_path):
     assert record["first-seen"] == "2026-01-01"
     assert record["last-checked"] == "2026-06-01"
     assert record["outcome"] == "bad-license"
+
+
+def test_compatible_licenses_accepted():
+    from camp.scan import _is_acceptable_license
+    assert _is_acceptable_license("GPL-3.0")
+    assert _is_acceptable_license("MIT")
+    assert _is_acceptable_license("Apache-2.0")
+    assert _is_acceptable_license("BSD-3-Clause")
+    assert not _is_acceptable_license("NOASSERTION")
+    assert not _is_acceptable_license("CC-BY-SA-4.0")
+    assert not _is_acceptable_license(None)
+
+
+def test_entry_records_license():
+    entry = _entry_for(_candidate(license_spdx="MIT"), "mod_x", "2026-07-11")
+    assert entry["license"] == "MIT"
+    entry = _entry_for(_candidate(license_spdx=None), "mod_x", "2026-07-11")
+    assert "license" not in entry
+
+
+def test_site_shows_compatible_license_badge(index_dir, tmp_path):
+    import yaml
+    from camp.site import generate as site_generate
+    entry_path = index_dir / "plugins" / "mod" / "mod_example.yml"
+    entry = yaml.safe_load(entry_path.read_text())
+    entry["license"] = "MIT"
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "MIT · GPL-compatible" in html
+
+    # GPL-family stays unmarked
+    entry["license"] = "GPL-3.0"
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "GPL-compatible" not in html

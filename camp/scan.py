@@ -41,6 +41,14 @@ DEFAULT_QUERIES = [
     "moodle in:name fork:false",
 ]
 GPL_PREFIXES = ("GPL-", "AGPL-", "LGPL-")
+# GPL-compatible permissive licenses (FSF compatibility list). Listed at
+# Tier 0 with the license surfaced as a badge — disclosure, not gatekeeping.
+# Deliberately absent: CC-BY-SA (one-way compatible with GPLv3 only),
+# NOASSERTION (unclassifiable — a candidate for content-based re-checking).
+COMPATIBLE_LICENSES = {
+    "MIT", "MIT-0", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD",
+    "ISC", "Unlicense", "CC0-1.0", "WTFPL", "Zlib",
+}
 COMPONENT_RE = re.compile(
     r"\$(?:plugin|module)->component\s*=\s*['\"]([a-z][a-z0-9]*_[a-z][a-z0-9_]*)['\"]"
 )
@@ -61,7 +69,7 @@ class Candidate:
 @dataclass
 class ScanResult:
     candidate: Candidate
-    outcome: str  # written | exists | no-version-php | no-component | bad-license | skipped-known
+    outcome: str  # written | exists | no-version-php | bad-license | skipped-known | fetch-error
     component: str | None = None
 
 
@@ -172,19 +180,45 @@ def _search(query: str, limit: int, token: str | None, log) -> list[Candidate]:
     return candidates[:limit]
 
 
-def _fetch_component(candidate: Candidate, token: str | None) -> str | None:
-    """Read version.php at the repo root and extract the component name."""
-    url = (f"https://raw.githubusercontent.com/{candidate.full_name}/"
-           f"{candidate.default_branch}/version.php")
-    status, body, _ = _request(url, token=None)  # raw host: no auth needed
-    if status != 200:
-        return None
+def _fetch_component(candidate: Candidate, token: str | None) -> tuple[str, str | None]:
+    """Read version.php at the repo root and extract the component name.
+
+    Returns (status, component): status is "ok", "missing" (file genuinely
+    absent or unparseable — a recordable rejection), or "transient" (rate
+    limit / server error — must NOT be recorded as a rejection). With a
+    token, uses the authenticated contents API (5000/hr core quota); the
+    anonymous raw host throttles bursts hard.
+    """
+    if token:
+        url = (f"https://api.github.com/repos/{candidate.full_name}/contents/"
+               f"version.php?ref={candidate.default_branch}")
+        req_token = token
+    else:
+        url = (f"https://raw.githubusercontent.com/{candidate.full_name}/"
+               f"{candidate.default_branch}/version.php")
+        req_token = None
+    headers_accept = {"Accept": "application/vnd.github.raw+json"} if token else {}
+    request = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT, **headers_accept,
+        **({"Authorization": f"Bearer {req_token}"} if req_token else {}),
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        return ("missing" if exc.code == 404 else "transient", None)
+    except urllib.error.URLError:
+        return ("transient", None)
     match = COMPONENT_RE.search(body.decode(errors="replace"))
-    return match.group(1) if match else None
+    return ("ok", match.group(1)) if match else ("missing", None)
 
 
 def _is_gpl(spdx: str | None) -> bool:
     return bool(spdx) and (spdx.startswith(GPL_PREFIXES))
+
+
+def _is_acceptable_license(spdx: str | None) -> bool:
+    return _is_gpl(spdx) or (spdx in COMPATIBLE_LICENSES)
 
 
 def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
@@ -197,6 +231,8 @@ def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
         "discovered": today,
         "releases": [],
     }
+    if candidate.license_spdx:
+        entry["license"] = candidate.license_spdx
     if candidate.description:
         entry["summary"] = candidate.description[:300]
     return entry
@@ -227,14 +263,19 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 results.append(ScanResult(candidate, "skipped-known"))
                 continue
 
-            if not _is_gpl(candidate.license_spdx):
+            if not _is_acceptable_license(candidate.license_spdx):
                 record_outcome(ledger, candidate, "bad-license",
                                f"license: {candidate.license_spdx or 'none detected'}", today)
                 results.append(ScanResult(candidate, "bad-license"))
                 continue
 
-            component = _fetch_component(candidate, token)
-            if component is None:
+            fetch_status, component = _fetch_component(candidate, token)
+            if fetch_status == "transient":
+                # Rate limit or server error: leave the ledger untouched so
+                # the repo is re-evaluated on the next scan.
+                results.append(ScanResult(candidate, "fetch-error"))
+                continue
+            if fetch_status == "missing":
                 record_outcome(ledger, candidate, "no-version-php",
                                f"no parseable version.php at root of branch "
                                f"{candidate.default_branch}", today)

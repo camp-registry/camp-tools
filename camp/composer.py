@@ -56,7 +56,7 @@ def package_definition(entry: dict, base_url: str,
             "name": name,
             "version": version,
             "type": _composer_type(component),
-            "license": ["GPL-3.0-or-later"],
+            "license": [entry.get("license", "GPL-3.0-or-later")],
             "dist": {
                 "type": "zip",
                 "url": f"{base_url}/artifacts/{component}/{component}-{version}.zip",

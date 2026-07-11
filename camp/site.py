@@ -212,6 +212,11 @@ def _badges(entry: dict) -> str:
         f'<span class="badge b-free">{escape(LABEL_TEXT.get(label, label))}</span>'
         for label in entry.get("labels", [])
     ]
+    # GPL-family is the ecosystem norm and goes unmarked; a GPL-compatible
+    # permissive license is surfaced so administrators see it before install.
+    license_id = entry.get("license", "")
+    if license_id and not license_id.startswith(("GPL-", "AGPL-", "LGPL-")):
+        out.append(f'<span class="badge b-note">{escape(license_id)} · GPL-compatible</span>')
     return "".join(out)
 
 
