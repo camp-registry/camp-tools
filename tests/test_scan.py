@@ -247,3 +247,30 @@ def test_date_windows_partition_until_under_target(monkeypatch):
     import datetime as dt
     spans = sorted((w.split("pushed:")[1].split("..") for w in windows))
     assert spans[0][0] == scan.GITHUB_EPOCH
+
+
+def test_fetch_component_survives_timeout(monkeypatch):
+    """A socket-read TimeoutError must not crash the sweep — it becomes a
+    retried, then transient, result (the block_/mod_ crash regression)."""
+    import camp.scan as scan
+    calls = {"n": 0}
+
+    def always_timeout(*a, **k):
+        calls["n"] += 1
+        raise TimeoutError("read timed out")
+
+    monkeypatch.setattr(scan.time, "sleep", lambda *_: None)  # no real waiting
+    monkeypatch.setattr(scan.urllib.request, "urlopen", always_timeout)
+    status, component, text = scan._fetch_component(
+        _candidate(default_branch="main"), token="fake")
+    assert status == "transient" and component is None
+    assert calls["n"] == 3  # retried, then gave up — did not raise
+
+
+def test_request_survives_timeout(monkeypatch):
+    import camp.scan as scan
+    monkeypatch.setattr(scan.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(scan.urllib.request, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(TimeoutError()))
+    status, body, headers = scan._request("https://api.github.com/x", token=None)
+    assert status == 0 and body == b""

@@ -150,17 +150,25 @@ def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
     }
 
 
-def _request(url: str, token: str | None) -> tuple[int, bytes, dict]:
+def _request(url: str, token: str | None, retries: int = 3) -> tuple[int, bytes, dict]:
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
         "Accept": "application/vnd.github+json",
         **({"Authorization": f"Bearer {token}"} if token else {}),
     })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status, resp.read(), dict(resp.headers)
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(), dict(exc.headers)
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.status, resp.read(), dict(resp.headers)
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read(), dict(exc.headers)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            # Network blip (DNS, connection reset, SSL/read timeout): retry a
+            # few times with linear backoff, then report status 0 rather than
+            # crashing the whole sweep.
+            if attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+    return 0, b"", {}
 
 
 def _search(query: str, limit: int, token: str | None, log,
@@ -266,6 +274,7 @@ def _fetch_component(candidate: Candidate, token: str | None,
         "User-Agent": USER_AGENT, **headers_accept,
         **({"Authorization": f"Bearer {req_token}"} if req_token else {}),
     })
+    net_errors = 0
     while True:
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -286,8 +295,13 @@ def _fetch_component(candidate: Candidate, token: str | None,
                 time.sleep(wait)
                 continue
             return ("transient", None, "")
-        except urllib.error.URLError:
-            return ("transient", None, "")
+        except (urllib.error.URLError, TimeoutError, OSError):
+            # Network blip (DNS, reset, SSL/read timeout): retry a few times
+            # before giving up as transient — never crash the sweep.
+            net_errors += 1
+            if net_errors >= 3:
+                return ("transient", None, "")
+            time.sleep(2 * net_errors)
     text = body.decode(errors="replace")
     match = COMPONENT_RE.search(text)
     return ("ok", match.group(1), text) if match else ("missing", None, text)
@@ -473,13 +487,16 @@ def _gitlab_request(url: str, token: str | None) -> tuple[int, bytes, dict]:
         "User-Agent": USER_AGENT,
         **({"PRIVATE-TOKEN": token} if token else {}),
     })
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status, resp.read(), dict(resp.headers)
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(), dict(exc.headers)
-    except urllib.error.URLError:
-        return 0, b"", {}
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.status, resp.read(), dict(resp.headers)
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read(), dict(exc.headers)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+    return 0, b"", {}
 
 
 def _gitlab_search(term: str, limit: int, token: str | None, log) -> list[Candidate]:
