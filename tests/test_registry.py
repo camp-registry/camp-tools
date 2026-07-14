@@ -31,7 +31,17 @@ def test_tier0_with_releases_rejected(entry_path):
     assert any("releases" in p and "empty" in p for p in validate_entry(entry_path))
 
 
-def test_tier1_requires_labels_and_contact(entry_path):
+def test_tier1_claimed_with_releases_rejected(entry_path):
+    _mutate(entry_path, lambda e: e.update(tier=1))
+    assert any("releases" in p and "empty" in p for p in validate_entry(entry_path))
+
+
+def test_tier1_claimed_without_releases_valid(entry_path):
+    _mutate(entry_path, lambda e: e.update(tier=1, releases=[]))
+    assert validate_entry(entry_path) == []
+
+
+def test_tier1_up_requires_labels_and_contact(entry_path):
     def strip(entry):
         del entry["labels"]
         del entry["security-contact"]
@@ -74,13 +84,19 @@ def test_ledger_check_append_only(entry_path, tmp_path):
     assert main(["ledger-check", str(base), str(entry_path)]) == 1
 
 
-def test_composer_excludes_tier0_and_delisted(index_dir, entry_path):
+def test_composer_excludes_below_tier2_and_delisted(index_dir, entry_path):
     doc = composer_generate(index_dir, "https://repo.test")
     assert list(doc["packages"]) == ["tester/moodle-mod_example"]
     dist = doc["packages"]["tester/moodle-mod_example"]["1.0.0"]["dist"]
     assert dist["shasum"] == yaml.safe_load(entry_path.read_text())["releases"][0]["zip-sha256"]
 
+    original = entry_path.read_text()
     _mutate(entry_path, lambda e: e.update(status="delisted"))
+    assert composer_generate(index_dir, "https://repo.test")["packages"] == {}
+
+    # A claimed (tier 1) listing has no verified artifact and is never served.
+    entry_path.write_text(original)
+    _mutate(entry_path, lambda e: e.update(tier=1, releases=[]))
     assert composer_generate(index_dir, "https://repo.test")["packages"] == {}
 
 

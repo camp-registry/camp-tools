@@ -75,7 +75,7 @@ def ingest_entry(entry_path: str | Path, source: str, out_dir: str | Path) -> In
     result = IngestResult(component=component, ok=True)
 
     if not entry["releases"]:
-        result.problems.append("no releases; nothing to ingest (tier 0)")
+        result.problems.append("no releases; nothing to ingest (tier 0/1)")
         result.ok = False
         return result
     release = entry["releases"][-1]

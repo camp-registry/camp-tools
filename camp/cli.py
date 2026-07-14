@@ -68,7 +68,7 @@ def _cmd_verify(args: argparse.Namespace) -> int:
             print(f"  - {problem}")
         failed = failed or not result.ok
     if not results:
-        print("no releases to verify (tier 0 entry?)")
+        print("no releases to verify (tier 0/1 entry?)")
     return 1 if failed else 0
 
 
@@ -239,7 +239,7 @@ def _cmd_scan_malware(args: argparse.Namespace) -> int:
     if args.entry:
         entry = load_entry(args.entry)
         if not entry["releases"]:
-            print("no releases to scan (tier 0)")
+            print("no releases to scan (tier 0/1)")
             return 0
         release = entry["releases"][-1]
         with tempfile.TemporaryDirectory(prefix="camp-malware-") as tmp:

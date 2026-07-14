@@ -48,8 +48,9 @@ PLUGINTYPE_NAMES = {
 
 TIER_BADGES = {
     0: ('b-note', 'Discovered · Tier 0'),
-    1: ('b-free', '✓ Source-verified · Tier 1'),
-    2: ('b-rev', '✓ Reviewed · Tier 2'),
+    1: ('b-note', 'Claimed · Tier 1'),
+    2: ('b-free', '✓ Source-verified · Tier 2'),
+    3: ('b-rev', '✓ Reviewed · Tier 3'),
 }
 
 LABEL_TEXT = {
@@ -186,7 +187,8 @@ SEARCH_JS = """
     cards.forEach(function(card){
       var hit = card.dataset.text.indexOf(needle) !== -1;
       if (hit && t) hit = card.dataset.type === t;
-      if (hit && tier) hit = (tier === 'verified') ? card.dataset.tier !== '0' : card.dataset.tier === '0';
+      if (hit && tier) hit = (tier === 'verified') ? (+card.dataset.tier >= 2)
+        : (tier === 'claimed') ? card.dataset.tier === '1' : card.dataset.tier === '0';
       if (hit && label) hit = (' ' + card.dataset.labels + ' ').indexOf(' ' + label + ' ') !== -1;
       card.style.display = hit ? '' : 'none';
       if (hit) n++;
@@ -450,7 +452,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
 <span style="color:var(--muted);flex:1">{_updated(r)} · Moodle {escape(_moodle_range(r))}</span>
 <a href="{escape(_zip_url(base_url, component, r["version"].lstrip("v")))}">ZIP</a></div>"""
         for r in reversed(entry["releases"])
-    ) or '<div class="row"><span style="color:var(--muted)">No releases yet (discovered listing)</span></div>'
+    ) or '<div class="row"><span style="color:var(--muted)">No releases yet</span></div>'
     versions = f"""
 <div class="panel" id="versions">
   <h2>Release history</h2>
@@ -467,7 +469,11 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       <div class="step pending"><h3>Recorded in public transparency log</h3><p>planned — Sigstore/Rekor (RFC §4.3)</p></div>
 """
     else:
-        ledger_steps = '<div class="step pending"><h3>No artifacts at Tier 0</h3><p>discovered listing; metadata only</p></div>'
+        ledger_steps = (
+            '<div class="step pending"><h3>No verified releases yet</h3>'
+            + ('<p>claimed listing; first release pending verification</p>'
+               if entry["tier"] >= 1 else '<p>discovered listing; metadata only</p>')
+            + '</div>')
     trust = f"""
 <div class="panel" id="trust">
   <h2>Verification ledger</h2>
@@ -511,13 +517,16 @@ def _filter_bar(entries: list[tuple[dict, dict]]) -> str:
         f'<option value="">All types</option>{type_opts}</select>'
     )
 
-    has_verified = any(e["tier"] > 0 for e, _ in entries)
+    has_verified = any(e["tier"] >= 2 for e, _ in entries)
+    has_claimed = any(e["tier"] == 1 for e, _ in entries)
+    claimed_opt = '<option value="claimed">Claimed</option>' if has_claimed else ''
     tier_select = (
         '<select id="f-tier" aria-label="Filter by verification tier">'
         '<option value="">Any tier</option>'
         '<option value="verified">✓ Source-verified</option>'
+        f'{claimed_opt}'
         '<option value="discovered">Discovered only</option></select>'
-    ) if has_verified else ""
+    ) if (has_verified or has_claimed) else ""
 
     labels_present = {label for e, _ in entries for label in e.get("labels", [])}
     label_opts = "".join(

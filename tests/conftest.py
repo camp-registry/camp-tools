@@ -61,8 +61,8 @@ def plugin_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def index_dir(tmp_path: Path, plugin_repo: Path) -> Path:
-    """An index tree with one Tier 1 entry for the fixture plugin, with
-    correct commit and hashes computed by the real build code."""
+    """An index tree with one Tier 2 (source-verified) entry for the fixture
+    plugin, with correct commit and hashes computed by the real build code."""
     from camp.build import build_zip, file_sha256_at_commit, resolve_tag
 
     commit = resolve_tag(str(plugin_repo), "v1.0.0")
@@ -74,7 +74,7 @@ def index_dir(tmp_path: Path, plugin_repo: Path) -> Path:
         "source": f"https://example.org/mod_example",
         "maintainers": [{"github": "tester"}],
         "security-contact": "security@example.org",
-        "tier": 1,
+        "tier": 2,
         "labels": ["fully-free"],
         "status": "active",
         "releases": [{

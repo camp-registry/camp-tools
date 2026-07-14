@@ -4,7 +4,7 @@ Both are warn-only by design. The RFC is explicit that heuristics "flag
 likely misdeclarations for human attention" (§4.7) and that the trust floor
 includes "basic security lint" (§4.2) — neither is an oracle. Moodle plugins
 legitimately shell out (VPL runs student code), call external APIs, and
-store keys; findings are evidence for a human, and for Tier 2 review.
+store keys; findings are evidence for a human, and for Tier 3 review.
 
 Label heuristics (`camp lint-labels`):
   - credential-shaped admin settings (api key, license key, token, secret)

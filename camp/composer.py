@@ -93,7 +93,7 @@ def generate(index_dir: str | Path, base_url: str) -> dict:
     packages: dict[str, dict] = {}
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
         entry = load_entry(entry_path)
-        if entry.get("status", "active") != "active" or entry["tier"] < 1:
+        if entry.get("status", "active") != "active" or entry["tier"] < 2:
             continue
         name, versions = package_definition(entry, base_url, advisories)
         if versions:
