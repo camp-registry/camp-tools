@@ -135,6 +135,7 @@ def _cmd_release(args: argparse.Namespace) -> int:
         moodle_version = _version_php_field(repo, artifact.commit, "version")
         php_min = _version_php_field(repo, artifact.commit, "php")
         listing_hash = build_mod.file_sha256_at_commit(repo, artifact.commit, ".camp/listing.yml")
+        released_ts = build_mod.commit_timestamp(repo, artifact.commit)
 
         supported = (args.supported_moodle.split(",") if args.supported_moodle
                      else derive_supported_moodle(repo, artifact.commit))
@@ -155,6 +156,7 @@ def _cmd_release(args: argparse.Namespace) -> int:
         "supported-moodle": supported,
         "zip-sha256": artifact.sha256,
         "published": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "released": datetime.datetime.fromtimestamp(released_ts, datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     if php_min:
         record["php-min"] = php_min
@@ -431,6 +433,12 @@ def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_enrich(args: argparse.Namespace) -> int:
+    from .scan import enrich
+    enrich(args.index_dir, limit=args.limit, force=args.force, readme=not args.no_readme)
+    return 0
+
+
 def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
     from .scan import recheck_noassertion
     results = recheck_noassertion(args.index_dir, dry_run=args.dry_run)
@@ -603,6 +611,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--recheck-days", type=int, default=30,
                    help="re-evaluate ledger-rejected repos older than this (0 = always recheck)")
     p.set_defaults(func=_cmd_scan_gitlab)
+
+    p = sub.add_parser("enrich",
+                       help="backfill/refresh Tier 0 metrics + README-derived summaries")
+    p.add_argument("index_dir")
+    p.add_argument("--limit", type=int, default=None,
+                   help="cap repos contacted (for sampling); default: all un-enriched entries")
+    p.add_argument("--force", action="store_true",
+                   help="refresh entries even if they already have metrics/summary")
+    p.add_argument("--no-readme", action="store_true",
+                   help="skip the README summary fallback (metrics only)")
+    p.set_defaults(func=_cmd_enrich)
 
     p = sub.add_parser("recheck-licenses",
                        help="re-check NOASSERTION rejections by classifying license file text")

@@ -17,6 +17,7 @@ markdown rendering with sanitization is deliberately deferred.
 from __future__ import annotations
 
 import datetime
+from collections import Counter
 from html import escape
 from pathlib import Path
 
@@ -133,6 +134,10 @@ CSS = """
   .pcard .meta{display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;align-items:center}
   .pcard .meta .updated{margin-left:auto}
   .count{font-size:12.5px;color:var(--muted);margin-top:18px}
+  .filters{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .filters select{flex:1;min-width:130px;border:1px solid var(--line);border-radius:8px;padding:9px 12px;font:inherit;background:var(--card);color:var(--ink);cursor:pointer}
+  .filters .clear{border:1px solid var(--line);border-radius:8px;padding:0 13px;font:inherit;background:var(--paper);color:var(--muted);cursor:pointer}
+  .filters .clear:hover{color:var(--ink);border-color:var(--verd-line)}
 """
 
 FONTS = (
@@ -158,17 +163,93 @@ document.querySelectorAll('.tabs button').forEach(function(btn){
 """
 
 SEARCH_JS = """
-var q = document.getElementById('q');
-q.addEventListener('input', function(){
-  var needle = q.value.toLowerCase();
-  var n = 0;
-  document.querySelectorAll('.pcard').forEach(function(card){
-    var hit = card.dataset.text.indexOf(needle) !== -1;
-    card.style.display = hit ? '' : 'none';
-    if (hit) n++;
+(function(){
+  var q = document.getElementById('q');
+  var fType = document.getElementById('f-type');
+  var fTier = document.getElementById('f-tier');
+  var fLabel = document.getElementById('f-label');
+  var fSort = document.getElementById('f-sort');
+  var clear = document.getElementById('f-clear');
+  var count = document.getElementById('count');
+  var plist = document.querySelector('.plist');
+  var cards = document.querySelectorAll('.pcard');
+  var original = [].slice.call(cards);   // DOM order == name order (generation)
+  var controls = [q, fType, fTier, fLabel].filter(Boolean);
+  var STORE = 'camp-browse';
+
+  function apply(){
+    var needle = q.value.trim().toLowerCase();
+    var t = fType ? fType.value : '';
+    var tier = fTier ? fTier.value : '';
+    var label = fLabel ? fLabel.value : '';
+    var n = 0;
+    cards.forEach(function(card){
+      var hit = card.dataset.text.indexOf(needle) !== -1;
+      if (hit && t) hit = card.dataset.type === t;
+      if (hit && tier) hit = (tier === 'verified') ? card.dataset.tier !== '0' : card.dataset.tier === '0';
+      if (hit && label) hit = (' ' + card.dataset.labels + ' ').indexOf(' ' + label + ' ') !== -1;
+      card.style.display = hit ? '' : 'none';
+      if (hit) n++;
+    });
+    count.textContent = n + ' plugin' + (n === 1 ? '' : 's');
+    persist();
+  }
+
+  // Reorder from the original (name-sorted) array so equal keys stay
+  // alphabetical. Only runs on sort change / load, not on every keystroke.
+  function sortCards(){
+    var key = fSort ? fSort.value : 'name';
+    var arr = original.slice();
+    if (key === 'stars') {
+      arr.sort(function(a,b){ return (+b.dataset.stars) - (+a.dataset.stars); });
+    } else if (key === 'updated') {
+      arr.sort(function(a,b){ return (b.dataset.updated||'').localeCompare(a.dataset.updated||''); });
+    }
+    arr.forEach(function(c){ plist.appendChild(c); });
+  }
+
+  function params(){
+    var p = new URLSearchParams();
+    if (q.value.trim()) p.set('q', q.value.trim());
+    if (fType && fType.value) p.set('type', fType.value);
+    if (fTier && fTier.value) p.set('tier', fTier.value);
+    if (fLabel && fLabel.value) p.set('label', fLabel.value);
+    if (fSort && fSort.value && fSort.value !== 'name') p.set('sort', fSort.value);
+    return p;
+  }
+
+  function persist(){
+    var qs = params().toString();
+    history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+    try { localStorage.setItem(STORE, qs); } catch(e){}
+  }
+
+  function restore(){
+    var qs = location.search.slice(1);
+    if (!qs) { try { qs = localStorage.getItem(STORE) || ''; } catch(e){} }
+    var p = new URLSearchParams(qs);
+    if (p.get('q')) q.value = p.get('q');
+    if (fType && p.get('type')) fType.value = p.get('type');
+    if (fTier && p.get('tier')) fTier.value = p.get('tier');
+    if (fLabel && p.get('label')) fLabel.value = p.get('label');
+    if (fSort && p.get('sort')) fSort.value = p.get('sort');
+  }
+
+  restore();
+  sortCards();
+  apply();
+  controls.forEach(function(el){
+    el.addEventListener('input', apply);
+    el.addEventListener('change', apply);
   });
-  document.getElementById('count').textContent = n + ' plugin' + (n === 1 ? '' : 's');
-});
+  if (fSort) fSort.addEventListener('change', function(){ sortCards(); persist(); });
+  if (clear) clear.addEventListener('click', function(){
+    controls.forEach(function(el){ el.value = ''; });
+    if (fSort) fSort.value = 'name';
+    sortCards();
+    apply();
+  });
+})();
 """
 
 
@@ -198,6 +279,28 @@ def _page(title: str, body: str, root: str, script: str = "") -> str:
 
 def _fmt_date(iso: str) -> str:
     return datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).strftime("%d %b %Y")
+
+
+def _updated(release: dict) -> str:
+    """When the maintainer last released this version. `released` (the tagged
+    commit's date) is the honest answer; older ledger entries predate the field,
+    so fall back to `published` (index merge time)."""
+    return _fmt_date(release.get("released") or release["published"])
+
+
+def _metric_summary(metrics: dict) -> str:
+    """One-line upstream-activity summary for a discovered (Tier 0) listing —
+    the signals that help decide what to verify first."""
+    bits = [f'★ {metrics.get("stars", 0)}']
+    forks = metrics.get("forks", 0)
+    if forks:
+        bits.append(f'{forks} fork{"s" if forks != 1 else ""}')
+    issues = metrics.get("open-issues", 0)
+    if issues:
+        bits.append(f'{issues} open')
+    if metrics.get("updated"):
+        bits.append(f'updated {_fmt_date(metrics["updated"])}')
+    return " · ".join(bits)
 
 
 def _moodle_range(release: dict) -> str:
@@ -295,7 +398,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
   <div class="actions">
     <span class="pill">✓ Works with Moodle {escape(_moodle_range(latest))}</span>
     <button class="install-btn" onclick="document.getElementById('installPanel').classList.toggle('open')">Install</button>
-    <span class="updated">Updated {_fmt_date(latest["published"])}</span>
+    <span class="updated">Updated {_updated(latest)}</span>
   </div>
   <div id="installPanel" class="card">
     <div class="cmd"><span>{escape(cmd)}</span>
@@ -306,6 +409,14 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
   </div>
 """
     if entry["tier"] == 0:
+        metrics = entry.get("metrics") or {}
+        if metrics:
+            archived_txt = (' · <b style="color:var(--amber)">Archived upstream</b>'
+                            if metrics.get("archived") else '')
+            checked_txt = (f' <span style="opacity:.7">(as of {_fmt_date(metrics["checked"])})</span>'
+                           if metrics.get("checked") else '')
+            header += (f'<div class="meta" style="margin:12px 0 0;color:var(--muted);font-size:13px">'
+                       f'{escape(_metric_summary(metrics))}{archived_txt}{checked_txt}</div>')
         header += """
   <div class="card" style="margin-top:14px;border-left:3px solid var(--amber);border-radius:0 10px 10px 0;font-size:13.5px">
     <b>Discovered listing.</b> Found by scanning public sources; nothing is hosted here —
@@ -336,7 +447,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
 
     version_rows = "".join(
         f"""<div class="row"><span class="mono" style="font-weight:600;min-width:48px">{escape(r["version"].lstrip("v"))}</span>
-<span style="color:var(--muted);flex:1">{_fmt_date(r["published"])} · Moodle {escape(_moodle_range(r))}</span>
+<span style="color:var(--muted);flex:1">{_updated(r)} · Moodle {escape(_moodle_range(r))}</span>
 <a href="{escape(_zip_url(base_url, component, r["version"].lstrip("v")))}">ZIP</a></div>"""
         for r in reversed(entry["releases"])
     ) or '<div class="row"><span style="color:var(--muted)">No releases yet (discovered listing)</span></div>'
@@ -383,20 +494,89 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     return _page(f"{name} — CAMP", body, root="../", script=TABS_JS)
 
 
+def _type_label(plugintype: str) -> str:
+    return PLUGINTYPE_NAMES.get(plugintype, plugintype)
+
+
+def _filter_bar(entries: list[tuple[dict, dict]]) -> str:
+    """Build the type/tier/cost filter controls from the data actually
+    present, so the dropdowns never offer a value that matches nothing."""
+    type_counts = Counter(e["component"].partition("_")[0] for e, _ in entries)
+    type_opts = "".join(
+        f'<option value="{escape(t)}">{escape(_type_label(t))} ({n})</option>'
+        for t, n in sorted(type_counts.items(), key=lambda kv: _type_label(kv[0]).lower())
+    )
+    type_select = (
+        f'<select id="f-type" aria-label="Filter by plugin type">'
+        f'<option value="">All types</option>{type_opts}</select>'
+    )
+
+    has_verified = any(e["tier"] > 0 for e, _ in entries)
+    tier_select = (
+        '<select id="f-tier" aria-label="Filter by verification tier">'
+        '<option value="">Any tier</option>'
+        '<option value="verified">✓ Source-verified</option>'
+        '<option value="discovered">Discovered only</option></select>'
+    ) if has_verified else ""
+
+    labels_present = {label for e, _ in entries for label in e.get("labels", [])}
+    label_opts = "".join(
+        f'<option value="{escape(k)}">{escape(v)}</option>'
+        for k, v in LABEL_TEXT.items() if k in labels_present
+    )
+    label_select = (
+        '<select id="f-label" aria-label="Filter by cost model">'
+        f'<option value="">Any cost model</option>{label_opts}</select>'
+    ) if label_opts else ""
+
+    sort_select = (
+        '<select id="f-sort" aria-label="Sort plugins">'
+        '<option value="name">Sort: Name</option>'
+        '<option value="stars">Sort: Most stars</option>'
+        '<option value="updated">Sort: Recently updated</option></select>'
+    )
+
+    return (
+        '<div class="filters">'
+        f'{type_select}{tier_select}{label_select}{sort_select}'
+        '<button type="button" id="f-clear" class="clear">Clear</button>'
+        '</div>'
+    )
+
+
 def _browse_page(entries: list[tuple[dict, dict]]) -> str:
     cards = []
     for entry, listing in entries:
         component = entry["component"]
+        plugintype = component.partition("_")[0]
         name = listing.get("name") or component
         summary = listing.get("summary") or entry.get("summary") or ""
         latest = entry["releases"][-1] if entry["releases"] else None
+        metrics = entry.get("metrics") or {}
         haystack = escape(f"{name} {component} {summary}".lower())
-        meta = _badges(entry)
+        labels_attr = escape(" ".join(entry.get("labels", [])))
+
+        # Sort keys: a single "updated" date per card (release date for verified,
+        # upstream push date for discovered) and a star count for popularity.
         if latest:
-            meta += f'<span class="updated">Moodle {escape(_moodle_range(latest))} · updated {_fmt_date(latest["published"])}</span>'
+            updated_iso = latest.get("released") or latest.get("published") or ""
+        else:
+            updated_iso = metrics.get("updated") or ""
+        updated_attr = updated_iso[:10]
+        stars_attr = metrics.get("stars", 0)
+
+        meta = _badges(entry)
+        if metrics.get("archived"):
+            meta += '<span class="badge b-note">Archived upstream</span>'
+        if latest:
+            meta += f'<span class="updated">Moodle {escape(_moodle_range(latest))} · updated {_updated(latest)}</span>'
+        elif metrics:
+            meta += f'<span class="updated">{escape(_metric_summary(metrics))}</span>'
         comp_tag = f'<span class="cp">{escape(component)}</span>' if name != component else ""
         cards.append(f"""
-<a class="pcard" href="plugin/{escape(component)}.html" data-text="{haystack}">
+<a class="pcard" href="plugin/{escape(component)}.html" data-text="{haystack}"
+   data-type="{escape(plugintype)}" data-tier="{entry["tier"]}" data-labels="{labels_attr}"
+   data-stars="{stars_attr}" data-updated="{updated_attr}">
   <span class="nm">{escape(name)}</span>{comp_tag}
   {f'<div class="sm">{escape(summary)}</div>' if summary else ''}
   <div class="meta">{meta}</div>
@@ -409,6 +589,7 @@ def _browse_page(entries: list[tuple[dict, dict]]) -> str:
 </header>
 <input type="search" id="q" placeholder="Search {len(entries)} plugins…" aria-label="Search plugins"
   style="width:100%;border:1px solid var(--line);border-radius:8px;padding:11px 14px;font:inherit;background:var(--card)">
+{_filter_bar(entries)}
 <div class="plist">{''.join(cards)}</div>
 <div class="count" id="count">{len(entries)} plugin{"s" if len(entries) != 1 else ""}</div>
 """

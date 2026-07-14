@@ -84,6 +84,9 @@ class Candidate:
     default_branch: str
     archived: bool
     platform: str = "github"
+    pushed_at: str | None = None
+    forks: int = 0
+    open_issues: int = 0
 
 
 @dataclass
@@ -210,6 +213,9 @@ def _search(query: str, limit: int, token: str | None, log,
                 stars=repo.get("stargazers_count", 0),
                 default_branch=repo.get("default_branch", "HEAD"),
                 archived=repo.get("archived", False),
+                pushed_at=repo.get("pushed_at"),
+                forks=repo.get("forks_count", 0),
+                open_issues=repo.get("open_issues_count", 0),
             ))
         page += 1
     return candidates[:limit], total
@@ -354,6 +360,22 @@ def _name_matches_component(full_name: str, component: str) -> bool:
     return short_name in repo_name or full in repo_name
 
 
+def _metrics_dict(*, updated: str | None, stars: int, forks: int,
+                  open_issues: int, archived: bool, checked: str) -> dict:
+    """Ordered upstream-activity metrics block (schema `metrics`). `updated`
+    is omitted when the platform gave no timestamp; `checked` is always set so
+    consumers can judge freshness."""
+    metrics: dict = {}
+    if updated:
+        metrics["updated"] = updated
+    metrics["stars"] = stars
+    metrics["forks"] = forks
+    metrics["open-issues"] = open_issues
+    metrics["archived"] = archived
+    metrics["checked"] = checked
+    return metrics
+
+
 def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
     maintainer = {("gitlab" if candidate.platform == "gitlab" else "github"): candidate.owner}
     entry: dict = {
@@ -369,7 +391,194 @@ def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
         entry["license"] = candidate.license_spdx
     if candidate.description:
         entry["summary"] = candidate.description[:300]
+    entry["metrics"] = _metrics_dict(
+        updated=candidate.pushed_at, stars=candidate.stars, forks=candidate.forks,
+        open_issues=candidate.open_issues, archived=candidate.archived, checked=today,
+    )
     return entry
+
+
+# --- metric enrichment (backfill/refresh) -----------------------------------
+# Discovered entries carry no activity signals until this pass fetches them
+# from the source platform. Metrics are advisory (they rank verification work),
+# so a repo that has gone 404 or a transient error simply leaves the entry
+# unenriched rather than failing the run.
+
+def _fetch_metrics(source: str, token: str | None, checked: str,
+                   log) -> tuple[str, dict | None]:
+    """Fetch upstream metrics for one source repo. Returns (status, metrics)
+    where status is 'ok' (metrics populated), 'gone' (404 — repo removed or
+    renamed), or 'error' (transient/unsupported host — retry later)."""
+    parsed = urllib.parse.urlparse(source)
+    host = parsed.netloc
+    path = parsed.path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+
+    if host == "github.com":
+        url = f"https://api.github.com/repos/{path}"
+        status, body, headers = _request(url, token)
+        if status == 403 and headers.get("X-RateLimit-Remaining") == "0":
+            wait = max(0, int(headers.get("X-RateLimit-Reset", "0")) - int(time.time())) + 1
+            log(f"  rate-limited; sleeping {wait}s")
+            time.sleep(wait)
+            status, body, headers = _request(url, token)
+        if status == 404:
+            return "gone", None
+        if status != 200:
+            log(f"  {path}: GitHub HTTP {status}")
+            return "error", None
+        repo = json.loads(body)
+        return "ok", _metrics_dict(
+            updated=repo.get("pushed_at"), stars=repo.get("stargazers_count", 0),
+            forks=repo.get("forks_count", 0), open_issues=repo.get("open_issues_count", 0),
+            archived=repo.get("archived", False), checked=checked,
+        )
+
+    if "gitlab" in host:
+        api = (f"{parsed.scheme}://{host}/api/v4/projects/"
+               f"{urllib.parse.quote(path, safe='')}")
+        status, body, _ = _request(api, None)
+        if status == 404:
+            return "gone", None
+        if status != 200:
+            log(f"  {path}: GitLab HTTP {status}")
+            return "error", None
+        proj = json.loads(body)
+        return "ok", _metrics_dict(
+            updated=proj.get("last_activity_at"), stars=proj.get("star_count", 0),
+            forks=proj.get("forks_count", 0), open_issues=proj.get("open_issues_count", 0),
+            archived=proj.get("archived", False), checked=checked,
+        )
+
+    log(f"  {source}: unsupported host, skipped")
+    return "error", None
+
+
+_BADGE_LINE = re.compile(r"^\[?!\[")          # image or linked-image (badge) line
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")  # [text](url) -> text
+
+
+def _summary_from_readme(text: str) -> str | None:
+    """Best-effort one-line summary from a README: the first prose line,
+    skipping the title, badges, images, raw HTML, rules, quotes and tables.
+    Heuristic and plain-text only (markdown emphasis/links stripped)."""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    in_fence = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line:
+            continue
+        if line[0] in "#>|":                       # heading, quote, table row
+            continue
+        if line.startswith("<") or _BADGE_LINE.match(line):  # HTML / badge / image
+            continue
+        if set(line) <= set("-=*_ "):              # horizontal rule / setext underline
+            continue
+        line = _MD_LINK.sub(r"\1", line)           # unwrap links to their text
+        line = re.sub(r"^[-*+]\s+", "", line)       # drop a leading list marker
+        line = re.sub(r"[*_`]+", "", line).strip()  # strip emphasis / code ticks
+        if len(line) >= 12:
+            return line[:300]
+    return None
+
+
+def _fetch_readme_summary(source: str, token: str | None, log) -> str | None:
+    """Fetch a repo's README and derive a one-line summary. GitHub-only for now
+    (GitLab has no comparable single-call raw-README endpoint by path)."""
+    parsed = urllib.parse.urlparse(source)
+    if parsed.netloc != "github.com":
+        return None
+    path = parsed.path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    url = f"https://api.github.com/repos/{path}/readme"
+    status, body, headers = _request(url, token)
+    if status == 403 and headers.get("X-RateLimit-Remaining") == "0":
+        wait = max(0, int(headers.get("X-RateLimit-Reset", "0")) - int(time.time())) + 1
+        log(f"  rate-limited; sleeping {wait}s")
+        time.sleep(wait)
+        status, body, headers = _request(url, token)
+    if status != 200:
+        return None
+    import base64
+    try:
+        content = json.loads(body).get("content", "")
+        text = base64.b64decode(content).decode(errors="replace")
+    except (ValueError, TypeError):
+        return None
+    return _summary_from_readme(text)
+
+
+def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = None,
+           force: bool = False, readme: bool = True, log=print) -> dict:
+    """Backfill/refresh discovered (Tier 0) entries with upstream `metrics` and,
+    where the source repo set no description, a one-line `summary` derived from
+    its README.
+
+    Resumable: an entry is skipped once it has metrics and a summary (or can't
+    gain one), unless `force` is set — so an interrupted run resumes cleanly and
+    the metrics-only entries from an earlier pass still get their README summary.
+    `limit` caps the number of repos contacted (for sampling)."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    today = datetime.date.today().isoformat()
+    paths = sorted((Path(index_dir) / "plugins").glob("*/*.yml"))
+    stats = {"metrics": 0, "summary": 0, "skipped": 0, "gone": 0, "error": 0}
+    fetched = 0
+
+    for path in paths:
+        if limit is not None and fetched >= limit:
+            break
+        with open(path) as f:
+            entry = yaml.safe_load(f)
+        if entry.get("tier", 0) != 0:
+            continue
+
+        needs_metrics = force or not entry.get("metrics")
+        # README summary is a fallback only when the repo gave no description,
+        # and only for GitHub sources (see _fetch_readme_summary).
+        needs_summary = (readme and "github.com" in entry.get("source", "")
+                         and (force or not (entry.get("summary") or "").strip()))
+        if not needs_metrics and not needs_summary:
+            stats["skipped"] += 1
+            continue
+
+        fetched += 1
+        changed = False
+
+        if needs_metrics:
+            status, metrics = _fetch_metrics(entry["source"], token, today, log)
+            if status == "ok":
+                entry["metrics"] = metrics
+                stats["metrics"] += 1
+                changed = True
+            elif status == "gone":
+                stats["gone"] += 1
+                log(f"  gone: {entry['source']}")
+                continue          # repo unreachable — a README fetch would 404 too
+            else:
+                stats["error"] += 1
+                continue
+
+        if needs_summary:
+            summary = _fetch_readme_summary(entry["source"], token, log)
+            if summary:
+                entry["summary"] = summary
+                stats["summary"] += 1
+                changed = True
+
+        if changed:
+            with open(path, "w") as f:
+                yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
+            if (stats["metrics"] + stats["summary"]) % 250 == 0:
+                log(f"  … {stats['metrics']} metrics, {stats['summary']} summaries")
+
+    log(f"enriched: {stats['metrics']} metrics, {stats['summary']} summaries; "
+        f"skipped {stats['skipped']}, gone {stats['gone']}, errors {stats['error']}")
+    return stats
 
 
 def recheck_noassertion(index_dir: str | Path, token: str | None = None,
@@ -410,6 +619,9 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             stars=repo.get("stargazers_count", 0),
             default_branch=repo.get("default_branch", "HEAD"),
             archived=repo.get("archived", False),
+            pushed_at=repo.get("pushed_at"),
+            forks=repo.get("forks_count", 0),
+            open_issues=repo.get("open_issues_count", 0),
         )
 
         if not _is_acceptable_license(spdx):
