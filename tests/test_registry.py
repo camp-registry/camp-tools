@@ -84,6 +84,33 @@ def test_ledger_check_append_only(entry_path, tmp_path):
     assert main(["ledger-check", str(base), str(entry_path)]) == 1
 
 
+def test_moved_requires_pointer(entry_path):
+    _mutate(entry_path, lambda e: e.update(status="moved"))
+    assert any("moved-to" in p for p in validate_entry(entry_path))
+
+    _mutate(entry_path, lambda e: e.update(**{"moved-to": "https://marketplace.example/mod_example"}))
+    assert validate_entry(entry_path) == []
+
+
+def test_moved_stays_installable_with_abandoned_pointer(index_dir, entry_path):
+    _mutate(entry_path, lambda e: e.update(
+        status="moved", **{"moved-to": "https://marketplace.example/mod_example"}))
+    doc = composer_generate(index_dir, "https://repo.test")
+    definition = doc["packages"]["tester/moodle-mod_example"]["1.0.0"]
+    assert definition["abandoned"] == "https://marketplace.example/mod_example"
+    assert definition["extra"]["camp"]["moved-to"] == "https://marketplace.example/mod_example"
+
+
+def test_moved_page_shows_successor_notice(index_dir, entry_path, tmp_path):
+    _mutate(entry_path, lambda e: e.update(
+        status="moved", **{"moved-to": "https://marketplace.example/mod_example"}))
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "This plugin has moved" in html
+    assert "https://marketplace.example/mod_example" in html
+
+
 def test_composer_excludes_below_tier2_and_delisted(index_dir, entry_path):
     doc = composer_generate(index_dir, "https://repo.test")
     assert list(doc["packages"]) == ["tester/moodle-mod_example"]

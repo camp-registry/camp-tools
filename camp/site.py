@@ -393,6 +393,17 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
   {f'<p class="tagline">{escape(summary)}</p>' if summary else ''}
   <div class="badges">{_badges(entry)}</div>
 """
+    if entry.get("status") == "moved":
+        moved_to = entry["moved-to"]
+        moved_link = (f'<a href="{escape(moved_to)}">{escape(moved_to)}</a>'
+                      if moved_to.startswith("https://") else f'<b>{escape(moved_to)}</b>')
+        header += f"""
+  <div class="card" style="margin-top:14px;border-left:3px solid var(--amber);border-radius:0 10px 10px 0;font-size:13.5px">
+    <b>This plugin has moved.</b> New versions are published at {moved_link}.
+    Versions already published here remain in the archive, stay installable,
+    and continue to receive security advisories.
+  </div>
+"""
     if latest:
         version = latest["version"].lstrip("v")
         cmd = f"composer require {package}"
@@ -615,7 +626,9 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     entries: list[tuple[dict, dict]] = []
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
         entry = load_entry(entry_path)
-        if entry.get("status", "active") != "active":
+        # 'moved' listings keep their pages (with a successor notice);
+        # only 'delisted' disappears from the generated site.
+        if entry.get("status", "active") == "delisted":
             continue
         listing = _load_listing(listings, entry["component"])
         entries.append((entry, listing))

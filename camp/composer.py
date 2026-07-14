@@ -83,6 +83,12 @@ def package_definition(entry: dict, base_url: str,
             },
             "time": release["published"],
         }
+        if entry.get("status") == "moved":
+            # Composer's native abandoned-with-replacement signal: composer
+            # warns "package is abandoned, use <moved-to> instead" without
+            # any camp-specific tooling (RFC §6.3).
+            versions[version]["abandoned"] = entry["moved-to"]
+            versions[version]["extra"]["camp"]["moved-to"] = entry["moved-to"]
 
     return name, versions
 
@@ -93,7 +99,9 @@ def generate(index_dir: str | Path, base_url: str) -> dict:
     packages: dict[str, dict] = {}
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
         entry = load_entry(entry_path)
-        if entry.get("status", "active") != "active" or entry["tier"] < 2:
+        # 'moved' listings stay installable (published versions remain
+        # published); only 'delisted' drops out of installation metadata.
+        if entry.get("status", "active") == "delisted" or entry["tier"] < 2:
             continue
         name, versions = package_definition(entry, base_url, advisories)
         if versions:
