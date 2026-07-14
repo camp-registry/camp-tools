@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://camp-registry.org/schema/advisory.schema.json",
+  "title": "camp security advisory",
+  "description": "A published security advisory for a third-party plugin (RFC §5.3). Advisories are authoritative index content: signed objects living at index/advisories/<component>/<id>.yml. They warn administrators running affected versions, surface in Composer's audit tooling, and — when revoke is true — remove affected versions from installation entirely (the artifact stays archived for forensics; the ledger is never rewritten).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "component", "title", "severity", "affected-versions", "published", "description"],
+  "properties": {
+    "id": {
+      "description": "Project-scoped advisory identifier, assigned sequentially.",
+      "type": "string",
+      "pattern": "^CAMP-[0-9]{4}-[0-9]{4}$"
+    },
+    "component": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*_[a-z][a-z0-9_]*$"
+    },
+    "title": {
+      "description": "One-line summary, e.g. \"CSRF in export endpoint\".",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "affected-versions": {
+      "description": "Version constraint in Composer syntax, comma = AND, e.g. \">=1.0,<1.4.2\" or \"<2.0\". Matched against the release ledger's version field.",
+      "type": "string",
+      "pattern": "^(>=|<=|>|<|=)[^,]+(,(>=|<=|>|<|=)[^,]+)*$"
+    },
+    "fixed-in": {
+      "description": "First safe version, if a fix exists.",
+      "type": "string"
+    },
+    "revoke": {
+      "description": "Severe cases only: remove affected versions from installation channels (Composer metadata and client plugin). Archived artifacts are preserved (RFC §5.3).",
+      "type": "boolean",
+      "default": false
+    },
+    "cve": {
+      "type": "string",
+      "pattern": "^CVE-[0-9]{4}-[0-9]{4,}$"
+    },
+    "published": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "timeline": {
+      "description": "Coordinated-disclosure timeline, published after disclosure (RFC §5.3).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reported": { "type": "string", "format": "date" },
+        "maintainer-notified": { "type": "string", "format": "date" },
+        "fix-released": { "type": "string", "format": "date" },
+        "disclosed": { "type": "string", "format": "date" }
+      }
+    },
+    "description": {
+      "description": "What the vulnerability is, impact, and what administrators should do. Sanitized markdown.",
+      "type": "string",
+      "minLength": 1
+    },
+    "credits": {
+      "description": "Reporter credit, with their consent.",
+      "type": "string"
+    },
+    "references": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^https://" }
+    }
+  }
+}

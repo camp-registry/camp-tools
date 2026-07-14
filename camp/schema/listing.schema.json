@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://camp-registry.org/schema/listing.schema.json",
+  "title": "camp listing manifest (.camp/listing.yml)",
+  "description": "Descriptive listing content, kept in the plugin's own repository (RFC §4.1) and treated as untrusted input: the description is sanitized markdown (no raw HTML), screenshots are raster-only and re-encoded by CI. Ingested and hash-pinned at each tagged release.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "summary", "labels"],
+  "properties": {
+    "name": {
+      "description": "Human-readable plugin name shown in listings.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "summary": {
+      "description": "One-line description for search results and cards.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "description": "Long description in markdown. Rendered sanitized: no raw HTML.",
+      "type": "string"
+    },
+    "labels": {
+      "description": "Disclosure labels declared by the author (RFC §4.7). Validated by CI heuristics and Tier 3 review; deliberate mislabeling is a trust violation.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "fully-free",
+          "freemium",
+          "paid-service",
+          "external-account",
+          "donation-supported",
+          "commercial-support-available"
+        ]
+      }
+    },
+    "category": {
+      "description": "Browsing category on the website (free-form for now; a controlled vocabulary is an open question for the website phase).",
+      "type": "string",
+      "maxLength": 40
+    },
+    "screenshots": {
+      "description": "Paths relative to the repository root. Raster formats only (png/jpg/webp — no SVG); CI decodes, resizes, strips metadata, and re-emits every image.",
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "pattern": "\\.(png|jpe?g|webp)$" },
+          "caption": { "type": "string", "maxLength": 120 }
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "docs": { "type": "string", "pattern": "^https://" },
+        "issues": { "type": "string", "pattern": "^https://" },
+        "changelog": { "type": "string", "pattern": "^https://" },
+        "donate": { "type": "string", "pattern": "^https://" }
+      }
+    }
+  }
+}
