@@ -127,6 +127,20 @@ def test_composer_excludes_below_tier2_and_delisted(index_dir, entry_path):
     assert composer_generate(index_dir, "https://repo.test")["packages"] == {}
 
 
+def test_discovered_page_shows_summary_in_about(index_dir, entry_path, tmp_path):
+    _mutate(entry_path, lambda e: e.update(
+        tier=0, releases=[], summary="Scans uploads with seven antiviruses."))
+    entry = yaml.safe_load(entry_path.read_text())
+    del entry["labels"]; del entry["security-contact"]
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert html.count("Scans uploads with seven antiviruses.") >= 2  # tagline + About
+    assert "not published a listing manifest" in html
+
+
 def test_site_escapes_untrusted_content(index_dir, entry_path, tmp_path):
     _mutate(entry_path, lambda e: e.update(
         tier=0, releases=[], summary='<script>alert(1)</script>'))

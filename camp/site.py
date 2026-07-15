@@ -441,9 +441,16 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     header += "</header>"
 
     description = listing.get("description") or ""
+    source_link = f'<a href="{escape(entry["source"])}">source repository</a>'
+    # No listing manifest yet? Fall back to the discovered summary (the same
+    # text the browse cards show) rather than an empty About section.
     about_html = (
         _render_description(description)
-        or f'<p>No listing manifest published yet. See the <a href="{escape(entry["source"])}">source repository</a> for documentation.</p>'
+        or (f'<p>{escape(summary)}</p>'
+            f'<p style="color:var(--muted);font-size:13px">From the source repository&#8217;s '
+            f'description — the maintainer has not published a listing manifest yet. '
+            f'See the {source_link} for full documentation.</p>' if summary else '')
+        or f'<p>No listing manifest published yet. See the {source_link} for documentation.</p>'
     )
     overview = f"""
 <div class="panel active" id="overview">
