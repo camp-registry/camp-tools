@@ -25,4 +25,4 @@ build-backend = "setuptools.build_meta"
 include = ["camp*"]
 
 [tool.setuptools.package-data]
-camp = ["schema/*.json"]
+camp = ["schema/*.json", "fonts/*"]

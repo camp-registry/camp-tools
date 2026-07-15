@@ -204,6 +204,10 @@ def _search(query: str, limit: int, token: str | None, log,
         if not items:
             break
         for repo in items:
+            # Authenticated search returns private repos the token can
+            # access; a public index must never list a non-public source.
+            if repo.get("private") or repo.get("visibility", "public") != "public":
+                continue
             candidates.append(Candidate(
                 full_name=repo["full_name"],
                 html_url=repo["html_url"],
@@ -361,7 +365,8 @@ def _name_matches_component(full_name: str, component: str) -> bool:
 
 
 def _metrics_dict(*, updated: str | None, stars: int, forks: int,
-                  open_issues: int, archived: bool, checked: str) -> dict:
+                  open_issues: int, archived: bool, checked: str,
+                  latest_release: dict | None = None) -> dict:
     """Ordered upstream-activity metrics block (schema `metrics`). `updated`
     is omitted when the platform gave no timestamp; `checked` is always set so
     consumers can judge freshness."""
@@ -372,8 +377,45 @@ def _metrics_dict(*, updated: str | None, stars: int, forks: int,
     metrics["forks"] = forks
     metrics["open-issues"] = open_issues
     metrics["archived"] = archived
+    if latest_release:
+        metrics["latest-release"] = latest_release
     metrics["checked"] = checked
     return metrics
+
+
+def _fetch_latest_release(host: str, path: str, token: str | None) -> dict | None:
+    """Upstream's newest formal release (tag + date), or None. Plugins that
+    only tag without releases are skipped — tag-list ordering is not
+    reliably chronological on either platform."""
+    if host == "github.com":
+        status, body, _ = _request(
+            f"https://api.github.com/repos/{path}/releases/latest", token)
+        if status != 200:
+            return None
+        rel = json.loads(body)
+        tag = rel.get("tag_name")
+        if not tag:
+            return None
+        out = {"tag": tag}
+        if rel.get("published_at"):
+            out["date"] = rel["published_at"]
+        return out
+    if "gitlab" in host:
+        api = (f"https://{host}/api/v4/projects/"
+               f"{urllib.parse.quote(path, safe='')}/releases?per_page=1")
+        status, body, _ = _request(api, None)
+        if status != 200:
+            return None
+        rels = json.loads(body)
+        if not rels:
+            return None
+        out = {"tag": rels[0].get("tag_name", "")}
+        if not out["tag"]:
+            return None
+        if rels[0].get("released_at"):
+            out["date"] = rels[0]["released_at"]
+        return out
+    return None
 
 
 def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
@@ -433,6 +475,7 @@ def _fetch_metrics(source: str, token: str | None, checked: str,
             updated=repo.get("pushed_at"), stars=repo.get("stargazers_count", 0),
             forks=repo.get("forks_count", 0), open_issues=repo.get("open_issues_count", 0),
             archived=repo.get("archived", False), checked=checked,
+            latest_release=_fetch_latest_release("github.com", path, token),
         )
 
     if "gitlab" in host:
@@ -449,6 +492,7 @@ def _fetch_metrics(source: str, token: str | None, checked: str,
             updated=proj.get("last_activity_at"), stars=proj.get("star_count", 0),
             forks=proj.get("forks_count", 0), open_issues=proj.get("open_issues_count", 0),
             archived=proj.get("archived", False), checked=checked,
+            latest_release=_fetch_latest_release(host, path, None),
         )
 
     log(f"  {source}: unsupported host, skipped")
@@ -742,6 +786,9 @@ def _gitlab_search(term: str, limit: int, token: str | None, log) -> list[Candid
         if not projects:
             break
         for project in projects:
+            # Same rule as the GitHub scanner: tokens see private projects.
+            if project.get("visibility", "public") != "public":
+                continue
             license_key = (project.get("license") or {}).get("key")
             candidates.append(Candidate(
                 full_name=project["path_with_namespace"],

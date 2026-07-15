@@ -76,7 +76,16 @@ def validate_listing(path: str | Path) -> list[str]:
     except (OSError, yaml.YAMLError) as exc:
         return [str(exc)]
     validator = jsonschema.Draft202012Validator(_schema("listing.schema.json"))
-    return [
+    problems = [
         f"{'/'.join(str(p) for p in error.absolute_path) or '(root)'}: {error.message}"
         for error in sorted(validator.iter_errors(listing), key=str)
     ]
+    from .badge import ALLOWED_BADGE_HOSTS, allowed_endpoint
+    for i, badge in enumerate((listing or {}).get("badges") or []):
+        endpoint = badge.get("endpoint", "") if isinstance(badge, dict) else ""
+        if endpoint and not allowed_endpoint(endpoint):
+            problems.append(
+                f"badges/{i}: endpoint host not in the registry allowlist "
+                f"({', '.join(sorted(ALLOWED_BADGE_HOSTS))}) — propose additions "
+                f"by PR to camp-tools")
+    return problems

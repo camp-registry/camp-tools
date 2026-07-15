@@ -98,6 +98,37 @@ def test_entry_records_license():
     assert "license" not in entry
 
 
+def test_search_skips_private_repos():
+    from camp.scan import _search
+    import camp.scan as scan_mod
+    import json
+    payload = {"total_count": 2, "items": [
+        {"full_name": "u/moodle-mod_pub", "html_url": "https://github.com/u/moodle-mod_pub",
+         "owner": {"login": "u"}, "description": "", "private": False,
+         "visibility": "public", "stargazers_count": 1,
+         "default_branch": "main", "archived": False},
+        {"full_name": "u/moodle-mod_secret", "html_url": "https://github.com/u/moodle-mod_secret",
+         "owner": {"login": "u"}, "description": "client work", "private": True,
+         "visibility": "private", "stargazers_count": 0,
+         "default_branch": "main", "archived": False},
+    ]}
+    calls = {"n": 0}
+    def fake_request(url, token, log=print):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return 200, json.dumps(payload).encode(), {}
+        return 200, json.dumps({"total_count": 2, "items": []}).encode(), {}
+    orig = scan_mod._request
+    scan_mod._request = fake_request
+    try:
+        candidates, total = _search("q", 10, None, print)
+    finally:
+        scan_mod._request = orig
+    names = [c.full_name for c in candidates]
+    assert "u/moodle-mod_pub" in names
+    assert "u/moodle-mod_secret" not in names
+
+
 def test_site_shows_compatible_license_badge(index_dir, tmp_path):
     import yaml
     from camp.site import generate as site_generate

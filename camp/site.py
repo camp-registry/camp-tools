@@ -2,21 +2,28 @@
 
 Renders the index into a plain file tree of HTML — no database, no
 application server, mirrorable with the rest of the repository. Design
-follows the CAMP mockups (Spectral / IBM Plex, paper + verdigris palette).
+follows the claude.com/design handoff ("CAMP Redesign"): oklch token
+system with a light/dark theme, Playfair Display / Mulish / IBM Plex Mono
+(self-hosted woff2 subsets — no font CDN calls, RFC §4.6), an editorial
+masthead, a faceted filter sidebar, and per-plugin detail pages. One
+deliberate adaptation from the handoff: the plugin detail is a real page
+(linkable, mirror-friendly, works without JS) rather than a slide-over.
 
 Honesty rule: pages only assert what the registry has actually done. The
-verification ledger shows the real tag/commit/hash records; signing and
-transparency-log steps are rendered as "planned" until they exist.
+verification block states real dates from the ledger; signing and
+transparency-log steps are described as planned until they exist.
 
 Listing manifests (name, summary, description) are read from an optional
 listings directory (`<component>.yml` files) until the release-time
 ingestion pipeline lands. All listing-derived text is HTML-escaped;
-markdown rendering with sanitization is deliberately deferred.
+markdown rendering with sanitization is deliberately restricted.
 """
 
 from __future__ import annotations
 
 import datetime
+import json
+import shutil
 from collections import Counter
 from html import escape
 from pathlib import Path
@@ -24,6 +31,8 @@ from pathlib import Path
 import yaml
 
 from .advisory import AdvisorySet
+from . import badge as badge_mod
+from . import checks as checks_mod
 from .composer import _package_name
 from .validate import load_entry
 
@@ -46,24 +55,11 @@ PLUGINTYPE_NAMES = {
     "filter": "Filters",
 }
 
-# The project's public homes, used by the discovered-listing banner's
-# claim/removal links. Constants rather than parameters: this generator is
-# camp's own site tool, not a general-purpose one.
-INDEX_REPO_URL = "https://github.com/camp-registry/camp-index"
-AUTHORS_GUIDE_URL = "https://github.com/camp-registry/camp-docs/blob/main/AUTHORS.md"
-
 TIER_NAMES = {
     0: 'Discovered',
     1: 'Claimed',
     2: 'Verified',   # 'source-verified' in full — the docs say what it means
     3: 'Reviewed',
-}
-
-TIER_BADGES = {
-    0: ('b-note', 'Discovered · Tier 0'),
-    1: ('b-note', 'Claimed · Tier 1'),
-    2: ('b-free', '✓ Source-verified · Tier 2'),
-    3: ('b-rev', '✓ Reviewed · Tier 3'),
 }
 
 LABEL_TEXT = {
@@ -75,246 +71,730 @@ LABEL_TEXT = {
     "commercial-support-available": "Commercial support",
 }
 
-CSS = """
-  :root{
-    --paper:#F7F8F6; --card:#fff; --ink:#1B2430; --muted:#5A6472;
-    --line:#E1E5E4; --verd:#1E6E5C; --verd-soft:#E7F1EE; --verd-line:#CDE2DC;
-    --amber:#B87A1F; --amber-soft:#F7EEDD; --amber-line:#EBDBBB;
-    --mono:'IBM Plex Mono','SF Mono',Menlo,monospace;
-    --disp:'Spectral',Georgia,serif;
-  }
-  *{box-sizing:border-box;margin:0}
-  body{background:var(--paper);color:var(--ink);font:15px/1.5 'IBM Plex Sans',-apple-system,sans-serif}
-  a{color:var(--verd)}
-  .wrap{max-width:760px;margin:0 auto;padding:0 16px 56px}
-  .top{background:var(--card);border-bottom:1px solid var(--line)}
-  .top-in{max-width:760px;margin:0 auto;padding:10px 16px;display:flex;gap:12px;align-items:center}
-  .logo{text-decoration:none;color:var(--ink)}
-  .logo b{font-family:var(--disp);font-weight:700;font-size:18px;display:block}
-  .logo small{font-size:9px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
-  .top input{flex:1;border:1px solid var(--line);border-radius:6px;padding:8px 12px;font:inherit;background:var(--paper)}
-  header.p{padding:20px 0 14px}
-  .crumb{font-size:11px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase}
-  h1{font-family:var(--disp);font-weight:600;font-size:30px;line-height:1.1;margin-top:6px}
-  .comp{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:2px}
-  .tagline{margin-top:8px;color:#333c49}
-  .badges{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
-  .badge{font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px}
-  .b-rev{background:var(--verd);color:#fff}
-  .b-free{background:var(--verd-soft);color:var(--verd);border:1px solid var(--verd-line)}
-  .b-note{background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber-line)}
-  .actions{display:flex;gap:10px;margin-top:14px;align-items:center;flex-wrap:wrap}
-  .pill{background:var(--verd-soft);border:1px solid var(--verd-line);color:var(--verd);border-radius:8px;padding:9px 13px;font-size:13.5px;font-weight:600}
-  .install-btn{background:var(--verd);color:#fff;border:0;border-radius:8px;padding:10px 18px;font:600 14px 'IBM Plex Sans',sans-serif;cursor:pointer}
-  .updated{font-size:12.5px;color:var(--muted)}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
-  h2{font-family:var(--disp);font-weight:600;font-size:18px;margin:22px 0 10px}
-  #installPanel{display:none;margin-top:12px}
-  #installPanel.open{display:block}
-  .cmd{display:flex;align-items:center;gap:8px;background:#10241F;color:#D8EAE4;border-radius:8px;padding:11px 13px;font-family:var(--mono);font-size:12px;overflow-x:auto}
-  .cmd button{margin-left:auto;flex:none;background:var(--verd);color:#fff;border:0;border-radius:6px;padding:5px 10px;font:600 12px 'IBM Plex Sans',sans-serif;cursor:pointer}
-  .alt{display:flex;gap:10px;margin-top:10px;font-size:13px;flex-wrap:wrap}
-  .alt a{color:var(--ink);font-weight:600;border:1px solid var(--line);border-radius:6px;padding:7px 11px;text-decoration:none;background:var(--paper)}
-  .hash{margin-top:10px;font-family:var(--mono);font-size:10.5px;color:var(--muted);word-break:break-all}
-  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line)}
-  .tabs button{background:none;border:0;cursor:pointer;font:inherit;font-size:14px;color:var(--muted);padding:10px 12px;border-bottom:2px solid transparent;margin-bottom:-1px}
-  .tabs button[aria-selected="true"]{font-weight:600;color:var(--ink);border-bottom-color:var(--verd)}
-  .panel{display:none}.panel.active{display:block}
-  .row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px;align-items:baseline}
-  .row:last-child{border-bottom:0}
-  .mono{font-family:var(--mono)}
-  .ok{color:var(--verd);font-weight:600}
-  .row a{font-weight:600;text-decoration:none}
-  .ledger{position:relative;padding-left:26px}
-  .ledger::before{content:"";position:absolute;left:8px;top:10px;bottom:10px;width:1px;background:var(--line)}
-  .step{position:relative;padding:9px 0}
-  .step::before{content:"✓";position:absolute;left:-26px;top:11px;width:17px;height:17px;border-radius:50%;
-    background:var(--verd);color:#fff;font-size:10px;line-height:17px;text-align:center;font-weight:700}
-  .step.pending::before{content:"○";background:var(--paper);color:var(--muted);border:1px solid var(--line);line-height:15px}
-  .step.pending h3,.step.pending p{color:var(--muted)}
-  .step h3{font-size:13.5px;font-weight:600}
-  .step p{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-top:2px;word-break:break-all}
-  .ledger-note{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--muted)}
-  .adv{border-left:3px solid var(--verd);background:var(--verd-soft);border-radius:0 8px 8px 0;padding:12px 14px;font-size:13.5px}
-  .adv.open{border-left-color:var(--amber);background:var(--amber-soft)}
-  .adv .id{font-family:var(--mono);font-size:11px;color:var(--muted);display:block;margin-top:3px}
-  footer{margin-top:40px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
-  .plist{display:flex;flex-direction:column;gap:10px;margin-top:16px}
-  .pcard{display:block;text-decoration:none;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
-  .pcard:hover{border-color:var(--verd-line)}
-  .pcard .nm{font-family:var(--disp);font-weight:600;font-size:17px}
-  .pcard .cp{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-left:8px}
-  .pcard .sm{color:#333c49;font-size:13.5px;margin-top:3px}
-  .pcard .meta{display:flex;gap:7px;margin-top:8px;flex-wrap:wrap;align-items:center}
-  .pcard .meta .updated{margin-left:auto}
-  .count{font-size:12.5px;color:var(--muted);margin-top:18px}
-  .filters{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
-  .filters select{flex:1;min-width:130px;border:1px solid var(--line);border-radius:8px;padding:9px 12px;font:inherit;background:var(--card);color:var(--ink);cursor:pointer}
-  .filters .clear{border:1px solid var(--line);border-radius:8px;padding:0 13px;font:inherit;background:var(--paper);color:var(--muted);cursor:pointer}
-  .filters .clear:hover{color:var(--ink);border-color:var(--verd-line)}
-"""
+# Ordered Moodle branches for range filtering (oldest → newest).
+VORDER = ["3.9", "3.11", "4.0", "4.1", "4.2", "4.3", "4.4", "4.5",
+          "5.0", "5.1", "5.2"]
 
-FONTS = (
-    '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
-    '<link href="https://fonts.googleapis.com/css2?family=Spectral:wght@600;700'
-    '&family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">'
+MIRROR_URL = "https://github.com/camp-registry/camp-docs/blob/main/MIRRORING.md"
+INDEX_REPO_URL = "https://github.com/camp-registry/camp-index"
+AUTHORS_GUIDE_URL = "https://github.com/camp-registry/camp-docs/blob/main/AUTHORS.md"
+
+FONT_FILES = {
+    ("Playfair Display", 500): "playfair-display-v40-latin-500.woff2",
+    ("Playfair Display", 600): "playfair-display-v40-latin-600.woff2",
+    ("Mulish", 400): "mulish-v18-latin-regular.woff2",
+    ("Mulish", 500): "mulish-v18-latin-500.woff2",
+    ("Mulish", 600): "mulish-v18-latin-600.woff2",
+    ("Mulish", 700): "mulish-v18-latin-700.woff2",
+    ("IBM Plex Mono", 400): "ibm-plex-mono-v20-latin-regular.woff2",
+    ("IBM Plex Mono", 500): "ibm-plex-mono-v20-latin-500.woff2",
+    ("IBM Plex Mono", 600): "ibm-plex-mono-v20-latin-600.woff2",
+}
+
+FONT_CSS = "\n".join(
+    "@font-face{font-family:'%s';font-style:normal;font-weight:%d;"
+    "src:url('/fonts/%s') format('woff2');font-display:swap}" % (fam, w, f)
+    for (fam, w), f in FONT_FILES.items()
 )
 
-FOOTER = (
-    "CAMP is a community-governed archive of plugins for Moodle™. "
-    "Not affiliated with or endorsed by Moodle Pty Ltd."
-)
+# ---------------------------------------------------------------- tokens ---
 
-TABS_JS = """
-document.querySelectorAll('.tabs button').forEach(function(btn){
-  btn.addEventListener('click', function(){
-    document.querySelectorAll('.tabs button').forEach(function(b){ b.setAttribute('aria-selected','false'); });
-    document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('active'); });
-    btn.setAttribute('aria-selected','true');
-    document.getElementById(btn.dataset.tab).classList.add('active');
-  });
-});
+CSS = FONT_CSS + """
+:root{
+  --bg:oklch(0.965 0.008 85); --surface:oklch(0.99 0.006 85);
+  --ink:oklch(0.24 0.012 65); --ink-soft:oklch(0.29 0.012 65); --text:oklch(0.34 0.012 68);
+  --muted:oklch(0.44 0.012 70); --faint-label:oklch(0.52 0.012 70);
+  --faint:oklch(0.57 0.012 72); --faint-2:oklch(0.72 0.01 80);
+  --border:oklch(0.88 0.01 80); --border-strong:oklch(0.8 0.012 80);
+  --accent:oklch(0.52 0.12 264); --accent-hover:oklch(0.42 0.13 264); --accent-soft:oklch(0.93 0.02 264);
+  --green:oklch(0.53 0.11 150); --green-text:oklch(0.47 0.09 150);
+  --green-border:oklch(0.85 0.03 150); --green-bg:oklch(0.97 0.02 150);
+  --green-head:oklch(0.4 0.09 150); --green-body:oklch(0.38 0.04 150);
+  --amber:oklch(0.62 0.12 65); --red:oklch(0.55 0.15 30);
+  --scrim:oklch(0.24 0.012 65 / 0.42); --shadow:oklch(0.24 0.012 65 / 0.14);
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --serif:'Playfair Display',Georgia,serif;
+  --sans:'Mulish',-apple-system,'Segoe UI',sans-serif;
+}
+[data-theme="dark"]{
+  --bg:oklch(0.185 0.006 75); --surface:oklch(0.225 0.007 75);
+  --ink:oklch(0.93 0.008 85); --ink-soft:oklch(0.86 0.008 85); --text:oklch(0.8 0.008 82);
+  --muted:oklch(0.68 0.008 80); --faint-label:oklch(0.63 0.008 78);
+  --faint:oklch(0.58 0.008 78); --faint-2:oklch(0.5 0.008 78);
+  --border:oklch(0.32 0.008 75); --border-strong:oklch(0.42 0.008 75);
+  --accent:oklch(0.74 0.12 264); --accent-hover:oklch(0.82 0.12 264); --accent-soft:oklch(0.3 0.045 264);
+  --green:oklch(0.62 0.13 150); --green-text:oklch(0.74 0.11 150);
+  --green-border:oklch(0.42 0.06 150); --green-bg:oklch(0.27 0.05 150);
+  --green-head:oklch(0.78 0.1 150); --green-body:oklch(0.74 0.06 150);
+  --amber:oklch(0.74 0.12 65); --red:oklch(0.7 0.15 30);
+  --scrim:oklch(0.1 0.006 75 / 0.62); --shadow:oklch(0 0 0 / 0.55);
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.5 var(--sans);
+  transition:background .2s,color .2s}
+a{color:var(--accent);text-decoration:none}
+a:hover{color:var(--accent-hover)}
+.mono{font-family:var(--mono)}
+
+/* ---- header / nav ---- */
+.wrap{max-width:1180px;margin:0 auto;padding:0 32px}
+.narrow{max-width:860px;margin:0 auto;padding:34px 32px 90px}
+.topbar{display:flex;justify-content:space-between;align-items:baseline;
+  padding:22px 0;border-bottom:1px solid var(--border)}
+.wordmark{display:flex;align-items:baseline;gap:14px;color:var(--ink)}
+.wordmark:hover{color:var(--ink)}
+.wordmark b{font-family:var(--mono);font-weight:600;font-size:22px;letter-spacing:.14em}
+.wordmark small{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.18em;color:var(--faint-label)}
+nav{display:flex;align-items:center;gap:22px;font-family:var(--mono);font-size:13px}
+nav a{color:var(--muted)}
+nav a:hover{color:var(--ink)}
+.theme-toggle{background:none;border:0;cursor:pointer;line-height:0;
+  color:var(--muted);padding:0}
+.theme-toggle:hover{color:var(--ink)}
+.theme-toggle svg{width:18px;height:18px;display:none;stroke:currentColor;fill:none;
+  stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+:root:not([data-theme="dark"]) .ic-moon{display:inline}
+[data-theme="dark"] .ic-sun{display:inline}
+
+/* ---- masthead ---- */
+.hero{max-width:820px;padding:44px 0 34px}
+.hero h1{font-family:var(--serif);font-weight:500;font-size:44px;line-height:1.08;
+  letter-spacing:-0.01em;color:var(--ink)}
+.hero p{margin-top:16px;font-size:17px;line-height:1.55;color:var(--muted);max-width:640px}
+.trust-band{display:grid;grid-template-columns:repeat(3,1fr);
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.trust-band>div{padding:16px 20px 16px 0;border-right:1px solid var(--border)}
+.trust-band>div:last-child{border-right:0}
+.trust-band>div+div{padding-left:20px}
+.kicker{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.16em;color:var(--green-text);display:block;margin-bottom:6px}
+.trust-band p{font-size:13.5px;color:var(--muted)}
+
+/* ---- search + layout ---- */
+.searchbox{position:relative;margin:26px 0 30px}
+.searchbox input{width:100%;padding:16px 18px 16px 46px;font:15px var(--mono);
+  color:var(--ink);background:var(--surface);border:1px solid var(--border-strong);
+  border-radius:2px}
+.searchbox .glyph{position:absolute;left:18px;top:50%;transform:translateY(-50%);
+  color:var(--faint);pointer-events:none;font-size:16px}
+.body-grid{display:grid;grid-template-columns:248px 1fr;gap:38px;align-items:start;
+  padding-bottom:60px}
+@media(max-width:860px){.body-grid{grid-template-columns:1fr}
+  .sidebar{position:static!important;max-height:none!important}
+  .hero h1{font-size:32px}.trust-band{grid-template-columns:1fr}
+  .trust-band>div{border-right:0;border-bottom:1px solid var(--border);padding-left:0}}
+
+/* ---- sidebar facets ---- */
+.sidebar{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow-y:auto}
+.facet-group{margin-bottom:26px}
+.facet-label{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.16em;color:var(--faint-label);margin-bottom:8px}
+.facet-list{display:flex;flex-direction:column;gap:1px}
+.facet{display:flex;justify-content:space-between;align-items:center;width:100%;
+  padding:7px 10px;border:0;border-radius:2px;background:transparent;cursor:pointer;
+  font:13.5px var(--sans);color:var(--ink);text-align:left;gap:8px}
+.facet .n{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.facet.active{background:var(--accent-soft);color:var(--accent);font-weight:500}
+.facet.active .n{color:var(--accent)}
+.facet .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+  margin-right:6px;vertical-align:1px}
+.facet-more{background:none;border:0;cursor:pointer;font:12px var(--mono);
+  color:var(--accent);padding:7px 10px;text-align:left}
+
+/* ---- results ---- */
+.results-head{display:flex;justify-content:space-between;align-items:center;
+  flex-wrap:wrap;gap:10px}
+.results-count{font-size:14px;color:var(--muted)}
+.sorts{display:flex;align-items:center;gap:6px}
+.sorts .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.16em;
+  color:var(--faint-label);margin-right:4px}
+.sortbtn{background:transparent;border:1px solid transparent;border-radius:2px;
+  cursor:pointer;font:12px var(--mono);color:var(--muted);padding:5px 10px}
+.sortbtn.active{border-color:var(--border-strong);background:var(--surface);color:var(--ink)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
+.chip{display:inline-flex;align-items:center;gap:7px;padding:5px 10px 5px 12px;
+  background:var(--surface);border:1px solid var(--border-strong);border-radius:2px;
+  font:12px var(--mono);color:var(--ink);cursor:pointer}
+.chip .f{color:var(--faint)}
+.chip .x{color:var(--faint)}
+.chip:hover .x{color:var(--red)}
+.clear-all{background:none;border:0;cursor:pointer;font:12px var(--mono);color:var(--accent)}
+.rows{margin-top:6px}
+.row-item{display:flex;gap:16px;padding:20px 6px;border-bottom:1px solid var(--border);
+  cursor:pointer;color:inherit;transition:background .12s;align-items:flex-start;
+  content-visibility:auto;contain-intrinsic-size:1px 118px}
+.row-item:hover{background:var(--surface);color:inherit}
+.row-main{flex:1;min-width:0}
+.row-line1{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.row-name{font-family:var(--mono);font-weight:500;font-size:15px;color:var(--ink)}
+.vpill{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
+  font-size:11px;color:var(--green-text)}
+.vpill .c{width:14px;height:14px;border-radius:50%;background:var(--green);color:#fff;
+  font-size:9px;line-height:14px;text-align:center;flex:none}
+.row-summary{margin-top:5px;font-size:13.5px;line-height:1.5;color:var(--muted);
+  max-width:620px;text-wrap:pretty}
+.row-meta{display:flex;align-items:center;gap:14px;margin-top:8px;
+  font-family:var(--mono);font-size:11.5px;color:var(--faint-label);flex-wrap:wrap}
+.hdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;
+  vertical-align:1px}
+.row-rail{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none;
+  padding-top:2px}
+.row-cost{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.row-arrow{font-size:16px;color:var(--faint-2)}
+.empty{text-align:center;padding:70px 0;font-family:var(--mono);font-size:14px;
+  color:var(--muted)}
+.empty button{display:block;margin:16px auto 0}
+
+/* ---- tier badges ---- */
+.tb{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 8px;
+  border-radius:2px;white-space:nowrap}
+.tb-0{background:transparent;color:var(--faint);border:1px solid var(--border)}
+.tb-1{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
+.tb-2{background:transparent;color:var(--green-text);border:1px solid var(--green)}
+.tb-3{background:var(--green);color:#fff;font-weight:500;border:1px solid var(--green)}
+
+/* ---- footer ---- */
+footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
+  font-family:var(--mono);font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+
+/* ---- plugin detail page ---- */
+.detail{max-width:860px;margin:0 auto;padding:34px 32px 90px}
+.backlink{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.detail .crumb{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.16em;color:var(--faint-label);margin:26px 0 6px}
+.detail h1{font-family:var(--mono);font-weight:600;font-size:26px;color:var(--ink)}
+.strip{display:flex;align-items:center;gap:14px;margin-top:14px;flex-wrap:wrap;
+  font-family:var(--mono);font-size:11.5px;color:var(--faint-label)}
+.dsummary{margin-top:14px;font-size:15.5px;line-height:1.6;color:var(--text);
+  max-width:660px}
+.attrib{font-size:12.5px;color:var(--faint-label);margin-top:8px;max-width:660px}
+.sect{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+  letter-spacing:.16em;color:var(--faint-label);margin:36px 0 10px}
+
+/* install card */
+.install-card{border:1px solid var(--border);border-radius:6px;
+  background:var(--surface);padding:20px 24px;margin-top:28px;
+  display:flex;justify-content:space-between;gap:28px;flex-wrap:wrap}
+.install-card .left{flex:1;min-width:260px}
+.install-card .right{display:flex;flex-direction:column;gap:8px;min-width:230px}
+.inst-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.inst-ver{font:600 24px var(--mono);color:var(--ink)}
+.inst-for{font-size:12.5px;color:var(--muted)}
+.install-card select{padding:6px 26px 6px 9px;font:600 12.5px var(--mono);
+  color:var(--ink);background:var(--bg);border:1px solid var(--accent);
+  border-radius:2px;cursor:pointer}
+.vline{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;
+  margin-top:12px;color:var(--green-text)}
+.vline .c{width:16px;height:16px;border-radius:50%;background:var(--green);
+  color:#fff;font-size:10px;line-height:16px;text-align:center;flex:none}
+.vline.warn{color:var(--muted)}
+.vline.warn .c{background:var(--border-strong)}
+.vdetail{margin-top:7px;font-size:12px;line-height:1.5;color:var(--muted);
+  max-width:520px}
+.vdetail summary{cursor:pointer;font-family:var(--mono);font-size:11px;
+  color:var(--faint-label)}
+.vdetail .hash{font-family:var(--mono);font-size:10.5px;word-break:break-all;
+  color:var(--faint-label);margin-top:5px}
+.inst-meta{margin-top:10px;font-family:var(--mono);font-size:11.5px;
+  color:var(--faint-label)}
+.inst-meta b{color:var(--text);font-weight:600}
+.pick-note{margin-top:10px;font-size:12.5px;line-height:1.5;color:var(--amber);
+  max-width:520px}
+.cmdline{display:flex;align-items:center;gap:10px;margin-top:16px;
+  background:var(--ink);color:var(--bg);border-radius:3px;padding:9px 12px;
+  font:12px var(--mono);max-width:520px}
+.cmdline code{flex:1;overflow-x:auto;white-space:nowrap}
+.cmdline button{flex:none;background:var(--bg);color:var(--ink);border:0;
+  border-radius:2px;padding:4px 10px;font:600 11px var(--mono);cursor:pointer}
+.btn{display:block;text-align:center;padding:11px 16px;border-radius:2px;
+  font:500 13px var(--mono);cursor:pointer}
+.act-primary{background:var(--ink);color:var(--bg);border:1px solid var(--ink)}
+.act-primary:hover{color:var(--bg);opacity:.88}
+.act-secondary{background:var(--bg);color:var(--muted);
+  border:1px solid var(--border-strong)}
+
+/* versions table */
+.vtable{margin-top:8px}
+.vrow{display:grid;grid-template-columns:86px 130px 1fr 1fr 44px;gap:12px;
+  padding:10px 8px;border-bottom:1px solid var(--border);font-size:13px;
+  align-items:baseline;cursor:pointer;border-radius:2px}
+.vrow:hover{background:var(--surface)}
+.vrow.sel{background:var(--accent-soft)}
+.vrow .v{font-family:var(--mono);font-weight:600;color:var(--ink)}
+.vrow.sel .v{color:var(--accent)}
+.vrow .d{color:var(--muted)}
+.vrow .chk{font-family:var(--mono);font-size:11.5px}
+.vrow .zl{font-family:var(--mono);font-size:11px;text-align:right}
+.vrow.revoked{cursor:default;opacity:.6}
+.vrow.revoked .v{text-decoration:line-through}
+.vrow.revoked:hover{background:transparent}
+@media(max-width:640px){.vrow{grid-template-columns:70px 1fr 44px}
+  .vrow .chk,.vrow .rng{display:none}}
+
+/* screenshots */
+.shots{margin-top:26px;max-width:620px}
+.shot-main img{width:100%;aspect-ratio:16/10;object-fit:cover;
+  border:1px solid var(--border);border-radius:3px;display:block}
+.shot-thumbs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.shot-thumbs img{width:100%;aspect-ratio:16/10;object-fit:cover;
+  border:1px solid var(--border);border-radius:3px;display:block}
+.shot-cap{font-size:12px;color:var(--faint-label);margin-top:6px}
+
+/* prose / banners / advisories */
+.prose{font-size:14.5px;line-height:1.65;color:var(--text);max-width:660px}
+.prose p{margin:10px 0}
+.prose h1,.prose h2,.prose h3{font-family:var(--serif);color:var(--ink);margin:18px 0 8px}
+.prose code{font-family:var(--mono);font-size:.9em;background:var(--surface);
+  padding:1px 5px;border-radius:2px;border:1px solid var(--border)}
+.prose ul,.prose ol{padding-left:22px}
+.banner{border-left:3px solid var(--amber);background:var(--surface);
+  border-radius:0 3px 3px 0;padding:14px 18px;margin-top:22px;font-size:13.5px;
+  line-height:1.55;color:var(--text)}
+.adv{border:1px solid var(--green-border);background:var(--green-bg);border-radius:3px;
+  padding:12px 16px;font-size:13.5px;color:var(--green-body);margin-bottom:8px}
+.adv.open{border-color:var(--amber);background:var(--surface);color:var(--text)}
+.adv .id{font-family:var(--mono);font-size:11px;color:var(--faint-label);display:block;
+  margin-top:4px}
+
+/* project facts: one full-width row per field */
+.kv{margin-top:8px}
+.kvrow{display:flex;gap:26px;padding:13px 0;border-bottom:1px solid var(--border);
+  align-items:baseline}
+.kvrow:last-child{border-bottom:0}
+.kvrow .fk{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--faint);flex:none;width:170px}
+.kvrow .fv{font-size:13.5px;color:var(--text);flex:1}
+.abadges{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.abadge{display:inline-flex;font-family:var(--mono);font-size:11px;border-radius:2px;
+  overflow:hidden;border:1px solid var(--border-strong);color:inherit}
+.abadge .l{background:var(--ink);color:var(--bg);padding:3px 8px}
+.abadge .m{color:#fff;padding:3px 8px;font-weight:600}
+.hdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;
+  vertical-align:1px}
+.tb{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 8px;
+  border-radius:2px;white-space:nowrap}
+.tb-0{background:transparent;color:var(--faint);border:1px solid var(--border)}
+.tb-1{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
+.tb-2{background:transparent;color:var(--green-text);border:1px solid var(--green)}
+.tb-3{background:var(--green);color:#fff;font-weight:500;border:1px solid var(--green)}
+
+/* ---- how page ---- */
+.how h1{font-family:var(--serif);font-weight:600;font-size:40px;line-height:1.1;
+  color:var(--ink);margin-top:22px}
+.how .lead{margin-top:14px;font-size:17px;line-height:1.55;color:var(--muted);max-width:660px}
+.cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:34px}
+@media(max-width:860px){.cards3{grid-template-columns:1fr}.how h1{font-size:30px}}
+.tcard{border:1px solid var(--border);border-radius:6px;padding:20px 22px;
+  background:var(--surface)}
+.tcard p{margin-top:8px;font-size:14px;color:var(--text)}
+.how h2{font-family:var(--serif);font-weight:600;font-size:24px;color:var(--ink);
+  margin:44px 0 16px}
+.step{display:flex;gap:18px;border:1px solid var(--border);border-radius:6px;
+  padding:20px 22px;background:var(--surface);margin-bottom:10px}
+.step .num{width:30px;height:30px;border-radius:50%;background:var(--ink);
+  color:var(--bg);font:13px/30px var(--mono);text-align:center;flex:none}
+.step h3{font-size:16px;font-weight:600;color:var(--ink)}
+.step p{margin-top:4px;font-size:14px;color:var(--muted)}
+.tiergrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+@media(max-width:860px){.tiergrid{grid-template-columns:1fr 1fr}}
+.tmini{border:1px solid var(--border);border-radius:5px;padding:14px 16px;background:var(--bg)}
+.tmini p{margin-top:8px;font-size:13px;color:var(--muted);line-height:1.5}
+.bigcard{border:1px solid var(--border);border-radius:6px;padding:26px 28px;
+  background:var(--surface);margin-top:10px}
+.cta{margin-top:44px}
+.cta a{display:inline-block;margin-top:14px;padding:12px 22px;border-radius:2px;
+  background:var(--ink);color:var(--bg);font:500 13px var(--mono)}
+.cta a:hover{color:var(--bg);opacity:.88}
 """
 
-SEARCH_JS = """
+# ---------------------------------------------------------------- js -------
+
+THEME_JS = """
 (function(){
-  var q = document.getElementById('q');
-  var fType = document.getElementById('f-type');
-  var fTier = document.getElementById('f-tier');
-  var fLabel = document.getElementById('f-label');
-  var fSort = document.getElementById('f-sort');
-  var clear = document.getElementById('f-clear');
-  var count = document.getElementById('count');
-  var plist = document.querySelector('.plist');
-  var cards = document.querySelectorAll('.pcard');
-  var original = [].slice.call(cards);   // DOM order == name order (generation)
-  var controls = [q, fType, fTier, fLabel].filter(Boolean);
-  var STORE = 'camp-browse';
-
+  var saved = null;
+  try { saved = localStorage.getItem('camp-theme'); } catch(e){}
+  var dark = saved ? saved === 'dark'
+    : window.matchMedia('(prefers-color-scheme: dark)').matches;
   function apply(){
-    var needle = q.value.trim().toLowerCase();
-    var t = fType ? fType.value : '';
-    var tier = fTier ? fTier.value : '';
-    var label = fLabel ? fLabel.value : '';
-    var n = 0;
-    cards.forEach(function(card){
-      var hit = card.dataset.text.indexOf(needle) !== -1;
-      if (hit && t) hit = card.dataset.type === t;
-      if (hit && tier) hit = card.dataset.tier === tier;
-      if (hit && label) hit = (' ' + card.dataset.labels + ' ').indexOf(' ' + label + ' ') !== -1;
-      card.style.display = hit ? '' : 'none';
-      if (hit) n++;
-    });
-    count.textContent = n + ' plugin' + (n === 1 ? '' : 's');
-    persist();
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   }
-
-  // Reorder from the original (name-sorted) array so equal keys stay
-  // alphabetical. Only runs on sort change / load, not on every keystroke.
-  function sortCards(){
-    var key = fSort ? fSort.value : 'name';
-    var arr = original.slice();
-    if (key === 'stars') {
-      arr.sort(function(a,b){ return (+b.dataset.stars) - (+a.dataset.stars); });
-    } else if (key === 'updated') {
-      arr.sort(function(a,b){ return (b.dataset.updated||'').localeCompare(a.dataset.updated||''); });
-    }
-    arr.forEach(function(c){ plist.appendChild(c); });
-  }
-
-  function params(){
-    var p = new URLSearchParams();
-    if (q.value.trim()) p.set('q', q.value.trim());
-    if (fType && fType.value) p.set('type', fType.value);
-    if (fTier && fTier.value) p.set('tier', fTier.value);
-    if (fLabel && fLabel.value) p.set('label', fLabel.value);
-    if (fSort && fSort.value && fSort.value !== 'name') p.set('sort', fSort.value);
-    return p;
-  }
-
-  function persist(){
-    var qs = params().toString();
-    history.replaceState(null, '', qs ? '?' + qs : location.pathname);
-    try { localStorage.setItem(STORE, qs); } catch(e){}
-  }
-
-  function restore(){
-    var qs = location.search.slice(1);
-    if (!qs) { try { qs = localStorage.getItem(STORE) || ''; } catch(e){} }
-    var p = new URLSearchParams(qs);
-    if (p.get('q')) q.value = p.get('q');
-    if (fType && p.get('type')) fType.value = p.get('type');
-    if (fTier && p.get('tier')) fTier.value = p.get('tier');
-    if (fLabel && p.get('label')) fLabel.value = p.get('label');
-    if (fSort && p.get('sort')) fSort.value = p.get('sort');
-  }
-
-  restore();
-  sortCards();
   apply();
-  controls.forEach(function(el){
-    el.addEventListener('input', apply);
-    el.addEventListener('change', apply);
-  });
-  if (fSort) fSort.addEventListener('change', function(){ sortCards(); persist(); });
-  if (clear) clear.addEventListener('click', function(){
-    controls.forEach(function(el){ el.value = ''; });
-    if (fSort) fSort.value = 'name';
-    sortCards();
-    apply();
+  document.addEventListener('DOMContentLoaded', function(){
+    var b = document.getElementById('theme-toggle');
+    if (b) b.addEventListener('click', function(){
+      dark = !dark;
+      try { localStorage.setItem('camp-theme', dark ? 'dark' : 'light'); } catch(e){}
+      apply();
+    });
   });
 })();
 """
 
+BROWSE_JS = """
+(function(){
+  var VORDER = %(vorder)s;
+  var state = {q:'', group:'', ver:'', tier:'', cost:'', sort:'relevance'};
+  var list = document.getElementById('rows');
+  var q = document.getElementById('q');
+  var countEl = document.getElementById('count');
+  var chipsEl = document.getElementById('chips');
+  var emptyEl = document.getElementById('empty');
 
-def _page(title: str, body: str, root: str, script: str = "") -> str:
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{escape(title)}</title>
-{FONTS}
-<style>{CSS}</style>
-</head>
-<body>
-<div class="top"><div class="top-in">
-  <a class="logo" href="{root}index.html"><b>CAMP</b><small>plugin archive</small></a>
-</div></div>
-<div class="wrap">
-{body}
-<footer>{FOOTER}</footer>
-</div>
-{f'<script>{script}</script>' if script else ''}
-</body>
-</html>
+  // Read each row's data attributes ONCE; per-keystroke work then runs on
+  // plain objects (dataset access is far too slow for 5,700 rows).
+  var data = [].slice.call(document.querySelectorAll('.row-item')).map(function(el){
+    var d = el.dataset;
+    return {el:el, name:d.name, text:d.text, group:d.group, tier:+d.tier,
+            stars:+d.stars, updated:d.updated||'', vlo:+d.vlo, vhi:+d.vhi,
+            labels:' '+d.labels+' ', visible:true};
+  });
+
+  function restore(){
+    var p = new URLSearchParams(location.search);
+    ['q','group','ver','tier','cost','sort'].forEach(function(k){
+      if (p.get(k)) state[k] = p.get(k);
+    });
+    q.value = state.q;
+  }
+  function persist(){
+    var p = new URLSearchParams();
+    ['q','group','ver','tier','cost'].forEach(function(k){
+      if (state[k]) p.set(k, state[k]);
+    });
+    if (state.sort !== 'relevance') p.set('sort', state.sort);
+    var qs = p.toString();
+    history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+  }
+
+  function matches(o, skip){
+    if (skip !== 'q' && state.q && o.text.indexOf(state.q) === -1) return false;
+    if (skip !== 'group' && state.group && o.group !== state.group) return false;
+    if (skip !== 'ver' && state.ver){
+      var i = VORDER.indexOf(state.ver);
+      if (o.vlo < 0 || i < o.vlo || i > o.vhi) return false;
+    }
+    if (skip !== 'tier' && state.tier !== '' && state.tier != null &&
+        state.tier.length && o.tier !== +state.tier) return false;
+    if (skip !== 'cost' && state.cost &&
+        o.labels.indexOf(' ' + state.cost + ' ') === -1) return false;
+    return true;
+  }
+
+  function cmp(a, b){ return a < b ? -1 : a > b ? 1 : 0; }
+  var SORTS = {
+    relevance: function(a,b){
+      return cmp(b.tier, a.tier) || cmp(b.stars, a.stars) || cmp(a.name, b.name);
+    },
+    stars: function(a,b){ return b.stars - a.stars || cmp(a.name, b.name); },
+    recent: function(a,b){ return cmp(b.updated, a.updated); },
+    az: function(a,b){ return cmp(a.name, b.name); }
+  };
+  var appliedSort = null;
+  function applySort(){
+    if (state.sort === appliedSort) return;
+    appliedSort = state.sort;
+    var arr = data.slice().sort(SORTS[state.sort] || SORTS.relevance);
+    var frag = document.createDocumentFragment();
+    arr.forEach(function(o){ frag.appendChild(o.el); });
+    list.appendChild(frag);
+    document.querySelectorAll('.sortbtn').forEach(function(b){
+      if (b.dataset.sort)
+        b.classList.toggle('active', b.dataset.sort === state.sort);
+    });
+  }
+
+  var facets = [].slice.call(document.querySelectorAll('.facet')).map(function(f){
+    return {el:f, g:f.dataset.facet, v:f.dataset.value, n:f.querySelector('.n')};
+  });
+  function facetCounts(){
+    facets.forEach(function(f){
+      var n = 0, i = f.g === 'ver' && f.v ? VORDER.indexOf(f.v) : -1;
+      for (var k = 0; k < data.length; k++){
+        var o = data[k];
+        if (!matches(o, f.g)) continue;
+        if (!f.v) { n++; continue; }
+        if (f.g === 'group'){ if (o.group === f.v) n++; }
+        else if (f.g === 'ver'){ if (o.vlo >= 0 && i >= o.vlo && i <= o.vhi) n++; }
+        else if (f.g === 'tier'){ if (o.tier === +f.v) n++; }
+        else if (f.g === 'cost'){ if (o.labels.indexOf(' '+f.v+' ') !== -1) n++; }
+      }
+      f.n.textContent = n;
+      f.el.classList.toggle('active', state[f.g] === f.v || (!state[f.g] && !f.v));
+    });
+  }
+
+  var CHIP_FIELDS = {q:'search', group:'type', ver:'moodle', tier:'tier', cost:'cost'};
+  function chipLabel(k){
+    if (k === 'q') return '\u201c' + state.q + '\u201d';
+    var f = document.querySelector(
+      '.facet[data-facet="'+k+'"][data-value="'+state[k]+'"] .t');
+    return f ? f.textContent : state[k];
+  }
+  function renderChips(){
+    var any = state.q || state.group || state.ver || state.tier || state.cost;
+    chipsEl.innerHTML = '';
+    chipsEl.style.display = any ? '' : 'none';
+    if (!any) return;
+    Object.keys(CHIP_FIELDS).forEach(function(k){
+      if (!state[k]) return;
+      var c = document.createElement('button');
+      c.className = 'chip';
+      var val = document.createElement('span');
+      val.textContent = chipLabel(k);
+      c.innerHTML = '<span class="f">' + CHIP_FIELDS[k] + '</span>';
+      c.appendChild(val);
+      c.insertAdjacentHTML('beforeend', ' <span class="x">\u00d7</span>');
+      c.addEventListener('click', function(){
+        state[k] = ''; if (k === 'q') q.value = '';
+        apply();
+      });
+      chipsEl.appendChild(c);
+    });
+    var clear = document.createElement('button');
+    clear.className = 'clear-all'; clear.textContent = 'Clear all';
+    clear.addEventListener('click', clearAll);
+    chipsEl.appendChild(clear);
+  }
+  function clearAll(){
+    state.q = state.group = state.ver = state.tier = state.cost = '';
+    q.value = ''; apply();
+  }
+
+  function apply(){
+    state.q = state.q.toLowerCase();
+    applySort();
+    var visible = 0;
+    for (var k = 0; k < data.length; k++){
+      var o = data[k], hit = matches(o, null);
+      if (hit) visible++;
+      if (hit !== o.visible){        // touch the DOM only on change
+        o.visible = hit;
+        o.el.style.display = hit ? '' : 'none';
+      }
+    }
+    countEl.textContent = visible + ' plugin' + (visible === 1 ? '' : 's') +
+      (state.q ? ' matching \u201c' + state.q + '\u201d' : '');
+    emptyEl.style.display = visible ? 'none' : '';
+    facetCounts();
+    renderChips();
+    persist();
+  }
+
+  var debounce = null;
+  q.addEventListener('input', function(){
+    clearTimeout(debounce);
+    debounce = setTimeout(function(){
+      state.q = q.value.trim().toLowerCase(); apply();
+    }, 120);
+  });
+  document.querySelectorAll('.facet').forEach(function(f){
+    f.addEventListener('click', function(){
+      var g = f.dataset.facet, v = f.dataset.value;
+      state[g] = (state[g] === v) ? '' : v;
+      apply();
+    });
+  });
+  document.querySelectorAll('.sortbtn').forEach(function(b){
+    if (b.dataset.sort)
+      b.addEventListener('click', function(){ state.sort = b.dataset.sort; apply(); });
+  });
+  document.querySelectorAll('.facet-more').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var tgt = document.getElementById(btn.dataset.target);
+      var open = tgt.style.display !== 'none';
+      tgt.style.display = open ? 'none' : '';
+      btn.textContent = open ? btn.dataset.more : btn.dataset.less;
+    });
+  });
+  var clearEmpty = document.getElementById('clear-empty');
+  if (clearEmpty) clearEmpty.addEventListener('click', clearAll);
+
+  restore();
+  apply();
+})();
 """
 
+COPY_JS = """
+document.addEventListener('DOMContentLoaded', function(){
+  var b = document.getElementById('copy-install');
+  if (b) b.addEventListener('click', function(){
+    if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.cmd);
+    b.textContent = 'Copied';
+    setTimeout(function(){ b.textContent = 'Copy'; }, 1600);
+  });
 
-def _fmt_date(iso: str) -> str:
-    return datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).strftime("%d %b %Y")
+  // Version picker: repoint the facts rail at the newest release that
+  // supports the admin's Moodle branch. The choice persists site-wide.
+  var dataEl = document.getElementById('rel-data');
+  var pick = document.getElementById('vpick');
+  if (!dataEl || !pick) return;
+  var DATA = JSON.parse(dataEl.textContent);
+  var releases = DATA.releases, VORDER = DATA.vorder;
+
+  function vkey(v){ return v.split('.').map(function(n){ return +n || 0; }); }
+  function vcmp(a, b){
+    var ka = vkey(a), kb = vkey(b);
+    for (var i = 0; i < Math.max(ka.length, kb.length); i++){
+      var d = (ka[i] || 0) - (kb[i] || 0);
+      if (d) return d;
+    }
+    return 0;
+  }
+  function bestFor(branch){
+    var i = VORDER.indexOf(branch), best = null;
+    releases.forEach(function(r){
+      if (i >= r.lo && i <= r.hi && (!best || vcmp(r.v, best.v) > 0)) best = r;
+    });
+    return best;
+  }
+  function set(id, text){ var e = document.getElementById(id); if (e) e.textContent = text; }
+  function render(r, noteText){
+    var note = document.getElementById('pick-note');
+    if (noteText){ note.textContent = noteText; note.style.display = ''; }
+    else { note.style.display = 'none'; }
+    var zip = document.getElementById('zip-btn');
+    if (zip) zip.href = r.zip;
+    set('zip-ver', r.v);
+    set('compat', r.lo === r.hi ? VORDER[r.lo] : VORDER[r.lo] + ' – ' + VORDER[r.hi]);
+    set('vd-tag', r.tag); set('vd-commit', r.commit);
+    set('vd-date', r.date); set('vd-sha', r.sha);
+    // Composer command: pinned when the chosen version is not the newest
+    // (composer would otherwise resolve to the newest regardless of the
+    // site's Moodle branch).
+    var newest = releases.reduce(function(a, b){ return vcmp(a.v, b.v) >= 0 ? a : b; });
+    var cmd = 'composer require ' + DATA.package +
+      (r.v === newest.v ? '' : ':"' + r.v + '"');
+    var cmdText = document.getElementById('cmd-text');
+    if (cmdText) cmdText.textContent = cmd;
+    var copyBtn = document.getElementById('copy-install');
+    if (copyBtn) copyBtn.dataset.cmd = cmd;
+    var cc = document.getElementById('cc-text');
+    if (cc){
+      if (r.check){
+        cc.textContent = r.check.text;
+        cc.style.color = r.check.color;
+        var m = document.getElementById('cc-meta');
+        if (m) m.textContent = r.check.tag;
+      } else {
+        cc.textContent = 'not yet checked';
+        cc.style.color = 'var(--faint)';
+        var m2 = document.getElementById('cc-meta');
+        if (m2) m2.textContent = r.tag;
+      }
+    }
+    document.querySelectorAll('.rel-row').forEach(function(row){
+      row.classList.toggle('sel', row.dataset.ver === r.v);
+    });
+  }
+  function apply(branch){
+    var r = bestFor(branch);
+    if (!r){
+      // Nothing supports this branch: keep the newest release visible but
+      // say so plainly rather than pretending.
+      r = releases.reduce(function(a, b){ return vcmp(a.v, b.v) >= 0 ? a : b; });
+      render(r, 'No verified release supports Moodle ' + branch +
+        ' yet. Newest available is v' + r.v + ' (Moodle ' +
+        VORDER[r.lo] + ' – ' + VORDER[r.hi] + ').');
+      return;
+    }
+    render(r, null);
+  }
+  function applyVersion(r){
+    // Explicit version choice from the history: show exactly that version,
+    // and say what it supports. The picker aligns without persisting —
+    // browsing a version is not declaring your Moodle.
+    if (VORDER.indexOf(pick.value) < r.lo || VORDER.indexOf(pick.value) > r.hi)
+      pick.value = VORDER[r.hi];
+    var best = bestFor(pick.value);
+    render(r, (best && best.v !== r.v)
+      ? 'v' + r.v + ' supports Moodle ' + VORDER[r.lo] + ' – ' + VORDER[r.hi] +
+        '. Newest for Moodle ' + pick.value + ' is v' + best.v + '.'
+      : null);
+  }
+  document.querySelectorAll('.rel-row[data-ver]').forEach(function(row){
+    row.addEventListener('click', function(){
+      var r = releases.filter(function(x){ return x.v === row.dataset.ver; })[0];
+      if (r) applyVersion(r);
+    });
+  });
+
+  var saved = null;
+  try { saved = localStorage.getItem('camp-moodle'); } catch(e){}
+  var options = [].map.call(pick.options, function(o){ return o.value; });
+  var initial = (saved && options.indexOf(saved) !== -1) ? saved : options[0];
+  pick.value = initial;
+  apply(initial);
+  pick.addEventListener('change', function(){
+    try { localStorage.setItem('camp-moodle', pick.value); } catch(e){}
+    apply(pick.value);
+  });
+});
+"""
+
+# ------------------------------------------------------------- helpers -----
 
 
-def _updated(release: dict) -> str:
-    """When the maintainer last released this version. `released` (the tagged
-    commit's date) is the honest answer; older ledger entries predate the field,
-    so fall back to `published` (index merge time)."""
-    return _fmt_date(release.get("released") or release["published"])
+def _newest_release(entry: dict) -> dict | None:
+    """Highest-versioned release — NOT the last ledger entry: the ledger is
+    append-only in publication order, and backfills append older versions."""
+    from .advisory import _version_key
+    if not entry["releases"]:
+        return None
+    return max(entry["releases"], key=lambda r: _version_key(r["version"].split(" ")[0]))
 
 
-def _metric_summary(metrics: dict) -> str:
-    """One-line upstream-activity summary for a discovered (Tier 0) listing —
-    the signals that help decide what to verify first."""
-    bits = [f'★ {metrics.get("stars", 0)}']
-    forks = metrics.get("forks", 0)
-    if forks:
-        bits.append(f'{forks} fork{"s" if forks != 1 else ""}')
-    issues = metrics.get("open-issues", 0)
-    if issues:
-        bits.append(f'{issues} open')
-    if metrics.get("updated"):
-        bits.append(f'updated {_fmt_date(metrics["updated"])}')
-    return " · ".join(bits)
+def _tier_badge(tier: int) -> str:
+    return f'<span class="tb tb-{tier}">Tier {tier} · {TIER_NAMES[tier]}</span>'
+
+
+def _rel_time(iso: str, today: datetime.date) -> str:
+    try:
+        then = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).date()
+    except ValueError:
+        return iso
+    days = (today - then).days
+    if days <= 0:
+        return "today"
+    if days < 14:
+        return f"{days} d ago"
+    if days < 70:
+        return f"{days // 7} wk ago"
+    if days < 720:
+        return f"{days // 30} mo ago"
+    return f"{days // 365} yr ago"
+
+
+def _health(entry: dict, today: datetime.date) -> tuple[str, str] | None:
+    """(css color, label) from upstream activity, or None if unknown."""
+    metrics = entry.get("metrics") or {}
+    if metrics.get("archived"):
+        return ("var(--faint)", "Archived upstream")
+    updated = metrics.get("updated")
+    if not updated:
+        return None
+    try:
+        then = datetime.datetime.fromisoformat(updated.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+    days = (today - then).days
+    if days < 180:
+        return ("var(--green)", "Actively maintained")
+    if days < 540:
+        return ("var(--green)", "Maintained")
+    if days < 1095:
+        return ("var(--amber)", "Slowing down")
+    return ("var(--red)", "Dormant")
+
+
+def _cost_text(entry: dict) -> str:
+    labels = entry.get("labels", [])
+    for key in ("paid-service", "freemium", "fully-free"):
+        if key in labels:
+            return {"paid-service": "Paid service", "freemium": "Freemium",
+                    "fully-free": "Fully free"}[key]
+    return ""
 
 
 def _moodle_range(release: dict) -> str:
@@ -322,19 +802,24 @@ def _moodle_range(release: dict) -> str:
     return supported[0] if len(supported) == 1 else f"{supported[0]} – {supported[-1]}"
 
 
-def _badges(entry: dict) -> str:
-    cls, text = TIER_BADGES[entry["tier"]]
-    out = [f'<span class="badge {cls}">{text}</span>']
-    out += [
-        f'<span class="badge b-free">{escape(LABEL_TEXT.get(label, label))}</span>'
-        for label in entry.get("labels", [])
-    ]
-    # GPL-family is the ecosystem norm and goes unmarked; a GPL-compatible
-    # permissive license is surfaced so administrators see it before install.
-    license_id = entry.get("license", "")
-    if license_id and not license_id.startswith(("GPL-", "AGPL-", "LGPL-")):
-        out.append(f'<span class="badge b-note">{escape(license_id)} · GPL-compatible</span>')
-    return "".join(out)
+def _range_indices(entry: dict) -> tuple[int, int]:
+    """(lo, hi) indices into VORDER for the latest release's range; (-1, -1)
+    when the entry has no releases — version filters then exclude it."""
+    if not entry["releases"]:
+        return (-1, -1)
+    supported = _newest_release(entry)["supported-moodle"]
+    known = [v for v in supported if v in VORDER]
+    if not known:
+        return (-1, -1)
+    return (VORDER.index(known[0]), VORDER.index(known[-1]))
+
+
+def _type_label(plugintype: str) -> str:
+    return PLUGINTYPE_NAMES.get(plugintype, plugintype)
+
+
+def _zip_url(base_url: str, component: str, version: str) -> str:
+    return f"{base_url}/artifacts/{component}/{component}-{version}.zip"
 
 
 def _load_listing(listings_dir: Path | None, component: str) -> dict:
@@ -363,8 +848,247 @@ def _render_description(text: str) -> str:
     return md.render(text)
 
 
-def _zip_url(base_url: str, component: str, version: str) -> str:
-    return f"{base_url}/artifacts/{component}/{component}-{version}.zip"
+def _fmt_date(iso: str) -> str:
+    try:
+        return datetime.datetime.fromisoformat(
+            iso.replace("Z", "+00:00")).strftime("%d %b %Y")
+    except ValueError:
+        return iso
+
+
+# ---------------------------------------------------------------- page -----
+
+
+def _page(title: str, body: str, *, description: str = "", extra_js: str = "") -> str:
+    desc = (f'<meta name="description" content="{escape(description)}">'
+            if description else "")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{escape(title)}</title>
+{desc}
+<style>{CSS}</style>
+<script>{THEME_JS}</script>
+</head>
+<body>
+{body}
+<script>{extra_js}</script>
+</body>
+</html>"""
+
+
+def _header() -> str:
+    inner = f"""
+  <a class="wordmark" href="/"><b>CAMP</b>
+    <small>Community archive of plugins for Moodle</small></a>
+  <nav>
+    <a href="/">Browse</a>
+    <a href="/how-it-works.html">How it works</a>
+    <a href="{MIRROR_URL}">Mirror this archive</a>
+    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+      <svg class="ic-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      <svg class="ic-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+    </button>
+  </nav>"""
+    # One header everywhere: same container, same border. The prototype used
+    # two treatments, but its plugin detail was a slide-over — page-to-page
+    # navigation makes shifting header chrome visibly inconsistent.
+    return f'<div class="wrap"><div class="topbar">{inner}</div></div>'
+
+
+def _footer(wrap: bool = True) -> str:
+    inner = ("""<footer>
+  <span>CAMP is a community-governed archive of plugins for Moodle™.
+  Open data, mirrorable by anyone.</span>
+  <span>Not affiliated with or endorsed by Moodle Pty Ltd.</span>
+</footer>""")
+    return f'<div class="wrap">{inner}</div>' if wrap else inner
+
+
+# ------------------------------------------------------------- browse ------
+
+
+def _facet(group: str, value: str, text: str, *, dot: str = "") -> str:
+    dothtml = f'<span class="dot" style="background:{dot}"></span>' if dot else ""
+    return (f'<button class="facet" data-facet="{group}" data-value="{escape(value)}">'
+            f'<span>{dothtml}<span class="t">{escape(text)}</span></span>'
+            f'<span class="n"></span></button>')
+
+
+def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
+    total = len(entries)
+
+    type_counts = Counter(e["component"].partition("_")[0] for e, _ in entries)
+    by_count = [t for t, _ in type_counts.most_common()]
+    top_types, more_types = by_count[:6], by_count[6:]
+
+    type_facets = _facet("group", "", "All types")
+    type_facets += "".join(_facet("group", t, _type_label(t)) for t in sorted(
+        top_types, key=lambda t: _type_label(t).lower()))
+    more_html = ""
+    if more_types:
+        hidden = "".join(_facet("group", t, _type_label(t)) for t in sorted(
+            more_types, key=lambda t: _type_label(t).lower()))
+        more_html = (f'<div id="more-types" style="display:none">{hidden}</div>'
+                     f'<button class="facet-more" data-target="more-types" '
+                     f'data-more="+ Show all {len(more_types)} more types" '
+                     f'data-less="− Show fewer types">'
+                     f'+ Show all {len(more_types)} more types</button>')
+
+    vlist = list(reversed(VORDER))
+    top_vers, more_vers = vlist[:4], vlist[4:]
+    ver_facets = _facet("ver", "", "Any version")
+    ver_facets += "".join(_facet("ver", v, f"Moodle {v}") for v in top_vers)
+    ver_more = ""
+    if more_vers:
+        hidden = "".join(_facet("ver", v, f"Moodle {v}") for v in more_vers)
+        ver_more = (f'<div id="more-vers" style="display:none">{hidden}</div>'
+                    f'<button class="facet-more" data-target="more-vers" '
+                    f'data-more="+ Show {len(more_vers)} older versions" '
+                    f'data-less="− Show fewer versions">'
+                    f'+ Show {len(more_vers)} older versions</button>')
+
+    tier_dots = {0: "var(--border)", 1: "var(--border-strong)",
+                 2: "var(--green)", 3: "var(--green)"}
+    tier_facets = _facet("tier", "", "Any tier") + "".join(
+        _facet("tier", str(t), f"Tier {t} — {TIER_NAMES[t]}", dot=tier_dots[t])
+        for t in sorted(TIER_NAMES))
+
+    cost_facets = (
+        _facet("cost", "", "Any cost model")
+        + _facet("cost", "fully-free", "Fully free")
+        + _facet("cost", "donation-supported", "Donation-supported")
+        + _facet("cost", "commercial-support-available", "Commercial support"))
+
+    rows_html = []
+    for entry, listing in entries:
+        component = entry["component"]
+        plugintype = component.partition("_")[0]
+        summary = (listing.get("summary") or entry.get("summary") or "").strip()
+        metrics = entry.get("metrics") or {}
+        stars = metrics.get("stars", 0)
+        forks = metrics.get("forks", 0)
+        openi = metrics.get("open-issues", 0)
+        updated = metrics.get("updated", "")
+        tier = entry["tier"]
+        latest = _newest_release(entry)
+        vlo, vhi = _range_indices(entry)
+        health = _health(entry, today)
+        cost = _cost_text(entry)
+
+        vpill = ""
+        if tier >= 2 and latest:
+            vpill = (f'<span class="vpill"><span class="c">✓</span>'
+                     f'verified {_rel_time(latest["published"], today)}</span>')
+        meta_bits = []
+        if health:
+            color, label = health
+            meta_bits.append(f'<span style="color:{color}">'
+                             f'<span class="hdot" style="background:{color}"></span>'
+                             f'{label}</span>')
+        if updated:
+            meta_bits.append(f'updated {_rel_time(updated, today)}')
+        if metrics:
+            meta_bits.append(f'★ {stars} · {forks} forks · {openi} open issues')
+
+        # Search blob: component, display name (when a manifest provides
+        # one), summary, and maintainer names/handles.
+        display = listing.get("name") or ""
+        handles = " ".join(
+            str(m.get(k, ""))
+            for m in entry.get("maintainers", [])
+            for k in ("name", "github", "gitlab") if m.get(k))
+        text_blob = " ".join(f"{component} {display} {summary} {handles}".lower().split())
+        rows_html.append(f"""
+<a class="row-item" href="/plugin/{component}.html"
+   data-name="{escape(component.lower())}" data-text="{escape(text_blob)}"
+   data-group="{escape(plugintype)}" data-tier="{tier}"
+   data-stars="{stars}" data-updated="{escape(updated)}"
+   data-vlo="{vlo}" data-vhi="{vhi}"
+   data-labels="{escape(' '.join(entry.get('labels', [])))}">
+  <div class="row-main">
+    <div class="row-line1"><span class="row-name">{escape(component)}</span>
+      {_tier_badge(tier)}{vpill}</div>
+    {f'<div class="row-summary">{escape(summary)}</div>' if summary else ''}
+    <div class="row-meta">{' '.join(f'<span>{b}</span>' for b in meta_bits)}</div>
+  </div>
+  <div class="row-rail">
+    {f'<span class="row-cost">{escape(cost)}</span>' if cost else ''}
+    <span class="row-arrow">→</span>
+  </div>
+</a>""")
+
+    browse_js = BROWSE_JS % {"vorder": json.dumps(VORDER)}
+
+    body = f"""
+{_header()}
+<div class="wrap">
+  <div class="hero">
+    <h1>Every Moodle plugin, checked against its own source.</h1>
+    <p>CAMP is an independent, community-governed archive of {total:,} Moodle
+    plugins. Every published package is automatically rebuilt from its
+    maintainer’s public repository and byte-matched before it earns a
+    verified tier — provenance you can check yourself.</p>
+  </div>
+  <div class="trust-band">
+    <div><span class="kicker">Verified against source</span>
+      <p>Packages are rebuilt from the maintainer’s tagged release and
+      hash-compared — a match is the only way to earn the badge.</p></div>
+    <div><span class="kicker">No accounts, no tracking</span>
+      <p>Browsing and installing need no registration. The archive keeps no
+      per-site data and mirrors see only anonymous downloads.</p></div>
+    <div><span class="kicker">Mirrorable by anyone</span>
+      <p>The whole archive is a static file tree plus a public git index.
+      One rsync job makes a full mirror.</p></div>
+  </div>
+
+  <div class="searchbox">
+    <span class="glyph">⌕</span>
+    <input id="q" type="search" autocomplete="off"
+      placeholder="Search {total:,} plugins by name, purpose, or keyword…">
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar">
+      <div class="facet-group"><div class="facet-label">Type</div>
+        <div class="facet-list">{type_facets}{more_html}</div></div>
+      <div class="facet-group"><div class="facet-label">Moodle version</div>
+        <div class="facet-list">{ver_facets}{ver_more}</div></div>
+      <div class="facet-group"><div class="facet-label">Trust tier</div>
+        <div class="facet-list">{tier_facets}</div></div>
+      <div class="facet-group"><div class="facet-label">Cost model</div>
+        <div class="facet-list">{cost_facets}</div></div>
+    </aside>
+    <div>
+      <div class="results-head">
+        <span class="results-count" id="count"></span>
+        <div class="sorts"><span class="lbl">SORT</span>
+          <button class="sortbtn" data-sort="relevance">Relevance</button>
+          <button class="sortbtn" data-sort="stars">Stars</button>
+          <button class="sortbtn" data-sort="recent">Recent</button>
+          <button class="sortbtn" data-sort="az">A–Z</button>
+        </div>
+      </div>
+      <div class="chips" id="chips" style="display:none"></div>
+      <div class="rows" id="rows">{''.join(rows_html)}</div>
+      <div class="empty" id="empty" style="display:none">
+        No plugins match these filters.
+        <button class="sortbtn active" id="clear-empty">Clear all filters</button>
+      </div>
+    </div>
+  </div>
+{_footer(wrap=False)}
+</div>
+"""
+    return _page("CAMP — Community Archive of Moodle Plugins", body,
+                 description="An independent, mirrorable archive of Moodle "
+                 "plugins, source-verified byte for byte.",
+                 extra_js=browse_js)
+
+
+# ------------------------------------------------------------- detail ------
 
 
 def _advisory_cards(component: str, advisories: AdvisorySet) -> str:
@@ -386,269 +1110,389 @@ def _advisory_cards(component: str, advisories: AdvisorySet) -> str:
 
 
 def _detail_page(entry: dict, listing: dict, base_url: str,
-                 advisories: AdvisorySet) -> str:
+                 advisories: AdvisorySet, today: datetime.date,
+                 checks_dir=None, shots=None) -> str:
     component = entry["component"]
     plugintype = component.partition("_")[0]
     name = listing.get("name") or component
-    summary = listing.get("summary") or entry.get("summary") or ""
-    latest = entry["releases"][-1] if entry["releases"] else None
+    summary = (listing.get("summary") or entry.get("summary") or "").strip()
+    latest = _newest_release(entry)
     package = _package_name(entry)
-    maintainer = entry["maintainers"][0]
-    maintainer_name = (maintainer.get("name") or maintainer.get("github")
-                       or maintainer.get("gitlab") or "maintainer")
+    tier = entry["tier"]
+    metrics = entry.get("metrics") or {}
+    health = _health(entry, today)
+    upstream = metrics.get("latest-release") or {}
+    check_doc = checks_mod.load(checks_dir, component)
 
-    header = f"""
-<header class="p">
-  <div class="crumb">{escape(PLUGINTYPE_NAMES.get(plugintype, plugintype))}</div>
-  <h1>{escape(name)}</h1>
-  {f'<div class="comp">{escape(component)}</div>' if name != component else ''}
-  {f'<p class="tagline">{escape(summary)}</p>' if summary else ''}
-  <div class="badges">{_badges(entry)}</div>
-"""
+    # Trust strip: the at-a-glance evaluation signals.
+    meta_bits = [_tier_badge(tier)]
+    if health:
+        color, label = health
+        meta_bits.append(f'<span style="color:{color}">'
+                         f'<span class="hdot" style="background:{color}"></span>'
+                         f'{label}</span>')
+    if metrics.get("updated"):
+        meta_bits.append(f'<span>updated {_rel_time(metrics["updated"], today)}</span>')
+    if metrics:
+        meta_bits.append(f'<span>★ {metrics.get("stars", 0)}</span>')
+    cost = _cost_text(entry)
+    if cost:
+        meta_bits.append(f'<span>{escape(cost)}</span>')
+    license_id = entry.get("license", "")
+    if license_id and not license_id.startswith(("GPL-", "AGPL-", "LGPL-")):
+        meta_bits.append(
+            f'<span class="tb tb-1">{escape(license_id)} · GPL-compatible</span>')
+
+    # Banners: interruptions worth interrupting for.
+    banners = ""
     if entry.get("status") == "moved":
         moved_to = entry["moved-to"]
         moved_link = (f'<a href="{escape(moved_to)}">{escape(moved_to)}</a>'
-                      if moved_to.startswith("https://") else f'<b>{escape(moved_to)}</b>')
-        header += f"""
-  <div class="card" style="margin-top:14px;border-left:3px solid var(--amber);border-radius:0 10px 10px 0;font-size:13.5px">
-    <b>This plugin has moved.</b> New versions are published at {moved_link}.
-    Versions already published here remain in the archive, stay installable,
-    and continue to receive security advisories.
-  </div>
-"""
-    if latest:
-        version = latest["version"].split(" ")[0]  # composer.py dist-URL convention
-        cmd = f"composer require {package}"
-        header += f"""
-  <div class="actions">
-    <span class="pill">✓ Works with Moodle {escape(_moodle_range(latest))}</span>
-    <button class="install-btn" onclick="document.getElementById('installPanel').classList.toggle('open')">Install</button>
-    <span class="updated">Updated {_updated(latest)}</span>
-  </div>
-  <div id="installPanel" class="card">
-    <div class="cmd"><span>{escape(cmd)}</span>
-      <button onclick="navigator.clipboard&&navigator.clipboard.writeText('{escape(cmd)}');this.textContent='Copied'">Copy</button></div>
-    <div class="alt"><a href="{escape(_zip_url(base_url, component, version))}">Download ZIP · v{escape(version)}</a>
-      <a href="{escape(entry["source"])}">Source repository</a></div>
-    <div class="hash">sha256 {latest["zip-sha256"]}</div>
-  </div>
-"""
-    if entry["tier"] == 0:
-        metrics = entry.get("metrics") or {}
-        if metrics:
-            archived_txt = (' · <b style="color:var(--amber)">Archived upstream</b>'
-                            if metrics.get("archived") else '')
-            checked_txt = (f' <span style="opacity:.7">(as of {_fmt_date(metrics["checked"])})</span>'
-                           if metrics.get("checked") else '')
-            header += (f'<div class="meta" style="margin:12px 0 0;color:var(--muted);font-size:13px">'
-                       f'{escape(_metric_summary(metrics))}{archived_txt}{checked_txt}</div>')
-        plugintype_dir = component.partition("_")[0]
+                      if moved_to.startswith("https://")
+                      else f'<b>{escape(moved_to)}</b>')
+        banners += f"""
+  <div class="banner"><b>This plugin has moved.</b> New versions are published
+  at {moved_link}. Versions already published here remain in the archive, stay
+  installable, and continue to receive security advisories.</div>"""
+    if tier == 0:
         claim_url = f"{AUTHORS_GUIDE_URL}#step-1--claim-the-listing-tier-0--tier-1"
-        edit_url = f"{INDEX_REPO_URL}/edit/main/plugins/{plugintype_dir}/{component}.yml"
+        edit_url = f"{INDEX_REPO_URL}/edit/main/plugins/{plugintype}/{component}.yml"
         removal_url = (f"{INDEX_REPO_URL}/issues/new?template=removal-request.yml"
                        f"&title=Removal%20request%3A%20{component}")
-        header += f"""
-  <div class="card" style="margin-top:14px;border-left:3px solid var(--amber);border-radius:0 10px 10px 0;font-size:13.5px">
-    <b>Discovered listing.</b> Found by scanning public sources; nothing is hosted here —
-    installation happens from the author's own repository. Are you the maintainer?
-    <a href="{escape(claim_url)}">Claim this plugin</a> to publish verified releases
-    (<a href="{escape(edit_url)}">edit your entry directly</a>), or
-    <a href="{escape(removal_url)}">request removal</a> — no questions asked.
-  </div>
-"""
-    header += "</header>"
+        banners += f"""
+  <div class="banner"><b>Discovered listing.</b> Found by scanning public
+  sources; nothing is hosted here — installation happens from the
+  author’s own repository. Are you the maintainer?
+  <a href="{escape(claim_url)}">Claim this plugin</a> to publish verified
+  releases (<a href="{escape(edit_url)}">edit your entry directly</a>), or
+  <a href="{escape(removal_url)}">request removal</a> — no questions asked.</div>"""
+    if tier >= 2 and latest and upstream.get("tag"):
+        from .advisory import _version_key
+        if _version_key(upstream["tag"]) > _version_key(latest["tag"]):
+            banners += (f'<div class="banner">Upstream has published '
+                        f'<b class="mono">{escape(upstream["tag"])}</b>, which the '
+                        f'registry has not yet verified. The verified download here '
+                        f'remains <b class="mono">{escape(latest["tag"])}</b>.</div>')
 
+    # ---- install card + versions table (verified plugins) -----------------
+    install = ""
+    versions_table = ""
+    if tier >= 2 and latest:
+        cmd = f"composer require {package}"
+        releases_data = []
+        covered = set()
+        for r in entry["releases"]:
+            version = r["version"].split(" ")[0]
+            if advisories.is_revoked(component, version):
+                continue
+            known = [v for v in r["supported-moodle"] if v in VORDER]
+            if not known:
+                continue
+            covered.update(known)
+            row = {
+                "v": version.lstrip("v"), "tag": r["tag"],
+                "commit": r["commit"][:12], "sha": r["zip-sha256"],
+                "date": _fmt_date(r["published"]),
+                "lo": VORDER.index(known[0]), "hi": VORDER.index(known[-1]),
+                "zip": _zip_url(base_url, component, version),
+            }
+            vcheck = checks_mod.for_version(check_doc, version.lstrip("v"))
+            if vcheck:
+                text, color = checks_mod.chip(vcheck)
+                row["check"] = {"text": text, "color": color, "tag": vcheck["tag"]}
+            releases_data.append(row)
+        latest_v = latest["version"].split(" ")[0]
+        if len(covered) > 1 or len(releases_data) > 1:
+            options = "".join(
+                f'<option value="{v}">{v}</option>'
+                for v in VORDER[::-1] if v in covered)
+            for_moodle = (f'<span class="inst-for">for Moodle</span> '
+                          f'<select id="vpick" aria-label="Your Moodle version">'
+                          f'{options}</select>')
+        else:
+            for_moodle = (f'<span class="inst-for">for Moodle '
+                          f'{escape(_moodle_range(latest))}</span>')
+        newest_check = checks_mod.for_version(check_doc, latest_v.lstrip("v"))
+        if newest_check:
+            text, color = checks_mod.chip(newest_check)
+            check_line = (f'<div class="inst-meta">Code check: '
+                          f'<b id="cc-text" style="color:{color}">{escape(text)}</b>'
+                          f' <span id="cc-meta"></span></div>')
+        else:
+            check_line = ('<div class="inst-meta">Code check: '
+                          '<b id="cc-text" style="color:var(--faint)">not yet '
+                          'checked</b> <span id="cc-meta"></span></div>')
+        rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
+                               "package": package})
+        install = f"""
+  <div class="install-card">
+    <div class="left">
+      <div class="inst-head"><span class="inst-ver" id="zip-ver">{escape(latest_v.lstrip("v"))}</span>
+        {for_moodle}
+        <span class="inst-for">Moodle <span id="compat">{escape(_moodle_range(latest))}</span></span></div>
+      <div class="vline"><span class="c">✓</span> Verified against source</div>
+      <details class="vdetail"><summary>how &amp; when</summary>
+      The published package byte-matched the tagged release
+      <code class="mono" id="vd-tag">{escape(latest["tag"])}</code> @
+      <span id="vd-commit">{latest["commit"][:12]}</span>
+      on <span id="vd-date">{_fmt_date(latest["published"])}</span>.
+      Re-checked on every release.
+      <div class="hash">sha256 <span id="vd-sha">{latest["zip-sha256"]}</span></div></details>
+      {check_line}
+      <div class="pick-note" id="pick-note" style="display:none"></div>
+      <div class="cmdline"><code id="cmd-text">{escape(cmd)}</code>
+        <button id="copy-install" data-cmd="{escape(cmd)}">Copy</button></div>
+    </div>
+    <div class="right">
+      <a class="btn act-secondary" id="zip-btn" href="{escape(_zip_url(base_url, component, latest_v))}">Download ZIP</a>
+    </div>
+  </div>
+  <script id="rel-data" type="application/json">{rel_json}</script>"""
+
+        def _vrow(r):
+            version = r["version"].split(" ")[0]
+            v = version.lstrip("v")
+            when = _fmt_date(r.get("released", r["published"]))
+            rng = _moodle_range(r)
+            if advisories.is_revoked(component, version):
+                return (f'<div class="vrow revoked"><span class="v">{escape(v)}</span>'
+                        f'<span class="d">{when}</span>'
+                        f'<span class="d rng">Moodle {escape(rng)}</span>'
+                        f'<span class="chk" style="color:var(--red)">revoked</span>'
+                        f'<span class="zl"></span></div>')
+            vcheck = checks_mod.for_version(check_doc, v)
+            if vcheck:
+                text, color = checks_mod.chip(vcheck)
+                chk = f'<span class="chk" style="color:{color}">{escape(text)}</span>'
+            else:
+                chk = '<span class="chk" style="color:var(--faint)">—</span>'
+            return (f'<div class="vrow rel-row" data-ver="{escape(v)}">'
+                    f'<span class="v">{escape(v)}</span>'
+                    f'<span class="d">{when}</span>'
+                    f'<span class="d rng">Moodle {escape(rng)}</span>'
+                    f'{chk}'
+                    f'<a class="zl" href="{escape(_zip_url(base_url, component, version))}">ZIP</a></div>')
+        from .advisory import _version_key
+        ordered = sorted(entry["releases"], reverse=True,
+                         key=lambda r: _version_key(r["version"].split(" ")[0]))
+        if len(entry["releases"]) > 1:
+            versions_table = ('<div class="sect">All versions</div>'
+                              '<div class="vtable">'
+                              + "".join(_vrow(r) for r in ordered) + '</div>')
+    else:
+        install = """
+  <div class="install-card">
+    <div class="left">
+      <div class="vline warn" style="margin-top:0"><span class="c">○</span>
+        Not yet verified</div>
+      <div class="vdetail">No package has been byte-matched to a public source
+      release yet. Install from the author’s repository with additional
+      caution.</div>
+    </div>
+  </div>"""
+
+    # ---- story ------------------------------------------------------------
+    gallery = ""
+    if shots:
+        first, rest = shots[0], shots[1:4]
+        cap = (f'<div class="shot-cap">{escape(first.get("caption", ""))}</div>'
+               if first.get("caption") else "")
+        thumbs = ""
+        if rest:
+            thumbs = ('<div class="shot-thumbs">' + "".join(
+                f'<a href="{escape(t["src"])}"><img loading="lazy" '
+                f'src="{escape(t["src"])}" alt="{escape(t.get("caption", "screenshot"))}"></a>'
+                for t in rest) + '</div>')
+        gallery = (f'<div class="shots"><a href="{escape(first["src"])}">'
+                   f'<div class="shot-main"><img src="{escape(first["src"])}" '
+                   f'alt="{escape(first.get("caption", "screenshot"))}"></div></a>'
+                   f'{cap}{thumbs}</div>')
+
+    # The summary shows once, under the title. About renders only when the
+    # maintainer published a real description; otherwise a one-line
+    # attribution note under the summary says where the text came from.
     description = listing.get("description") or ""
     source_link = f'<a href="{escape(entry["source"])}">source repository</a>'
-    # No listing manifest yet? Fall back to the discovered summary (the same
-    # text the browse cards show) rather than an empty About section.
-    about_html = (
-        _render_description(description)
-        or (f'<p>{escape(summary)}</p>'
-            f'<p style="color:var(--muted);font-size:13px">From the source repository&#8217;s '
-            f'description — the maintainer has not published a listing manifest yet. '
-            f'See the {source_link} for full documentation.</p>' if summary else '')
-        or f'<p>No listing manifest published yet. See the {source_link} for documentation.</p>'
-    )
-    overview = f"""
-<div class="panel active" id="overview">
-  <h2>About</h2>
-  <div class="card">{about_html}</div>
-  <h2>Maintainer</h2>
-  <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-    <div><b>{escape(maintainer_name)}</b>
-      <div style="font-size:12.5px;color:var(--muted)">{len(entry["releases"])} release{"s" if len(entry["releases"]) != 1 else ""} in the archive</div></div>
-    <a href="{escape(entry["source"])}" style="font-weight:600;font-size:13px;text-decoration:none">Source &amp; issues →</a>
-  </div>
-</div>
-"""
-
-    version_rows = "".join(
-        f"""<div class="row"><span class="mono" style="font-weight:600;min-width:48px">{escape(r["version"].lstrip("v"))}</span>
-<span style="color:var(--muted);flex:1">{_updated(r)} · Moodle {escape(_moodle_range(r))}</span>
-<a href="{escape(_zip_url(base_url, component, r["version"].split(" ")[0]))}">ZIP</a></div>"""
-        for r in reversed(entry["releases"])
-    ) or '<div class="row"><span style="color:var(--muted)">No releases yet</span></div>'
-    versions = f"""
-<div class="panel" id="versions">
-  <h2>Release history</h2>
-  <div class="card" style="padding:4px 16px">{version_rows}</div>
-</div>
-"""
-
-    if latest:
-        ledger_steps = f"""
-      <div class="step"><h3>Source tagged by maintainer</h3><p>{escape(entry["source"].removeprefix("https://"))} @ {escape(latest["tag"])} · commit {latest["commit"][:12]}</p></div>
-      <div class="step"><h3>Rebuilt deterministically from that tag</h3><p>canonical ZIP, byte-identical on every rebuild</p></div>
-      <div class="step"><h3>Artifact hash recorded in the public index</h3><p>sha256 {latest["zip-sha256"][:16]}…{latest["zip-sha256"][-8:]}</p></div>
-      <div class="step pending"><h3>Release signed · trusted publishing</h3><p>planned — TUF signing (RFC §4.3)</p></div>
-      <div class="step pending"><h3>Recorded in public transparency log</h3><p>planned — Sigstore/Rekor (RFC §4.3)</p></div>
-"""
+    about = ""
+    attrib = ""
+    if description:
+        about = (f'<div class="sect">About</div>'
+                 f'<div class="prose">{_render_description(description)}</div>')
+    elif summary:
+        attrib = (f'<div class="attrib">Summary from the source repository’s '
+                  f'description — the maintainer has not published a listing '
+                  f'manifest yet. See the {source_link} for full '
+                  f'documentation.</div>')
     else:
-        ledger_steps = (
-            '<div class="step pending"><h3>No verified releases yet</h3>'
-            + ('<p>claimed listing; first release pending verification</p>'
-               if entry["tier"] >= 1 else '<p>discovered listing; metadata only</p>')
-            + '</div>')
-    trust = f"""
-<div class="panel" id="trust">
-  <h2>Verification ledger</h2>
-  <div class="card">
-    <div class="ledger">{ledger_steps}</div>
-    <div class="ledger-note">Every step is independently verifiable. CAMP never modifies plugin code; it proves the ZIP you install is exactly what the maintainer published.</div>
+        attrib = (f'<div class="attrib">No listing manifest published yet. '
+                  f'See the {source_link} for documentation.</div>')
+
+    advisory_html = ""
+    advisory_items = advisories.for_component(component)
+    if advisory_items:
+        advisory_html = (f'<div class="sect">Security advisories</div>'
+                         f'{_advisory_cards(component, advisories)}')
+
+    # ---- project facts: one full-width row per field -----------------------
+    dev_bits = []
+    if metrics:
+        dev_bits.append(f'{metrics.get("forks", 0)} forks · '
+                        f'{metrics.get("open-issues", 0)} open issues')
+    if upstream.get("tag"):
+        when = f' · {_fmt_date(upstream["date"])}' if upstream.get("date") else ""
+        dev_bits.append(f'Upstream release {escape(upstream["tag"])}{when}')
+
+    badge_chips = []
+    for b in (listing.get("badges") or []):
+        if not isinstance(b, dict):
+            continue
+        doc = badge_mod.fetch_endpoint(b.get("endpoint", ""))
+        if doc is None:
+            continue  # unfetchable or off-allowlist: omitted, never guessed
+        chip = (f'<span class="abadge"><span class="l">{escape(doc["label"])}</span>'
+                f'<span class="m" style="background:{doc["color"]}">'
+                f'{escape(doc["message"])}</span></span>')
+        link = b.get("link", "")
+        if link.startswith("https://"):
+            chip = f'<a href="{escape(link)}">{chip}</a>'
+        badge_chips.append(chip)
+
+    kv_rows = []
+    kv_rows.append(f'<div class="kvrow"><span class="fk">Source repository</span>'
+                   f'<span class="fv mono" style="font-size:12.5px;word-break:break-all">'
+                   f'<a href="{escape(entry["source"])}">'
+                   f'{escape(entry["source"].removeprefix("https://"))}</a></span></div>')
+    if dev_bits:
+        kv_rows.append('<div class="kvrow"><span class="fk">Development</span>'
+                       f'<span class="fv">{" · ".join(dev_bits)}</span></div>')
+    if not advisory_items:
+        kv_rows.append('<div class="kvrow"><span class="fk">Security advisories</span>'
+                       '<span class="fv">None published</span></div>')
+    if badge_chips:
+        kv_rows.append('<div class="kvrow"><span class="fk">Author badges</span>'
+                       f'<span class="fv"><span class="abadges">{"".join(badge_chips)}'
+                       f'</span><div class="attrib" style="margin-top:6px">declared by '
+                       f'the maintainer · fetched {escape(today.isoformat())}</div>'
+                       f'</span></div>')
+    project = ('<div class="sect">Project</div><div class="kv">'
+               + "".join(kv_rows) + '</div>')
+
+    body = f"""
+{_header()}
+<div class="detail">
+  <a class="backlink" href="/">← Back to archive</a>
+  <div class="crumb">{escape(_type_label(plugintype))}</div>
+  <h1>{escape(name)}</h1>
+  {f'<div class="mono" style="color:var(--faint-label);font-size:13px;margin-top:4px">{escape(component)}</div>' if name != component else ''}
+  <div class="strip">{''.join(meta_bits)}</div>
+  {f'<p class="dsummary">{escape(summary)}</p>' if summary else ''}
+  {attrib}
+  {banners}
+  {install}
+  {versions_table}
+  {gallery}
+  {about}
+  {advisory_html}
+  {project}
+{_footer(wrap=False)}
+</div>
+"""
+    return _page(f"{name} — CAMP", body,
+                 description=summary[:200] if summary else "",
+                 extra_js=COPY_JS)
+
+
+# ---------------------------------------------------------------- how ------
+
+
+def _how_page() -> str:
+    body = f"""
+{_header()}
+<div class="narrow how">
+  <a class="backlink" href="/">← Back to archive</a>
+  <h1>How CAMP keeps the archive trustworthy</h1>
+  <p class="lead">CAMP exists to answer one question with confidence: is the
+  plugin you are about to install the same code its maintainer actually
+  published? Here is how that guarantee is built.</p>
+
+  <div class="cards3">
+    <div class="tcard"><span class="kicker">✓ Verified against source</span>
+      <p>Every published package is rebuilt deterministically from the
+      maintainer’s tagged source and byte-compared. The hash match is
+      public and anyone can reproduce it.</p></div>
+    <div class="tcard"><span class="kicker">No accounts, no tracking</span>
+      <p>No registration to browse or install. Security warnings work by
+      downloading the full advisory feed and matching locally — the
+      archive never learns what your site runs.</p></div>
+    <div class="tcard"><span class="kicker">Mirrorable by anyone</span>
+      <p>The archive is a static file tree plus a public git index. A full
+      mirror is one rsync job, and mirrors need no trust: clients verify
+      content, not servers.</p></div>
   </div>
-  <h2>Security advisories</h2>
-  {_advisory_cards(component, advisories)}
+
+  <h2>The verification pipeline</h2>
+  <div class="step"><span class="num">1</span><div>
+    <h3>Discover</h3><p>We index plugins from the public Moodle ecosystem and
+    record where each one’s source lives.</p></div></div>
+  <div class="step"><span class="num">2</span><div>
+    <h3>Fetch the source</h3><p>For each release, we retrieve the exact
+    package and the corresponding tag and commit from the maintainer’s
+    repository.</p></div></div>
+  <div class="step"><span class="num">3</span><div>
+    <h3>Compare byte for byte</h3><p>The archived package is rebuilt and
+    hash-compared against the public source. A match is what earns a plugin
+    its verified trust tier.</p></div></div>
+  <div class="step"><span class="num">4</span><div>
+    <h3>Record and re-check</h3><p>Results are stored in an append-only
+    ledger with timestamps and re-verified over time, so trust reflects the
+    current state — not a one-off check.</p></div></div>
+
+  <div class="bigcard">
+    <h2 style="margin-top:0">The trust tiers</h2>
+    <p style="color:var(--muted);font-size:14.5px">Each tier answers one
+    question: does it exist, is someone accountable for it, does the artifact
+    provably match its public source, have humans read the code.</p>
+    <div class="tiergrid">
+      <div class="tmini">{_tier_badge(0)}<p>Found by the discovery scanner in
+        the public ecosystem. Metadata only — no maintainer has claimed
+        it yet, and nothing is hosted.</p></div>
+      <div class="tmini">{_tier_badge(1)}<p>A maintainer has claimed
+        ownership, declared a security contact and disclosure labels, and
+        linked the canonical source repository.</p></div>
+      <div class="tmini">{_tier_badge(2)}<p>The archived package was
+        automatically confirmed to match the public source, byte for
+        byte.</p></div>
+      <div class="tmini">{_tier_badge(3)}<p>Verified and additionally
+        reviewed by two independent members of the community review
+        board.</p></div>
+    </div>
+  </div>
+
+  <div class="cta">
+    <h2 style="margin:0">Ready to find a plugin?</h2>
+    <p style="color:var(--muted);margin-top:8px">Search the archive, filter by
+    trust tier, and install with provenance you can check.</p>
+    <a href="/">Browse the archive</a>
+  </div>
+{_footer(wrap=False)}
 </div>
 """
-
-    body = f"""
-{header}
-<div class="tabs" role="tablist">
-  <button role="tab" aria-selected="true" data-tab="overview">Overview</button>
-  <button role="tab" aria-selected="false" data-tab="versions">Versions</button>
-  <button role="tab" aria-selected="false" data-tab="trust">Trust &amp; security</button>
-</div>
-{overview}
-{versions}
-{trust}
-"""
-    return _page(f"{name} — CAMP", body, root="../", script=TABS_JS)
+    return _page("How it works — CAMP", body,
+                 description="How CAMP verifies every Moodle plugin against "
+                 "its own public source.")
 
 
-def _type_label(plugintype: str) -> str:
-    return PLUGINTYPE_NAMES.get(plugintype, plugintype)
-
-
-def _filter_bar(entries: list[tuple[dict, dict]]) -> str:
-    """Build the type/tier/cost filter controls. Type and cost options come
-    from the data actually present so they never match nothing; the tier
-    ladder is deliberately shown in full (see below)."""
-    type_counts = Counter(e["component"].partition("_")[0] for e, _ in entries)
-    type_opts = "".join(
-        f'<option value="{escape(t)}">{escape(_type_label(t))} ({n})</option>'
-        for t, n in sorted(type_counts.items(), key=lambda kv: _type_label(kv[0]).lower())
-    )
-    type_select = (
-        f'<select id="f-type" aria-label="Filter by plugin type">'
-        f'<option value="">All types</option>{type_opts}</select>'
-    )
-
-    # Unlike the other filters, the tier ladder always shows all four rungs:
-    # an empty rung (zero results) is information — it says what the
-    # registry has not asserted about anything yet.
-    tier_opts = "".join(
-        f'<option value="{t}">Tier {t} — {name}</option>'
-        for t, name in TIER_NAMES.items()
-    )
-    tier_select = (
-        '<select id="f-tier" aria-label="Filter by verification tier">'
-        f'<option value="">Any tier</option>{tier_opts}</select>'
-    )
-
-    labels_present = {label for e, _ in entries for label in e.get("labels", [])}
-    label_opts = "".join(
-        f'<option value="{escape(k)}">{escape(v)}</option>'
-        for k, v in LABEL_TEXT.items() if k in labels_present
-    )
-    label_select = (
-        '<select id="f-label" aria-label="Filter by cost model">'
-        f'<option value="">Any cost model</option>{label_opts}</select>'
-    ) if label_opts else ""
-
-    sort_select = (
-        '<select id="f-sort" aria-label="Sort plugins">'
-        '<option value="name">Sort: Name</option>'
-        '<option value="stars">Sort: Most stars</option>'
-        '<option value="updated">Sort: Recently updated</option></select>'
-    )
-
-    return (
-        '<div class="filters">'
-        f'{type_select}{tier_select}{label_select}{sort_select}'
-        '<button type="button" id="f-clear" class="clear">Clear</button>'
-        '</div>'
-    )
-
-
-def _browse_page(entries: list[tuple[dict, dict]]) -> str:
-    cards = []
-    for entry, listing in entries:
-        component = entry["component"]
-        plugintype = component.partition("_")[0]
-        name = listing.get("name") or component
-        summary = listing.get("summary") or entry.get("summary") or ""
-        latest = entry["releases"][-1] if entry["releases"] else None
-        metrics = entry.get("metrics") or {}
-        haystack = escape(f"{name} {component} {summary}".lower())
-        labels_attr = escape(" ".join(entry.get("labels", [])))
-
-        # Sort keys: a single "updated" date per card (release date for verified,
-        # upstream push date for discovered) and a star count for popularity.
-        if latest:
-            updated_iso = latest.get("released") or latest.get("published") or ""
-        else:
-            updated_iso = metrics.get("updated") or ""
-        updated_attr = updated_iso[:10]
-        stars_attr = metrics.get("stars", 0)
-
-        meta = _badges(entry)
-        if metrics.get("archived"):
-            meta += '<span class="badge b-note">Archived upstream</span>'
-        if latest:
-            meta += f'<span class="updated">Moodle {escape(_moodle_range(latest))} · updated {_updated(latest)}</span>'
-        elif metrics:
-            meta += f'<span class="updated">{escape(_metric_summary(metrics))}</span>'
-        comp_tag = f'<span class="cp">{escape(component)}</span>' if name != component else ""
-        cards.append(f"""
-<a class="pcard" href="plugin/{escape(component)}.html" data-text="{haystack}"
-   data-type="{escape(plugintype)}" data-tier="{entry["tier"]}" data-labels="{labels_attr}"
-   data-stars="{stars_attr}" data-updated="{updated_attr}">
-  <span class="nm">{escape(name)}</span>{comp_tag}
-  {f'<div class="sm">{escape(summary)}</div>' if summary else ''}
-  <div class="meta">{meta}</div>
-</a>""")
-
-    body = f"""
-<header class="p">
-  <h1>Browse plugins</h1>
-  <p class="tagline">Every plugin is automatically verified to match its public source. No accounts, no tracking, mirrorable by anyone.</p>
-</header>
-<input type="search" id="q" placeholder="Search {len(entries)} plugins…" aria-label="Search plugins"
-  style="width:100%;border:1px solid var(--line);border-radius:8px;padding:11px 14px;font:inherit;background:var(--card)">
-{_filter_bar(entries)}
-<div class="plist">{''.join(cards)}</div>
-<div class="count" id="count">{len(entries)} plugin{"s" if len(entries) != 1 else ""}</div>
-"""
-    return _page("CAMP — plugin archive", body, root="./", script=SEARCH_JS)
+# ------------------------------------------------------------ generate -----
 
 
 def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
-             listings_dir: str | Path | None = None) -> int:
+             listings_dir: str | Path | None = None,
+             checks_dir: str | Path | None = None) -> int:
     out = Path(out_dir)
     (out / "plugin").mkdir(parents=True, exist_ok=True)
     listings = Path(listings_dir) if listings_dir else None
     advisories = AdvisorySet.load(index_dir)
+    today = datetime.date.today()
 
     entries: list[tuple[dict, dict]] = []
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
@@ -662,9 +1506,44 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
 
     entries.sort(key=lambda pair: (pair[1].get("name") or pair[0]["component"]).lower())
 
-    for entry, listing in entries:
-        page = _detail_page(entry, listing, base_url, advisories)
-        (out / "plugin" / f"{entry['component']}.html").write_text(page)
+    shots_src = (listings / "screenshots") if listings else None
+    if shots_src and shots_src.exists():
+        shutil.copytree(shots_src, out / "shots", dirs_exist_ok=True)
 
-    (out / "index.html").write_text(_browse_page(entries))
+    for entry, listing in entries:
+        component = entry["component"]
+        shots = []
+        for shot in (listing.get("screenshots") or []):
+            stem = Path(shot["path"]).stem
+            if shots_src and (shots_src / component / f"{stem}.png").exists():
+                shots.append({"src": f"/shots/{component}/{stem}.png",
+                              "caption": shot.get("caption", "")})
+        page = _detail_page(entry, listing, base_url, advisories, today,
+                            checks_dir=checks_dir, shots=shots)
+        (out / "plugin" / f"{component}.html").write_text(page)
+
+    (out / "index.html").write_text(_browse_page(entries, today))
+    (out / "how-it-works.html").write_text(_how_page())
+
+    badge_mod.write_badges(index_dir, out / "badge")
+    if checks_dir:
+        for entry, _ in entries:
+            doc = checks_mod.load(checks_dir, entry["component"])
+            newest = _newest_release(entry)
+            summary = checks_mod.for_version(
+                doc, newest["version"].split(" ")[0].lstrip("v")) if newest else None
+            if summary:
+                text, color = checks_mod.chip(summary)
+                doc = {"schemaVersion": 1, "label": "camp check",
+                       "message": text, "color": color}
+                (out / "badge").mkdir(parents=True, exist_ok=True)
+                (out / "badge" / f'{entry["component"]}-checks.json').write_text(
+                    json.dumps(doc, sort_keys=True) + "\n")
+                (out / "badge" / f'{entry["component"]}-checks.svg').write_text(
+                    badge_mod.render_svg(doc["label"], doc["message"], doc["color"]))
+
+    fonts_src = Path(__file__).resolve().parent / "fonts"
+    if fonts_src.exists():
+        shutil.copytree(fonts_src, out / "fonts", dirs_exist_ok=True)
+
     return len(entries)

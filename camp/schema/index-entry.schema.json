@@ -5,7 +5,13 @@
   "description": "One plugin's authoritative record in the camp index (RFC §4.1). Descriptive listing content lives in the plugin repo (.camp/listing.yml); this file holds only what the registry itself asserts or arbitrates: name ownership, tier, and the append-only release ledger.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["component", "source", "maintainers", "tier", "releases"],
+  "required": [
+    "component",
+    "source",
+    "maintainers",
+    "tier",
+    "releases"
+  ],
   "properties": {
     "component": {
       "description": "Frankenstyle component name; the registry is the arbiter of this mapping (RFC §8).",
@@ -24,15 +30,38 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "name": { "type": "string" },
-          "github": { "type": "string", "pattern": "^[A-Za-z0-9-]+$" },
-          "gitlab": { "type": "string", "pattern": "^[A-Za-z0-9._/-]+$" },
-          "email": { "type": "string", "format": "email" }
+          "name": {
+            "type": "string"
+          },
+          "github": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "gitlab": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._/-]+$"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
         },
         "anyOf": [
-          { "required": ["github"] },
-          { "required": ["gitlab"] },
-          { "required": ["email"] }
+          {
+            "required": [
+              "github"
+            ]
+          },
+          {
+            "required": [
+              "gitlab"
+            ]
+          },
+          {
+            "required": [
+              "email"
+            ]
+          }
         ]
       }
     },
@@ -44,7 +73,12 @@
     "tier": {
       "description": "Trust tier (RFC §4.4). 0 = discovered (metadata only), 1 = claimed (author accountable, no verified releases yet), 2 = source-verified, 3 = human-reviewed. Releases may only be listed from tier 2 up.",
       "type": "integer",
-      "enum": [0, 1, 2, 3]
+      "enum": [
+        0,
+        1,
+        2,
+        3
+      ]
     },
     "labels": {
       "description": "Disclosure labels (RFC §4.7), mirrored from the listing manifest at the latest release and validated by CI heuristics / Tier 3 review.",
@@ -66,7 +100,11 @@
     "status": {
       "description": "Listing status. 'delisted' entries remain for the archive but are not served for installation. 'moved' entries now publish elsewhere (see moved-to): published versions stay installable and advisory-covered, but no new releases land here.",
       "type": "string",
-      "enum": ["active", "delisted", "moved"],
+      "enum": [
+        "active",
+        "delisted",
+        "moved"
+      ],
       "default": "active"
     },
     "moved-to": {
@@ -88,7 +126,9 @@
       "description": "Upstream repository activity signals, refreshed periodically by `camp enrich` from the source platform's API (GitHub/GitLab). Advisory only — they help prioritize which discovered plugins to verify next; they are not registry assertions and carry a `checked` date so consumers can judge freshness.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["checked"],
+      "required": [
+        "checked"
+      ],
       "properties": {
         "updated": {
           "description": "Upstream last-activity timestamp (GitHub pushed_at / GitLab last_activity_at). The maintenance-liveness signal.",
@@ -118,6 +158,23 @@
           "description": "Date these metrics were last fetched from the source platform.",
           "type": "string",
           "format": "date"
+        },
+        "latest-release": {
+          "description": "Upstream's newest published release (GitHub releases / GitLab releases), refreshed by `camp enrich`. Advisory display data — distinct from the registry's own verified release ledger.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tag"
+          ],
+          "properties": {
+            "tag": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
         }
       }
     },
@@ -132,7 +189,15 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["version", "tag", "commit", "moodle-version", "supported-moodle", "zip-sha256", "published"],
+        "required": [
+          "version",
+          "tag",
+          "commit",
+          "moodle-version",
+          "supported-moodle",
+          "zip-sha256",
+          "published"
+        ],
         "properties": {
           "version": {
             "description": "Human-readable release, from $plugin->release.",
@@ -156,7 +221,10 @@
             "description": "Moodle branches this release supports, e.g. \"4.3\".",
             "type": "array",
             "minItems": 1,
-            "items": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" }
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+$"
+            }
           },
           "php-min": {
             "description": "$plugin->php at the tagged commit, if declared.",
@@ -190,18 +258,54 @@
   "allOf": [
     {
       "description": "Below Tier 2 there is no verified artifact: discovered (0) and claimed (1) listings carry no releases. A release enters the ledger only by passing verification, which is what makes the plugin tier 2.",
-      "if": { "properties": { "tier": { "maximum": 1 } } },
-      "then": { "properties": { "releases": { "maxItems": 0 } } }
+      "if": {
+        "properties": {
+          "tier": {
+            "maximum": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "releases": {
+            "maxItems": 0
+          }
+        }
+      }
     },
     {
       "description": "From Tier 1 up (claimed listings), the author must declare disclosure labels and a security contact (RFC §4.7, §5.1). Tier 0 discovered listings have neither yet.",
-      "if": { "properties": { "tier": { "minimum": 1 } } },
-      "then": { "required": ["labels", "security-contact"] }
+      "if": {
+        "properties": {
+          "tier": {
+            "minimum": 1
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "labels",
+          "security-contact"
+        ]
+      }
     },
     {
       "description": "A moved listing must say where the plugin went; the pointer is the whole point of the status.",
-      "if": { "properties": { "status": { "const": "moved" } }, "required": ["status"] },
-      "then": { "required": ["moved-to"] }
+      "if": {
+        "properties": {
+          "status": {
+            "const": "moved"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "moved-to"
+        ]
+      }
     }
   ]
 }

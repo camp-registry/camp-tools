@@ -273,6 +273,12 @@ def _cmd_scan_malware(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_checks(args: argparse.Namespace) -> int:
+    from .checks import run_checks
+    run_checks(args.index_dir, args.out_dir)
+    return 0
+
+
 def _cmd_artifacts(args: argparse.Namespace) -> int:
     from .artifacts import materialize
     result = materialize(args.index_dir, args.out_dir)
@@ -489,7 +495,7 @@ def _cmd_scan_report(args: argparse.Namespace) -> int:
 def _cmd_site(args: argparse.Namespace) -> int:
     from . import site as site_mod
     count = site_mod.generate(args.index_dir, args.base_url.rstrip("/"), args.out_dir,
-                              listings_dir=args.listings)
+                              listings_dir=args.listings, checks_dir=args.checks)
     print(f"generated site in {args.out_dir} ({count} plugins)")
     return 0
 
@@ -569,6 +575,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--require-engine", action="store_true",
                    help="fail if no scan engine is available (CI mode)")
     p.set_defaults(func=_cmd_scan_malware)
+
+    p = sub.add_parser("checks",
+                       help="static code-check summaries for released plugins (the prechecker)")
+    p.add_argument("index_dir")
+    p.add_argument("out_dir")
+    p.set_defaults(func=_cmd_checks)
 
     p = sub.add_parser("artifacts",
                        help="materialize every ledger release's canonical ZIP (rebuild + hash-gate)")
@@ -661,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("out_dir")
     p.add_argument("--listings", help="directory of <component>.yml listing manifests "
                                       "(preview flag until release-time ingestion lands)")
+    p.add_argument("--checks", help="directory of code-check summaries (camp checks)")
     p.set_defaults(func=_cmd_site)
 
     args = parser.parse_args(argv)
