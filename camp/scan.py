@@ -515,9 +515,15 @@ def _fetch_readme_summary(source: str, token: str | None, log) -> str | None:
 
 def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = None,
            force: bool = False, readme: bool = True, log=print) -> dict:
-    """Backfill/refresh discovered (Tier 0) entries with upstream `metrics` and,
-    where the source repo set no description, a one-line `summary` derived from
-    its README.
+    """Backfill/refresh entries with upstream `metrics` and, for discovered
+    (Tier 0) entries whose source repo set no description, a one-line
+    `summary` derived from its README.
+
+    Metrics are advisory activity signals and refresh at every tier —
+    claiming a plugin shouldn't freeze its liveness data. Summary scraping
+    stays Tier 0 only: from Tier 1 up the summary is on its way to being
+    replaced by the author's own .camp/listing.yml, so enrich never
+    overwrites what an author (or the registry) set.
 
     Resumable: an entry is skipped once it has metrics and a summary (or can't
     gain one), unless `force` is set — so an interrupted run resumes cleanly and
@@ -534,13 +540,15 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
             break
         with open(path) as f:
             entry = yaml.safe_load(f)
-        if entry.get("tier", 0) != 0:
+        if entry.get("status", "active") == "delisted":
             continue
 
         needs_metrics = force or not entry.get("metrics")
         # README summary is a fallback only when the repo gave no description,
-        # and only for GitHub sources (see _fetch_readme_summary).
-        needs_summary = (readme and "github.com" in entry.get("source", "")
+        # only for GitHub sources (see _fetch_readme_summary), and only at
+        # Tier 0 — never overwrite a claimed entry's summary.
+        needs_summary = (readme and entry.get("tier", 0) == 0
+                         and "github.com" in entry.get("source", "")
                          and (force or not (entry.get("summary") or "").strip()))
         if not needs_metrics and not needs_summary:
             stats["skipped"] += 1
