@@ -46,6 +46,13 @@ PLUGINTYPE_NAMES = {
     "filter": "Filters",
 }
 
+TIER_NAMES = {
+    0: 'Discovered',
+    1: 'Claimed',
+    2: 'Source-verified',
+    3: 'Reviewed',
+}
+
 TIER_BADGES = {
     0: ('b-note', 'Discovered · Tier 0'),
     1: ('b-note', 'Claimed · Tier 1'),
@@ -187,8 +194,7 @@ SEARCH_JS = """
     cards.forEach(function(card){
       var hit = card.dataset.text.indexOf(needle) !== -1;
       if (hit && t) hit = card.dataset.type === t;
-      if (hit && tier) hit = (tier === 'verified') ? (+card.dataset.tier >= 2)
-        : (tier === 'claimed') ? card.dataset.tier === '1' : card.dataset.tier === '0';
+      if (hit && tier) hit = card.dataset.tier === tier;
       if (hit && label) hit = (' ' + card.dataset.labels + ' ').indexOf(' ' + label + ' ') !== -1;
       card.style.display = hit ? '' : 'none';
       if (hit) n++;
@@ -535,16 +541,15 @@ def _filter_bar(entries: list[tuple[dict, dict]]) -> str:
         f'<option value="">All types</option>{type_opts}</select>'
     )
 
-    has_verified = any(e["tier"] >= 2 for e, _ in entries)
-    has_claimed = any(e["tier"] == 1 for e, _ in entries)
-    claimed_opt = '<option value="claimed">Claimed</option>' if has_claimed else ''
+    tiers_present = sorted({e["tier"] for e, _ in entries})
+    tier_opts = "".join(
+        f'<option value="{t}">Tier {t} — {TIER_NAMES[t]}</option>'
+        for t in tiers_present
+    )
     tier_select = (
         '<select id="f-tier" aria-label="Filter by verification tier">'
-        '<option value="">Any tier</option>'
-        '<option value="verified">✓ Source-verified</option>'
-        f'{claimed_opt}'
-        '<option value="discovered">Discovered only</option></select>'
-    ) if (has_verified or has_claimed) else ""
+        f'<option value="">Any tier</option>{tier_opts}</select>'
+    ) if len(tiers_present) > 1 else ""
 
     labels_present = {label for e, _ in entries for label in e.get("labels", [])}
     label_opts = "".join(
