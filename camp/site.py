@@ -208,7 +208,7 @@ nav a:hover{color:var(--ink)}
 .results-count{font-size:14px;color:var(--muted)}
 .sorts{display:flex;align-items:center;gap:6px}
 .sorts .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.16em;
-  color:var(--faint-label);margin-right:4px}
+  text-transform:uppercase;color:var(--faint-label);margin-right:4px}
 .sortbtn{background:transparent;border:1px solid transparent;border-radius:2px;
   cursor:pointer;font:12px var(--mono);color:var(--muted);padding:5px 10px}
 .sortbtn.active{border-color:var(--border-strong);background:var(--surface);color:var(--ink)}
@@ -1064,7 +1064,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     <div>
       <div class="results-head">
         <span class="results-count" id="count"></span>
-        <div class="sorts"><span class="lbl">SORT</span>
+        <div class="sorts"><span class="lbl">Sort</span>
           <button class="sortbtn" data-sort="relevance">Relevance</button>
           <button class="sortbtn" data-sort="stars">Stars</button>
           <button class="sortbtn" data-sort="recent">Recent</button>
