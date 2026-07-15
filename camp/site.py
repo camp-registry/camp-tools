@@ -447,11 +447,18 @@ THEME_JS = """
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   }
   apply();
+  // Follow live OS theme changes — but only until the user has expressed
+  // a preference with the toggle; an explicit choice always wins.
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',
+    function(e){
+      if (!saved){ dark = e.matches; apply(); }
+    });
   document.addEventListener('DOMContentLoaded', function(){
     var b = document.getElementById('theme-toggle');
     if (b) b.addEventListener('click', function(){
       dark = !dark;
-      try { localStorage.setItem('camp-theme', dark ? 'dark' : 'light'); } catch(e){}
+      saved = dark ? 'dark' : 'light';
+      try { localStorage.setItem('camp-theme', saved); } catch(e){}
       apply();
     });
   });
