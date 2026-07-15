@@ -46,6 +46,12 @@ PLUGINTYPE_NAMES = {
     "filter": "Filters",
 }
 
+# The project's public homes, used by the discovered-listing banner's
+# claim/removal links. Constants rather than parameters: this generator is
+# camp's own site tool, not a general-purpose one.
+INDEX_REPO_URL = "https://github.com/camp-registry/camp-index"
+AUTHORS_GUIDE_URL = "https://github.com/camp-registry/camp-docs/blob/main/AUTHORS.md"
+
 TIER_NAMES = {
     0: 'Discovered',
     1: 'Claimed',
@@ -436,12 +442,18 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                            if metrics.get("checked") else '')
             header += (f'<div class="meta" style="margin:12px 0 0;color:var(--muted);font-size:13px">'
                        f'{escape(_metric_summary(metrics))}{archived_txt}{checked_txt}</div>')
-        header += """
+        plugintype_dir = component.partition("_")[0]
+        claim_url = f"{AUTHORS_GUIDE_URL}#step-1--claim-the-listing-tier-0--tier-1"
+        edit_url = f"{INDEX_REPO_URL}/edit/main/plugins/{plugintype_dir}/{component}.yml"
+        removal_url = (f"{INDEX_REPO_URL}/issues/new?template=removal-request.yml"
+                       f"&title=Removal%20request%3A%20{component}")
+        header += f"""
   <div class="card" style="margin-top:14px;border-left:3px solid var(--amber);border-radius:0 10px 10px 0;font-size:13.5px">
     <b>Discovered listing.</b> Found by scanning public sources; nothing is hosted here —
     installation happens from the author's own repository. Are you the maintainer?
-    <a href="#">Claim this plugin</a> to publish verified releases, or
-    <a href="#">request removal</a> — no questions asked.
+    <a href="{escape(claim_url)}">Claim this plugin</a> to publish verified releases
+    (<a href="{escape(edit_url)}">edit your entry directly</a>), or
+    <a href="{escape(removal_url)}">request removal</a> — no questions asked.
   </div>
 """
     header += "</header>"
