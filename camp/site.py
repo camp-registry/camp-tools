@@ -529,8 +529,9 @@ def _type_label(plugintype: str) -> str:
 
 
 def _filter_bar(entries: list[tuple[dict, dict]]) -> str:
-    """Build the type/tier/cost filter controls from the data actually
-    present, so the dropdowns never offer a value that matches nothing."""
+    """Build the type/tier/cost filter controls. Type and cost options come
+    from the data actually present so they never match nothing; the tier
+    ladder is deliberately shown in full (see below)."""
     type_counts = Counter(e["component"].partition("_")[0] for e, _ in entries)
     type_opts = "".join(
         f'<option value="{escape(t)}">{escape(_type_label(t))} ({n})</option>'
@@ -541,15 +542,17 @@ def _filter_bar(entries: list[tuple[dict, dict]]) -> str:
         f'<option value="">All types</option>{type_opts}</select>'
     )
 
-    tiers_present = sorted({e["tier"] for e, _ in entries})
+    # Unlike the other filters, the tier ladder always shows all four rungs:
+    # an empty rung (zero results) is information — it says what the
+    # registry has not asserted about anything yet.
     tier_opts = "".join(
-        f'<option value="{t}">Tier {t} — {TIER_NAMES[t]}</option>'
-        for t in tiers_present
+        f'<option value="{t}">Tier {t} — {name}</option>'
+        for t, name in TIER_NAMES.items()
     )
     tier_select = (
         '<select id="f-tier" aria-label="Filter by verification tier">'
         f'<option value="">Any tier</option>{tier_opts}</select>'
-    ) if len(tiers_present) > 1 else ""
+    )
 
     labels_present = {label for e, _ in entries for label in e.get("labels", [])}
     label_opts = "".join(
