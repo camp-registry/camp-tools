@@ -308,6 +308,25 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .cmdline code{flex:1;overflow-x:auto;white-space:nowrap}
 .cmdline button{flex:none;background:var(--bg);color:var(--ink);border:0;
   border-radius:2px;padding:4px 10px;font:600 11px var(--mono);cursor:pointer}
+.ledger{position:relative;padding-left:26px;margin-top:10px}
+.ledger::before{content:"";position:absolute;left:8px;top:10px;bottom:10px;
+  width:1px;background:var(--border)}
+.lstep{position:relative;padding:7px 0}
+.lstep::before{content:"✓";position:absolute;left:-26px;top:9px;width:17px;
+  height:17px;border-radius:50%;background:var(--green);color:#fff;font-size:10px;
+  line-height:17px;text-align:center;font-weight:700}
+.lstep.planned::before{content:"○";background:var(--bg);color:var(--faint);
+  border:1px solid var(--border-strong);line-height:15px}
+.lstep h4{font-size:12.5px;font-weight:600;color:var(--text)}
+.lstep.planned h4,.lstep.planned p{color:var(--faint-label)}
+.lstep p{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:2px;
+  word-break:break-all}
+.lnote{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);
+  font-size:11.5px;color:var(--muted)}
+.cc-rules{margin-top:6px;font-family:var(--mono);font-size:10.5px;
+  color:var(--faint-label);line-height:1.7}
+.kvrow .fv .mt-name{font-size:15px;font-weight:700;color:var(--ink)}
+.kvrow .fv .mt-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
 .btn{display:block;text-align:center;padding:11px 16px;border-radius:2px;
   font:500 13px var(--mono);cursor:pointer}
 .act-primary{background:var(--ink);color:var(--bg);border:1px solid var(--ink)}
@@ -677,6 +696,17 @@ document.addEventListener('DOMContentLoaded', function(){
         cc.style.color = r.check.color;
         var m = document.getElementById('cc-meta');
         if (m) m.textContent = r.check.tag;
+        var rules = document.getElementById('cc-rules');
+        if (rules){
+          var parts = [];
+          parts.push('phplint ' + (r.check.phplint ? '\u2713' : '\u2717'));
+          if (r.check.files) parts.push(r.check.files + ' files affected');
+          Object.keys(r.check.rules || {}).slice(0, 5).forEach(function(k){
+            var short = k.split('.').slice(-2).join('.');
+            parts.push(short + ' \u00d7' + r.check.rules[k]);
+          });
+          rules.textContent = parts.join('  ·  ');
+        }
       } else {
         cc.textContent = 'not yet checked';
         cc.style.color = 'var(--faint)';
@@ -1199,7 +1229,10 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             vcheck = checks_mod.for_version(check_doc, version.lstrip("v"))
             if vcheck:
                 text, color = checks_mod.chip(vcheck)
-                row["check"] = {"text": text, "color": color, "tag": vcheck["tag"]}
+                row["check"] = {"text": text, "color": color, "tag": vcheck["tag"],
+                                "phplint": vcheck.get("phplint", True),
+                                "files": vcheck.get("files", 0),
+                                "rules": vcheck.get("rules", {})}
             releases_data.append(row)
         latest_v = latest["version"].split(" ")[0]
         if len(covered) > 1 or len(releases_data) > 1:
@@ -1217,11 +1250,13 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             text, color = checks_mod.chip(newest_check)
             check_line = (f'<div class="inst-meta">Code check: '
                           f'<b id="cc-text" style="color:{color}">{escape(text)}</b>'
-                          f' <span id="cc-meta"></span></div>')
+                          f' <span id="cc-meta"></span>'
+                          f'<div class="cc-rules" id="cc-rules"></div></div>')
         else:
             check_line = ('<div class="inst-meta">Code check: '
                           '<b id="cc-text" style="color:var(--faint)">not yet '
-                          'checked</b> <span id="cc-meta"></span></div>')
+                          'checked</b> <span id="cc-meta"></span>'
+                          '<div class="cc-rules" id="cc-rules"></div></div>')
         rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
                                "package": package})
         install = f"""
@@ -1231,13 +1266,25 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         {for_moodle}
         <span class="inst-for">Moodle <span id="compat">{escape(_moodle_range(latest))}</span></span></div>
       <div class="vline"><span class="c">✓</span> Verified against source</div>
-      <details class="vdetail"><summary>how &amp; when</summary>
-      The published package byte-matched the tagged release
-      <code class="mono" id="vd-tag">{escape(latest["tag"])}</code> @
-      <span id="vd-commit">{latest["commit"][:12]}</span>
-      on <span id="vd-date">{_fmt_date(latest["published"])}</span>.
-      Re-checked on every release.
-      <div class="hash">sha256 <span id="vd-sha">{latest["zip-sha256"]}</span></div></details>
+      <details class="vdetail"><summary>verification ledger</summary>
+      <div class="ledger">
+        <div class="lstep"><h4>Source tagged by maintainer</h4>
+          <p>{escape(entry["source"].removeprefix("https://"))} @
+          <span id="vd-tag">{escape(latest["tag"])}</span> · commit
+          <span id="vd-commit">{latest["commit"][:12]}</span></p></div>
+        <div class="lstep"><h4>Rebuilt deterministically from that tag</h4>
+          <p>canonical ZIP, byte-identical on every rebuild</p></div>
+        <div class="lstep"><h4>Artifact hash recorded in the public index</h4>
+          <p>sha256 <span id="vd-sha">{latest["zip-sha256"]}</span></p></div>
+        <div class="lstep planned"><h4>Release signed · trusted publishing</h4>
+          <p>planned — TUF signing (RFC §4.3)</p></div>
+        <div class="lstep planned"><h4>Recorded in public transparency log</h4>
+          <p>planned — Sigstore/Rekor (RFC §4.3)</p></div>
+      </div>
+      <div class="lnote">Every step is independently verifiable. CAMP never
+      modifies plugin code; it proves the ZIP you install is exactly what the
+      maintainer published. Verified
+      <span id="vd-date">{_fmt_date(latest["published"])}</span>.</div></details>
       {check_line}
       <div class="pick-note" id="pick-note" style="display:none"></div>
       <div class="cmdline"><code id="cmd-text">{escape(cmd)}</code>
@@ -1358,6 +1405,25 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         badge_chips.append(chip)
 
     kv_rows = []
+    maintainers = entry.get("maintainers") or []
+    if maintainers:
+        m = maintainers[0]
+        mt_name = m.get("name") or m.get("github") or m.get("gitlab") or "maintainer"
+        others = len(maintainers) - 1
+        rel_n = len(entry["releases"])
+        sub_bits = []
+        if rel_n:
+            sub_bits.append(f'{rel_n} release{"s" if rel_n != 1 else ""} in the archive')
+        if others > 0:
+            sub_bits.append(f'+{others} co-maintainer{"s" if others != 1 else ""}')
+        kv_rows.append(
+            f'<div class="kvrow"><span class="fk">Maintainer</span>'
+            f'<span class="fv"><div class="mt-name">{escape(mt_name)}</div>'
+            f'{f"<div class=\"mt-sub\">{escape(chr(183).join(sub_bits)) if False else escape(" · ".join(sub_bits))}</div>" if sub_bits else ""}'
+            f'</span>'
+            f'<a href="{escape(entry["source"] + "/issues")}" class="mono" '
+            f'style="font-size:12px;flex:none;font-weight:600">Source &amp; issues →</a>'
+            f'</div>')
     kv_rows.append(f'<div class="kvrow"><span class="fk">Source repository</span>'
                    f'<span class="fv mono" style="font-size:12.5px;word-break:break-all">'
                    f'<a href="{escape(entry["source"])}">'

@@ -63,7 +63,7 @@ def _phplint(root: Path) -> bool:
     return True
 
 
-def _phpcs_totals(root: Path) -> tuple[int, int] | None:
+def _phpcs_totals(root: Path) -> dict | None:
     result = subprocess.run(
         ["phpcs", "--standard=moodle", "--extensions=php",
          "--report=json", "-q", str(root)],
@@ -71,7 +71,18 @@ def _phpcs_totals(root: Path) -> tuple[int, int] | None:
     try:
         report = json.loads(result.stdout or "{}")
         totals = report["totals"]
-        return int(totals["errors"]), int(totals["warnings"])
+        rules: dict[str, int] = {}
+        files_hit = 0
+        for f in report.get("files", {}).values():
+            if f.get("messages"):
+                files_hit += 1
+            for m in f.get("messages", []):
+                src = m.get("source", "unknown")
+                rules[src] = rules.get(src, 0) + 1
+        top = dict(sorted(rules.items(), key=lambda kv: -kv[1])[:8])
+        return {"errors": int(totals["errors"]),
+                "warnings": int(totals["warnings"]),
+                "files": files_hit, "rules": top}
     except (ValueError, KeyError):
         return None
 
@@ -132,11 +143,10 @@ def run_checks(index_dir: str | Path, out_dir: str | Path, log=print) -> int:
                     log(f"checks: {component}@{version}: no phpcs report; skipped")
                     continue
                 versions[version] = {"tag": r["tag"], "commit": r["commit"],
-                                     "phplint": phplint,
-                                     "errors": totals[0], "warnings": totals[1]}
+                                     "phplint": phplint, **totals}
                 written += 1
                 log(f"checks: {component}@{version}: "
-                    f"{totals[0]} errors, {totals[1]} warnings")
+                    f"{totals['errors']} errors, {totals['warnings']} warnings")
         doc["checked"] = today
         (out / f"{component}.json").write_text(json.dumps(doc, sort_keys=True) + "\n")
     return written

@@ -282,6 +282,19 @@ def test_screenshots_rendered_when_ingested(index_dir, tmp_path):
     assert '/shots/' not in html
 
 
+def test_maintainer_and_ledger_on_detail_page(index_dir, tmp_path):
+    from camp.site import generate as site_generate
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "Maintainer" in html and "tester" in html
+    assert "Source &amp; issues" in html
+    assert "verification ledger" in html
+    assert "Source tagged by maintainer" in html
+    assert "planned — TUF signing" in html
+    assert "exactly what the\n      maintainer published" in html or "exactly what the" in html
+
+
 def test_misplaced_file_rejected(entry_path):
     wrong = entry_path.parent / "wrongname.yml"
     wrong.write_text(entry_path.read_text())
