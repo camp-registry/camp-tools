@@ -323,8 +323,15 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   word-break:break-all}
 .lnote{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);
   font-size:11.5px;color:var(--muted)}
-.cc-rules{margin-top:6px;font-family:var(--mono);font-size:10.5px;
-  color:var(--faint-label);line-height:1.7}
+.cc-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.cchip{display:inline-flex;font-family:var(--mono);font-size:10.5px;
+  border-radius:2px;overflow:hidden;border:1px solid var(--border-strong)}
+.cchip .l{background:var(--surface);color:var(--muted);padding:2px 7px}
+.cchip .r{padding:2px 7px;font-weight:600;color:#fff}
+.cchip .r.ok{background:var(--green)}
+.cchip .r.bad{background:var(--red)}
+.cchip .r.warn{background:var(--amber)}
+.cchip .r.dim{background:var(--border-strong);color:var(--bg)}
 .kvrow .fv .mt-name{font-size:15px;font-weight:700;color:var(--ink)}
 .kvrow .fv .mt-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
 .btn{display:block;text-align:center;padding:11px 16px;border-radius:2px;
@@ -696,22 +703,44 @@ document.addEventListener('DOMContentLoaded', function(){
         cc.style.color = r.check.color;
         var m = document.getElementById('cc-meta');
         if (m) m.textContent = r.check.tag;
-        var rules = document.getElementById('cc-rules');
-        if (rules){
-          var parts = [];
-          parts.push('phplint ' + (r.check.phplint ? '\u2713' : '\u2717'));
-          if (r.check.files) parts.push(r.check.files + ' files affected');
-          Object.keys(r.check.rules || {}).slice(0, 5).forEach(function(k){
-            var short = k.split('.').slice(-2).join('.');
-            parts.push(short + ' \u00d7' + r.check.rules[k]);
+        var box = document.getElementById('cc-chips');
+        if (box){
+          box.innerHTML = '';
+          function chip(label, value, cls){
+            var c = document.createElement('span'); c.className = 'cchip';
+            var l = document.createElement('span'); l.className = 'l';
+            l.textContent = label;
+            var v = document.createElement('span'); v.className = 'r ' + cls;
+            v.textContent = value;
+            c.appendChild(l); c.appendChild(v); box.appendChild(c);
+          }
+          chip('phplint', r.check.phplint ? '\u2713' : '\u2717',
+               r.check.phplint ? 'ok' : 'bad');
+          chip('phpcs',
+               (r.check.text.indexOf('errors') !== -1 ? r.check.text
+                 .replace(' errors \u00b7 ', ' | ').replace(' warnings', '')
+                 .replace('0 | ', '0 | ') : r.check.text),
+               r.check.text.indexOf('0 errors') === 0 || r.check.text === 'clean'
+                 ? 'ok' : 'bad');
+          if (r.check.files) chip('files', r.check.files, 'dim');
+          var groups = {};
+          Object.keys(r.check.rules || {}).forEach(function(k){
+            var parts = k.split('.');
+            var g = parts.length >= 2 ? parts[parts.length - 2] : k;
+            groups[g] = (groups[g] || 0) + r.check.rules[k];
           });
-          rules.textContent = parts.join('  ·  ');
+          Object.keys(groups).sort(function(a, b){ return groups[b] - groups[a]; })
+            .slice(0, 4).forEach(function(g){
+              chip(g, '\u00d7' + groups[g], 'warn');
+            });
         }
       } else {
         cc.textContent = 'not yet checked';
         cc.style.color = 'var(--faint)';
         var m2 = document.getElementById('cc-meta');
         if (m2) m2.textContent = r.tag;
+        var box2 = document.getElementById('cc-chips');
+        if (box2) box2.innerHTML = '';   // never show another version's chips
       }
     }
     document.querySelectorAll('.rel-row').forEach(function(row){
@@ -773,6 +802,36 @@ def _newest_release(entry: dict) -> dict | None:
     if not entry["releases"]:
         return None
     return max(entry["releases"], key=lambda r: _version_key(r["version"].split(" ")[0]))
+
+
+def _sniff_groups(rules: dict, top: int = 4) -> list[tuple[str, int]]:
+    """Aggregate phpcs rule counts up to sniff families for display."""
+    groups: dict[str, int] = {}
+    for src, n in (rules or {}).items():
+        parts = src.split(".")
+        key = parts[-2] if len(parts) >= 2 else src
+        groups[key] = groups.get(key, 0) + n
+    return sorted(groups.items(), key=lambda kv: -kv[1])[:top]
+
+
+def _check_chips(vcheck: dict) -> str:
+    """moodle.org-style chip row for one version's check summary."""
+    chips = []
+    ok = vcheck.get("phplint", True)
+    chips.append(f'<span class="cchip"><span class="l">phplint</span>'
+                 f'<span class="r {"ok" if ok else "bad"}">'
+                 f'{"✓" if ok else "✗"}</span></span>')
+    errors, warnings = vcheck.get("errors", 0), vcheck.get("warnings", 0)
+    cls = "ok" if errors == 0 else "bad"
+    chips.append(f'<span class="cchip"><span class="l">phpcs</span>'
+                 f'<span class="r {cls}">{errors} | {warnings}</span></span>')
+    if vcheck.get("files"):
+        chips.append(f'<span class="cchip"><span class="l">files</span>'
+                     f'<span class="r dim">{vcheck["files"]}</span></span>')
+    for name, n in _sniff_groups(vcheck.get("rules")):
+        chips.append(f'<span class="cchip"><span class="l">{escape(name)}</span>'
+                     f'<span class="r warn">×{n}</span></span>')
+    return "".join(chips)
 
 
 def _tier_badge(tier: int) -> str:
@@ -1251,12 +1310,13 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             check_line = (f'<div class="inst-meta">Code check: '
                           f'<b id="cc-text" style="color:{color}">{escape(text)}</b>'
                           f' <span id="cc-meta"></span>'
-                          f'<div class="cc-rules" id="cc-rules"></div></div>')
+                          f'<div class="cc-chips" id="cc-chips">'
+                          f'{_check_chips(newest_check)}</div></div>')
         else:
             check_line = ('<div class="inst-meta">Code check: '
                           '<b id="cc-text" style="color:var(--faint)">not yet '
                           'checked</b> <span id="cc-meta"></span>'
-                          '<div class="cc-rules" id="cc-rules"></div></div>')
+                          '<div class="cc-chips" id="cc-chips"></div></div>')
         rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
                                "package": package})
         install = f"""
