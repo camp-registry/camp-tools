@@ -49,7 +49,7 @@ PLUGINTYPE_NAMES = {
 TIER_NAMES = {
     0: 'Discovered',
     1: 'Claimed',
-    2: 'Source-verified',
+    2: 'Verified',   # 'source-verified' in full — the docs say what it means
     3: 'Reviewed',
 }
 
