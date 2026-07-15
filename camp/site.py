@@ -497,7 +497,14 @@ BROWSE_JS = """
   }
 
   function restore(){
-    var p = new URLSearchParams(location.search);
+    // URL params are canonical (shareable links); within a tab session,
+    // returning via any plain link to "/" (Back to archive, Browse)
+    // recovers the last filters from sessionStorage.
+    var qs = location.search.slice(1);
+    if (!qs){
+      try { qs = sessionStorage.getItem('camp-browse') || ''; } catch(e){}
+    }
+    var p = new URLSearchParams(qs);
     ['q','group','ver','tier','cost','sort'].forEach(function(k){
       if (p.get(k)) state[k] = p.get(k);
     });
@@ -511,6 +518,7 @@ BROWSE_JS = """
     if (state.sort !== 'relevance') p.set('sort', state.sort);
     var qs = p.toString();
     history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+    try { sessionStorage.setItem('camp-browse', qs); } catch(e){}
   }
 
   function passes(o){

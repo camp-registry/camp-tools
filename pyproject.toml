@@ -1,6 +1,6 @@
 [project]
 name = "camp-tools"
-version = "0.2.4"
+version = "0.2.5"
 description = "Registry tooling for camp, a community-governed plugin repository for Moodle: index validation, deterministic artifact builds, source verification, and Composer metadata generation."
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
