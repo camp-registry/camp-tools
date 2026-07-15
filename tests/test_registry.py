@@ -61,6 +61,43 @@ def test_tier0_needs_no_labels(entry_path):
     assert validate_entry(entry_path) == []
 
 
+def test_release_flips_claimed_to_verified(entry_path, plugin_repo):
+    def make_claimed(entry):
+        entry["tier"] = 1
+        entry["releases"] = []
+    _mutate(entry_path, make_claimed)
+    assert main(["release", str(entry_path), "v1.0.0",
+                 "--source", str(plugin_repo), "--supported-moodle", "4.5,5.0"]) == 0
+    entry = yaml.safe_load(entry_path.read_text())
+    assert entry["tier"] == 2
+    assert validate_entry(entry_path) == []
+
+
+def test_artifacts_materialize_hash_gated_and_idempotent(index_dir, entry_path, plugin_repo, tmp_path):
+    from camp.artifacts import materialize
+
+    _mutate(entry_path, lambda e: e.update(source=str(plugin_repo)))
+    out = tmp_path / "artifacts"
+
+    result = materialize(index_dir, out)
+    assert result.built == 1 and not result.problems
+    entry = yaml.safe_load(entry_path.read_text())
+    zip_path = out / "mod_example" / "mod_example-1.0.0.zip"
+    import hashlib
+    assert hashlib.sha256(zip_path.read_bytes()).hexdigest() == entry["releases"][0]["zip-sha256"]
+
+    # Second run rebuilds nothing.
+    result = materialize(index_dir, out)
+    assert result.built == 0 and result.kept == 1
+
+    # A ledger hash the rebuild can't reproduce is never shipped.
+    _mutate(entry_path, lambda e: e["releases"][0].update({"zip-sha256": "f" * 64}))
+    zip_path.unlink()
+    result = materialize(index_dir, out)
+    assert result.built == 0 and result.problems
+    assert not zip_path.exists()
+
+
 def test_misplaced_file_rejected(entry_path):
     wrong = entry_path.parent / "wrongname.yml"
     wrong.write_text(entry_path.read_text())

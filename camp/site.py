@@ -417,7 +417,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
   </div>
 """
     if latest:
-        version = latest["version"].lstrip("v")
+        version = latest["version"].split(" ")[0]  # composer.py dist-URL convention
         cmd = f"composer require {package}"
         header += f"""
   <div class="actions">
@@ -486,7 +486,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     version_rows = "".join(
         f"""<div class="row"><span class="mono" style="font-weight:600;min-width:48px">{escape(r["version"].lstrip("v"))}</span>
 <span style="color:var(--muted);flex:1">{_updated(r)} · Moodle {escape(_moodle_range(r))}</span>
-<a href="{escape(_zip_url(base_url, component, r["version"].lstrip("v")))}">ZIP</a></div>"""
+<a href="{escape(_zip_url(base_url, component, r["version"].split(" ")[0]))}">ZIP</a></div>"""
         for r in reversed(entry["releases"])
     ) or '<div class="row"><span style="color:var(--muted)">No releases yet</span></div>'
     versions = f"""

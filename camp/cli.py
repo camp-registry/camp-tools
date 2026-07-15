@@ -164,6 +164,11 @@ def _cmd_release(args: argparse.Namespace) -> int:
         record["listing-sha256"] = listing_hash
 
     entry["releases"].append(record)
+    # The first verified release is what makes a plugin source-verified
+    # (RFC §4.4); the schema forbids releases below tier 2, and registry CI
+    # independently re-verifies before the PR can merge.
+    if entry.get("tier", 0) < 2:
+        entry["tier"] = 2
     with open(entry_path, "w") as f:
         yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
     print(f"appended {version} ({args.tag} @ {artifact.commit[:12]}) to {entry_path}")
@@ -266,6 +271,16 @@ def _cmd_scan_malware(args: argparse.Namespace) -> int:
         return 1
     print("clean" + (" (no engine ran — advisory only)" if not result.engines_run else ""))
     return 0
+
+
+def _cmd_artifacts(args: argparse.Namespace) -> int:
+    from .artifacts import materialize
+    result = materialize(args.index_dir, args.out_dir)
+    print(f"artifacts: {result.built} built, {result.kept} kept, "
+          f"{result.withdrawn} withdrawn (revoked)")
+    for problem in result.problems:
+        print(f"  ! {problem}", file=sys.stderr)
+    return 1 if result.problems else 0
 
 
 def _cmd_scaffold(args: argparse.Namespace) -> int:
@@ -554,6 +569,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--require-engine", action="store_true",
                    help="fail if no scan engine is available (CI mode)")
     p.set_defaults(func=_cmd_scan_malware)
+
+    p = sub.add_parser("artifacts",
+                       help="materialize every ledger release's canonical ZIP (rebuild + hash-gate)")
+    p.add_argument("index_dir")
+    p.add_argument("out_dir")
+    p.set_defaults(func=_cmd_artifacts)
 
     p = sub.add_parser("scaffold", help="scaffold .camp/listing.yml + .gitattributes in a plugin repo")
     p.add_argument("source_dir")
