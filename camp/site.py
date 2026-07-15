@@ -144,8 +144,8 @@ a:hover{color:var(--accent-hover)}
 .wordmark{display:flex;align-items:baseline;gap:14px;color:var(--ink)}
 .wordmark:hover{color:var(--ink)}
 .wordmark b{font-family:var(--mono);font-weight:600;font-size:22px;letter-spacing:.14em}
-.wordmark small{font-family:var(--mono);font-size:11px;text-transform:uppercase;
-  letter-spacing:.18em;color:var(--faint-label)}
+.wordmark small{font-family:var(--mono);font-size:11px;
+  letter-spacing:.07em;color:var(--faint-label)}
 nav{display:flex;align-items:center;gap:22px;font-family:var(--mono);font-size:13px}
 nav a{color:var(--muted)}
 nav a:hover{color:var(--ink)}
@@ -167,8 +167,8 @@ nav a:hover{color:var(--ink)}
 .trust-band>div{padding:16px 20px 16px 0;border-right:1px solid var(--border)}
 .trust-band>div:last-child{border-right:0}
 .trust-band>div+div{padding-left:20px}
-.kicker{font-family:var(--mono);font-size:11px;text-transform:uppercase;
-  letter-spacing:.16em;color:var(--green-text);display:block;margin-bottom:6px}
+.kicker{font-family:var(--mono);font-size:11.5px;font-weight:600;
+  letter-spacing:.05em;color:var(--green-text);display:block;margin-bottom:6px}
 .trust-band p{font-size:13.5px;color:var(--muted)}
 
 /* ---- search + layout ---- */
