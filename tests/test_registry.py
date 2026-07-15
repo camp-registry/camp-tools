@@ -295,6 +295,24 @@ def test_maintainer_and_ledger_on_detail_page(index_dir, tmp_path):
     assert "exactly what the\n      maintainer published" in html or "exactly what the" in html
 
 
+def test_browse_ships_shell_plus_json(index_dir, tmp_path):
+    import json
+    from camp.site import generate as site_generate
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    idx = json.loads((out / "index.json").read_text())
+    assert len(idx["plugins"]) == 1
+    rec = idx["plugins"][0]
+    assert rec["c"] == "mod_example" and rec["t"] == 2
+    assert "tester" in rec["n"]          # maintainers searchable
+    html = (out / "index.html").read_text()
+    assert "row-item" in html            # server-rendered first page
+    assert "/all.html" in html           # no-JS fallback advertised
+    assert "index.json" in html          # client fetch wired
+    allpage = (out / "all.html").read_text()
+    assert "mod_example" in allpage
+
+
 def test_misplaced_file_rejected(entry_path):
     wrong = entry_path.parent / "wrongname.yml"
     wrong.write_text(entry_path.read_text())

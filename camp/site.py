@@ -468,21 +468,33 @@ THEME_JS = """
 BROWSE_JS = """
 (function(){
   var VORDER = %(vorder)s;
+  var CHUNK = 200;
+  var HEALTH = {0:['Archived upstream','var(--faint)'],
+    1:['Actively maintained','var(--green)'], 2:['Maintained','var(--green)'],
+    3:['Slowing down','var(--amber)'], 4:['Dormant','var(--red)']};
+  var COST = {'paid-service':'Paid service', 'freemium':'Freemium',
+    'fully-free':'Fully free'};
+  var TIERS = ['Discovered','Claimed','Verified','Reviewed'];
+
   var state = {q:'', group:'', ver:'', tier:'', cost:'', sort:'relevance'};
+  var shown = CHUNK;
+  var data = null;
   var list = document.getElementById('rows');
   var q = document.getElementById('q');
   var countEl = document.getElementById('count');
   var chipsEl = document.getElementById('chips');
   var emptyEl = document.getElementById('empty');
+  var moreBtn = document.getElementById('show-more');
 
-  // Read each row's data attributes ONCE; per-keystroke work then runs on
-  // plain objects (dataset access is far too slow for 5,700 rows).
-  var data = [].slice.call(document.querySelectorAll('.row-item')).map(function(el){
-    var d = el.dataset;
-    return {el:el, name:d.name, text:d.text, group:d.group, tier:+d.tier,
-            stars:+d.stars, updated:d.updated||'', vlo:+d.vlo, vhi:+d.vhi,
-            labels:' '+d.labels+' ', visible:true};
-  });
+  function relTime(iso){
+    if (!iso) return '';
+    var days = Math.floor((Date.now() - Date.parse(iso)) / 86400000);
+    if (days <= 0) return 'today';
+    if (days < 14) return days + ' d ago';
+    if (days < 70) return Math.floor(days / 7) + ' wk ago';
+    if (days < 720) return Math.floor(days / 30) + ' mo ago';
+    return Math.floor(days / 365) + ' yr ago';
+  }
 
   function restore(){
     var p = new URLSearchParams(location.search);
@@ -501,61 +513,127 @@ BROWSE_JS = """
     history.replaceState(null, '', qs ? '?' + qs : location.pathname);
   }
 
-  function matches(o, skip){
-    if (skip !== 'q' && state.q && o.text.indexOf(state.q) === -1) return false;
-    if (skip !== 'group' && state.group && o.group !== state.group) return false;
-    if (skip !== 'ver' && state.ver){
-      var i = VORDER.indexOf(state.ver);
-      if (o.vlo < 0 || i < o.vlo || i > o.vhi) return false;
-    }
-    if (skip !== 'tier' && state.tier !== '' && state.tier != null &&
-        state.tier.length && o.tier !== +state.tier) return false;
-    if (skip !== 'cost' && state.cost &&
-        o.labels.indexOf(' ' + state.cost + ' ') === -1) return false;
-    return true;
+  function passes(o){
+    // Per-filter flags, so facet counts can exclude one dimension at a time.
+    return {
+      q: !state.q || o.blob.indexOf(state.q) !== -1,
+      group: !state.group || o.g === state.group,
+      ver: !state.ver || (o.a >= 0 && (function(){
+        var i = VORDER.indexOf(state.ver); return i >= o.a && i <= o.b; })()),
+      tier: state.tier === '' || o.t === +state.tier,
+      cost: !state.cost || o.l.indexOf(state.cost) !== -1
+    };
   }
+  function allPass(f){ return f.q && f.group && f.ver && f.tier && f.cost; }
 
   function cmp(a, b){ return a < b ? -1 : a > b ? 1 : 0; }
   var SORTS = {
-    relevance: function(a,b){
-      return cmp(b.tier, a.tier) || cmp(b.stars, a.stars) || cmp(a.name, b.name);
-    },
-    stars: function(a,b){ return b.stars - a.stars || cmp(a.name, b.name); },
-    recent: function(a,b){ return cmp(b.updated, a.updated); },
-    az: function(a,b){ return cmp(a.name, b.name); }
+    relevance: function(a,b){ return cmp(b.t,a.t) || cmp(b.s,a.s) || cmp(a.c,b.c); },
+    stars: function(a,b){ return b.s - a.s || cmp(a.c, b.c); },
+    recent: function(a,b){ return cmp(b.u || '', a.u || ''); },
+    az: function(a,b){ return cmp(a.c, b.c); }
   };
-  var appliedSort = null;
-  function applySort(){
-    if (state.sort === appliedSort) return;
-    appliedSort = state.sort;
-    var arr = data.slice().sort(SORTS[state.sort] || SORTS.relevance);
-    var frag = document.createDocumentFragment();
-    arr.forEach(function(o){ frag.appendChild(o.el); });
-    list.appendChild(frag);
-    document.querySelectorAll('.sortbtn').forEach(function(b){
-      if (b.dataset.sort)
-        b.classList.toggle('active', b.dataset.sort === state.sort);
-    });
+
+  function el(tag, cls, text){
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function rowNode(o){
+    var a = el('a', 'row-item');
+    a.href = '/plugin/' + o.c + '.html';
+    var main = el('div', 'row-main');
+    var l1 = el('div', 'row-line1');
+    l1.appendChild(el('span', 'row-name', o.c));
+    var tb = el('span', 'tb tb-' + o.t, 'Tier ' + o.t + ' \u00b7 ' + TIERS[o.t]);
+    l1.appendChild(tb);
+    if (o.t >= 2 && o.p){
+      var vp = el('span', 'vpill');
+      vp.appendChild(el('span', 'c', '\u2713'));
+      vp.appendChild(document.createTextNode('verified ' + relTime(o.p)));
+      l1.appendChild(vp);
+    }
+    main.appendChild(l1);
+    if (o.m) main.appendChild(el('div', 'row-summary', o.m));
+    var meta = el('div', 'row-meta');
+    if (HEALTH[o.h]){
+      var hspan = el('span', null);
+      hspan.style.color = HEALTH[o.h][1];
+      var dot = el('span', 'hdot'); dot.style.background = HEALTH[o.h][1];
+      hspan.appendChild(dot);
+      hspan.appendChild(document.createTextNode(HEALTH[o.h][0]));
+      meta.appendChild(hspan);
+    }
+    if (o.u) meta.appendChild(el('span', null, 'updated ' + relTime(o.u)));
+    if (o.h !== -1) meta.appendChild(el('span', null,
+      '\u2605 ' + o.s + ' \u00b7 ' + o.f + ' forks \u00b7 ' + o.o + ' open issues'));
+    main.appendChild(meta);
+    a.appendChild(main);
+    var rail = el('div', 'row-rail');
+    var cost = (o.l || []).map(function(k){ return COST[k]; }).filter(Boolean)[0];
+    if (cost) rail.appendChild(el('span', 'row-cost', cost));
+    rail.appendChild(el('span', 'row-arrow', '\u2192'));
+    a.appendChild(rail);
+    return a;
   }
 
   var facets = [].slice.call(document.querySelectorAll('.facet')).map(function(f){
     return {el:f, g:f.dataset.facet, v:f.dataset.value, n:f.querySelector('.n')};
   });
-  function facetCounts(){
-    facets.forEach(function(f){
-      var n = 0, i = f.g === 'ver' && f.v ? VORDER.indexOf(f.v) : -1;
-      for (var k = 0; k < data.length; k++){
-        var o = data[k];
-        if (!matches(o, f.g)) continue;
-        if (!f.v) { n++; continue; }
-        if (f.g === 'group'){ if (o.group === f.v) n++; }
-        else if (f.g === 'ver'){ if (o.vlo >= 0 && i >= o.vlo && i <= o.vhi) n++; }
-        else if (f.g === 'tier'){ if (o.tier === +f.v) n++; }
-        else if (f.g === 'cost'){ if (o.labels.indexOf(' '+f.v+' ') !== -1) n++; }
+
+  function apply(){
+    if (!data){ persist(); return; }   // still loading; state applies on arrival
+    var matched = [];
+    var counts = {};                    // one pass over the data for everything
+    facets.forEach(function(f){ counts[f.g + '|' + f.v] = 0; });
+    for (var k = 0; k < data.length; k++){
+      var o = data[k], fl = passes(o);
+      if (allPass(fl)) matched.push(o);
+      for (var j = 0; j < facets.length; j++){
+        var f = facets[j];
+        var others = (f.g !== 'q' ? fl.q : true)
+          && (f.g === 'group' ? true : fl.group)
+          && (f.g === 'ver' ? true : fl.ver)
+          && (f.g === 'tier' ? true : fl.tier)
+          && (f.g === 'cost' ? true : fl.cost);
+        if (!others) continue;
+        var hit;
+        if (!f.v) hit = true;
+        else if (f.g === 'group') hit = o.g === f.v;
+        else if (f.g === 'ver'){
+          var i = VORDER.indexOf(f.v);
+          hit = o.a >= 0 && i >= o.a && i <= o.b;
+        }
+        else if (f.g === 'tier') hit = o.t === +f.v;
+        else hit = o.l.indexOf(f.v) !== -1;
+        if (hit) counts[f.g + '|' + f.v]++;
       }
-      f.n.textContent = n;
+    }
+    matched.sort(SORTS[state.sort] || SORTS.relevance);
+
+    list.textContent = '';
+    var frag = document.createDocumentFragment();
+    matched.slice(0, shown).forEach(function(o){ frag.appendChild(rowNode(o)); });
+    list.appendChild(frag);
+    moreBtn.style.display = matched.length > shown ? '' : 'none';
+    moreBtn.textContent = 'Show ' +
+      Math.min(CHUNK, matched.length - shown) + ' more of ' + matched.length;
+
+    countEl.textContent = matched.length + ' plugin' +
+      (matched.length === 1 ? '' : 's') +
+      (state.q ? ' matching \u201c' + state.q + '\u201d' : '');
+    emptyEl.style.display = matched.length ? 'none' : '';
+    facets.forEach(function(f){
+      if (f.n) f.n.textContent = counts[f.g + '|' + f.v];
       f.el.classList.toggle('active', state[f.g] === f.v || (!state[f.g] && !f.v));
     });
+    document.querySelectorAll('.sortbtn').forEach(function(b){
+      if (b.dataset.sort)
+        b.classList.toggle('active', b.dataset.sort === state.sort);
+    });
+    renderChips();
+    persist();
   }
 
   var CHIP_FIELDS = {q:'search', group:'type', ver:'moodle', tier:'tier', cost:'cost'};
@@ -574,14 +652,14 @@ BROWSE_JS = """
       if (!state[k]) return;
       var c = document.createElement('button');
       c.className = 'chip';
+      c.innerHTML = '<span class="f">' + CHIP_FIELDS[k] + '</span>';
       var val = document.createElement('span');
       val.textContent = chipLabel(k);
-      c.innerHTML = '<span class="f">' + CHIP_FIELDS[k] + '</span>';
       c.appendChild(val);
       c.insertAdjacentHTML('beforeend', ' <span class="x">\u00d7</span>');
       c.addEventListener('click', function(){
         state[k] = ''; if (k === 'q') q.value = '';
-        apply();
+        shown = CHUNK; apply();
       });
       chipsEl.appendChild(c);
     });
@@ -592,41 +670,21 @@ BROWSE_JS = """
   }
   function clearAll(){
     state.q = state.group = state.ver = state.tier = state.cost = '';
-    q.value = ''; apply();
-  }
-
-  function apply(){
-    state.q = state.q.toLowerCase();
-    applySort();
-    var visible = 0;
-    for (var k = 0; k < data.length; k++){
-      var o = data[k], hit = matches(o, null);
-      if (hit) visible++;
-      if (hit !== o.visible){        // touch the DOM only on change
-        o.visible = hit;
-        o.el.style.display = hit ? '' : 'none';
-      }
-    }
-    countEl.textContent = visible + ' plugin' + (visible === 1 ? '' : 's') +
-      (state.q ? ' matching \u201c' + state.q + '\u201d' : '');
-    emptyEl.style.display = visible ? 'none' : '';
-    facetCounts();
-    renderChips();
-    persist();
+    q.value = ''; shown = CHUNK; apply();
   }
 
   var debounce = null;
   q.addEventListener('input', function(){
     clearTimeout(debounce);
     debounce = setTimeout(function(){
-      state.q = q.value.trim().toLowerCase(); apply();
+      state.q = q.value.trim().toLowerCase(); shown = CHUNK; apply();
     }, 120);
   });
   document.querySelectorAll('.facet').forEach(function(f){
     f.addEventListener('click', function(){
       var g = f.dataset.facet, v = f.dataset.value;
       state[g] = (state[g] === v) ? '' : v;
-      apply();
+      shown = CHUNK; apply();
     });
   });
   document.querySelectorAll('.sortbtn').forEach(function(b){
@@ -641,11 +699,23 @@ BROWSE_JS = """
       btn.textContent = open ? btn.dataset.more : btn.dataset.less;
     });
   });
+  moreBtn.addEventListener('click', function(){ shown += CHUNK; apply(); });
   var clearEmpty = document.getElementById('clear-empty');
   if (clearEmpty) clearEmpty.addEventListener('click', clearAll);
 
   restore();
-  apply();
+  fetch('/index.json').then(function(r){ return r.json(); }).then(function(j){
+    data = j.plugins.map(function(o){
+      o.blob = (o.c + ' ' + (o.m || '') + ' ' + (o.n || '')).toLowerCase();
+      o.l = o.l || [];
+      return o;
+    });
+    apply();
+  }).catch(function(){
+    // JSON unavailable: the server-rendered first page stays; filters
+    // are disabled rather than silently wrong.
+    countEl.textContent = 'showing the first rows only \u2014 full index unavailable';
+  });
 })();
 """
 
@@ -1058,8 +1128,44 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
         + _facet("cost", "donation-supported", "Donation-supported")
         + _facet("cost", "commercial-support-available", "Commercial support"))
 
-    rows_html = []
+    HEALTH_CODE = {"Archived upstream": 0, "Actively maintained": 1,
+                   "Maintained": 2, "Slowing down": 3, "Dormant": 4}
+    records = []
     for entry, listing in entries:
+        component = entry["component"]
+        metrics = entry.get("metrics") or {}
+        health = _health(entry, today)
+        latest = _newest_release(entry)
+        vlo, vhi = _range_indices(entry)
+        maints = " ".join(
+            str(m.get(k, "")) for m in entry.get("maintainers", [])
+            for k in ("name", "github", "gitlab") if m.get(k))
+        display = listing.get("name") or ""
+        rec = {"c": component, "g": component.partition("_")[0],
+               "t": entry["tier"], "s": metrics.get("stars", 0),
+               "f": metrics.get("forks", 0), "o": metrics.get("open-issues", 0),
+               "u": metrics.get("updated", ""),
+               "h": HEALTH_CODE.get(health[1], -1) if health else -1,
+               "l": entry.get("labels", []),
+               "m": (listing.get("summary") or entry.get("summary") or "").strip(),
+               "n": f"{display} {maints}".strip().lower(),
+               "a": vlo, "b": vhi}
+        if entry["tier"] >= 2 and latest:
+            rec["p"] = latest["published"]
+        records.append(rec)
+
+    # Server-render only the first page (default relevance order): the full
+    # catalog rides /index.json and renders client-side in chunks — parsing
+    # 5,700 prebuilt rows is what made the old page slow.
+    by_relevance = sorted(
+        enumerate(entries),
+        key=lambda pair: (-pair[1][0]["tier"],
+                          -(pair[1][0].get("metrics") or {}).get("stars", 0),
+                          pair[1][0]["component"]))
+    first_page = [pair for _, pair in by_relevance[:150]]
+
+    rows_html = []
+    for entry, listing in first_page:
         component = entry["component"]
         plugintype = component.partition("_")[0]
         summary = (listing.get("summary") or entry.get("summary") or "").strip()
@@ -1169,6 +1275,11 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
       </div>
       <div class="chips" id="chips" style="display:none"></div>
       <div class="rows" id="rows">{''.join(rows_html)}</div>
+      <button class="sortbtn" id="show-more" style="display:none;margin:18px auto">Show more</button>
+      <noscript><p style="margin-top:16px;font-size:13px;color:var(--muted)">
+        Showing the {len(rows_html)} highest-tier plugins. JavaScript builds
+        the searchable list — or browse the
+        <a href="/all.html">complete plain index</a>.</p></noscript>
       <div class="empty" id="empty" style="display:none">
         No plugins match these filters.
         <button class="sortbtn active" id="clear-empty">Clear all filters</button>
@@ -1178,10 +1289,11 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
 {_footer(wrap=False)}
 </div>
 """
-    return _page("CAMP — Community Archive of Moodle Plugins", body,
+    page = _page("CAMP — Community Archive of Moodle Plugins", body,
                  description="An independent, mirrorable archive of Moodle "
                  "plugins, source-verified byte for byte.",
                  extra_js=browse_js)
+    return page, records
 
 
 # ------------------------------------------------------------- detail ------
@@ -1655,7 +1767,22 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
                             checks_dir=checks_dir, shots=shots)
         (out / "plugin" / f"{component}.html").write_text(page)
 
-    (out / "index.html").write_text(_browse_page(entries, today))
+    browse_html, records = _browse_page(entries, today)
+    (out / "index.html").write_text(browse_html)
+    (out / "index.json").write_text(json.dumps({"plugins": records},
+                                               separators=(",", ":")))
+
+    all_rows = "".join(
+        f'<li><a class="mono" href="/plugin/{e["component"]}.html">'
+        f'{escape(e["component"])}</a> — Tier {e["tier"]}</li>'
+        for e, _ in sorted(entries, key=lambda p: p[0]["component"]))
+    (out / "all.html").write_text(_page(
+        "All plugins — CAMP",
+        f'{_header()}<div class="narrow"><h1 style="font-family:var(--serif);'
+        f'color:var(--ink)">All {len(entries):,} plugins</h1>'
+        f'<ul style="margin-top:18px;line-height:2;list-style:none">{all_rows}</ul>'
+        f'{_footer(wrap=False)}</div>'))
+
     (out / "how-it-works.html").write_text(_how_page())
 
     badge_mod.write_badges(index_dir, out / "badge")
