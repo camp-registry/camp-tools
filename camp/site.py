@@ -882,7 +882,7 @@ def _page(title: str, body: str, *, description: str = "", extra_js: str = "") -
 def _header() -> str:
     inner = f"""
   <a class="wordmark" href="/"><b>CAMP</b>
-    <small>Community archive of plugins for Moodle</small></a>
+    <small>Community Archive of Plugins for Moodle</small></a>
   <nav>
     <a href="/">Browse</a>
     <a href="/how-it-works.html">How it works</a>
