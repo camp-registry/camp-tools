@@ -30,6 +30,7 @@ from pathlib import Path
 
 import yaml
 
+from . import __version__ as TOOLS_VERSION
 from .advisory import AdvisorySet
 from . import badge as badge_mod
 from . import checks as checks_mod
@@ -1072,11 +1073,16 @@ def _header() -> str:
     return f'<div class="wrap"><div class="topbar">{inner}</div></div>'
 
 
+_BUILT = datetime.datetime.now(datetime.timezone.utc)
+
+
 def _footer(wrap: bool = True) -> str:
-    inner = ("""<footer>
+    built = _BUILT.strftime("%Y-%m-%d %H:%M UTC")
+    inner = (f"""<footer>
   <span>CAMP is a community-governed archive of plugins for Moodle™.
   Open data, mirrorable by anyone.</span>
-  <span>Not affiliated with or endorsed by Moodle Pty Ltd.</span>
+  <span>Not affiliated with or endorsed by Moodle Pty Ltd.
+  <span style="opacity:.75">· camp-tools v{TOOLS_VERSION} · built {built}</span></span>
 </footer>""")
     return f'<div class="wrap">{inner}</div>' if wrap else inner
 
@@ -1779,6 +1785,10 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     (out / "index.html").write_text(browse_html)
     (out / "index.json").write_text(json.dumps({"plugins": records},
                                                separators=(",", ":")))
+    (out / "version.json").write_text(json.dumps({
+        "camp-tools": TOOLS_VERSION,
+        "built": _BUILT.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "plugins": len(entries)}) + "\n")
 
     all_rows = "".join(
         f'<li><a class="mono" href="/plugin/{e["component"]}.html">'

@@ -1,6 +1,6 @@
 [project]
 name = "camp-tools"
-version = "0.2.5"
+dynamic = ["version"]
 description = "Registry tooling for camp, a community-governed plugin repository for Moodle: index validation, deterministic artifact builds, source verification, and Composer metadata generation."
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
@@ -20,6 +20,9 @@ camp = "camp.cli:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "camp.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["camp*"]

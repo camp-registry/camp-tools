@@ -311,6 +311,10 @@ def test_browse_ships_shell_plus_json(index_dir, tmp_path):
     assert "index.json" in html          # client fetch wired
     allpage = (out / "all.html").read_text()
     assert "mod_example" in allpage
+    import camp
+    ver = json.loads((out / "version.json").read_text())
+    assert ver["camp-tools"] == camp.__version__ and ver["plugins"] == 1
+    assert f"camp-tools v{camp.__version__}" in html
 
 
 def test_misplaced_file_rejected(entry_path):
