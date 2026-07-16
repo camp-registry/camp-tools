@@ -357,6 +357,13 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vrow.revoked{cursor:default;opacity:.6}
 .vrow.revoked .v{text-decoration:line-through}
 .vrow.revoked:hover{background:transparent}
+.vmore{border-top:1px solid var(--border)}
+.vmore summary{cursor:pointer;padding:11px 10px;font-family:var(--mono);
+  font-size:11.5px;color:var(--muted);list-style:none;user-select:none}
+.vmore summary::-webkit-details-marker{display:none}
+.vmore summary::before{content:"▸ "}
+.vmore[open] summary::before{content:"▾ "}
+.vmore summary:hover{color:var(--ink)}
 @media(max-width:640px){.vrow{grid-template-columns:70px 1fr 44px}
   .vrow .chk,.vrow .rng{display:none}}
 
@@ -1516,9 +1523,38 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         ordered = sorted(entry["releases"], reverse=True,
                          key=lambda r: _version_key(r["version"].split(" ")[0]))
         if len(entry["releases"]) > 1:
+            # The install picker only ever answers with the newest release
+            # supporting a branch; the table leads with exactly that set so
+            # its prominent rows are the ones the picker can name. Everything
+            # else — superseded and revoked alike — stays archived one
+            # disclosure away rather than competing for the download.
+            best_by_branch = {}
+            for row in releases_data:
+                for i in range(row["lo"], row["hi"] + 1):
+                    held = best_by_branch.get(i)
+                    if held is None or _version_key(row["v"]) > _version_key(held["v"]):
+                        best_by_branch[i] = row
+            current_vs = {row["v"] for row in best_by_branch.values()}
+            cur_rows, old_rows, revoked_n = [], [], 0
+            for r in ordered:
+                if r["version"].split(" ")[0].lstrip("v") in current_vs:
+                    cur_rows.append(_vrow(r))
+                else:
+                    old_rows.append(_vrow(r))
+                    if advisories.is_revoked(component, r["version"].split(" ")[0]):
+                        revoked_n += 1
+            older_html = ""
+            if old_rows:
+                n = len(old_rows)
+                label = f'{n} older version{"s" if n != 1 else ""}'
+                if revoked_n:
+                    label += f' ({revoked_n} revoked)'
+                label += ' · superseded by the releases above'
+                older_html = (f'<details class="vmore"><summary>{label}'
+                              f'</summary>{"".join(old_rows)}</details>')
             versions_table = ('<div class="sect">All versions</div>'
                               '<div class="vtable">'
-                              + "".join(_vrow(r) for r in ordered) + '</div>')
+                              + "".join(cur_rows) + older_html + '</div>')
     else:
         install = """
   <div class="install-card">
