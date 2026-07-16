@@ -1061,6 +1061,7 @@ def _header() -> str:
   <nav>
     <a href="/">Browse</a>
     <a href="/how-it-works.html">How it works</a>
+    <a href="https://github.com/camp-registry/camp-docs">Docs</a>
     <a href="{MIRROR_URL}">Mirror this archive</a>
     <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
       <svg class="ic-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -1244,14 +1245,13 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
   <div class="hero">
     <h1>Every Moodle plugin, checked against its own source.</h1>
     <p>CAMP is an independent, community-governed archive of {total:,} Moodle
-    plugins. Every published package is automatically rebuilt from its
-    maintainer’s public repository and byte-matched before it earns a
-    verified tier — provenance you can check yourself.</p>
+    plugins. Nothing earns a verified tier until it’s been checked against
+    the maintainer’s own published source, and every check is public.</p>
   </div>
   <div class="trust-band">
     <div><span class="kicker">Verified against source</span>
       <p>Packages are rebuilt from the maintainer’s tagged release and
-      hash-compared — a match is the only way to earn the badge.</p></div>
+      hash-compared. A match is the only way to earn the badge.</p></div>
     <div><span class="kicker">No accounts, no tracking</span>
       <p>Browsing and installing need no registration. The archive keeps no
       per-site data and mirrors see only anonymous downloads.</p></div>
@@ -1730,7 +1730,7 @@ def _how_page() -> str:
   <div class="cta">
     <h2 style="margin:0">Ready to find a plugin?</h2>
     <p style="color:var(--muted);margin-top:8px">Search the archive, filter by
-    trust tier, and install with provenance you can check.</p>
+    trust tier, and see every check before you install.</p>
     <a href="/">Browse the archive</a>
   </div>
 {_footer(wrap=False)}
