@@ -392,6 +392,18 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .lb .lb-prev{left:0;top:50%;transform:translateY(-50%)}
 .lb .lb-next{right:0;top:50%;transform:translateY(-50%)}
 
+/* external-link marker: these anchors open a new tab and leave
+   camp-registry.org. A mask-drawn arrow keeps rendering identical in every
+   font context (the self-hosted subsets lack U+2197). Direct-child scope
+   keeps badge chips and buttons clean. */
+.kvrow .fv > a[href^="https://"]::after,
+.prose a[href^="https://"]::after,
+.attrib a[href^="https://"]::after{content:"";display:inline-block;
+  width:.58em;height:.58em;margin-left:.3em;vertical-align:.05em;
+  background:currentColor;opacity:.7;
+  -webkit-mask:url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M4 1h7v7h-2V4.4L3.4 10 2 8.6 7.6 3H4z"/></svg>') center/contain no-repeat;
+  mask:url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M4 1h7v7h-2V4.4L3.4 10 2 8.6 7.6 3H4z"/></svg>') center/contain no-repeat}
+
 /* prose / banners / advisories */
 .prose{font-size:14.5px;line-height:1.65;color:var(--text);max-width:660px}
 .prose p{margin:10px 0}
@@ -1828,7 +1840,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                        'maintainer</div></span></div>')
     kv_rows.append('<div class="kvrow"><span class="fk">Issues</span>'
                    f'<span class="fv"><a href="{escape(issues_url)}">'
-                   'Browse known issues or report a problem →</a></span></div>')
+                   'Browse known issues or report a problem</a></span></div>')
     if dev_bits:
         kv_rows.append('<div class="kvrow"><span class="fk">Development</span>'
                        f'<span class="fv">{" · ".join(dev_bits)}</span></div>')
