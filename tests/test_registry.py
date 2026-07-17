@@ -288,7 +288,8 @@ def test_maintainer_and_ledger_on_detail_page(index_dir, tmp_path):
     site_generate(index_dir, "https://repo.test", out)
     html = (out / "plugin" / "mod_example.html").read_text()
     assert "Maintainer" in html and "tester" in html
-    assert "Source &amp; issues" in html
+    assert "Browse known issues or report a problem" in html
+    assert "https://example.org/mod_example/issues" in html
     assert "verification ledger" in html
     assert "Source tagged by maintainer" in html
     assert "planned — TUF signing" in html

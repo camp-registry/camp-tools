@@ -25,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-from .validate import load_entry, validate_listing
+from .validate import load_entry, newest_release, validate_listing
 
 LISTING_PATH = ".camp/listing.yml"
 MAX_DIMENSION = 1440
@@ -78,7 +78,7 @@ def ingest_entry(entry_path: str | Path, source: str, out_dir: str | Path) -> In
         result.problems.append("no releases; nothing to ingest (tier 0/1)")
         result.ok = False
         return result
-    release = entry["releases"][-1]
+    release = newest_release(entry)
     commit = release["commit"]
 
     raw = _blob_at(source, commit, LISTING_PATH)

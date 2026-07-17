@@ -23,6 +23,16 @@ def load_entry(path: str | Path) -> dict:
     return entry
 
 
+def newest_release(entry: dict) -> dict | None:
+    """Highest-versioned release — NOT the last ledger entry: the ledger is
+    append-only in publication order, and backfills append older versions."""
+    from .advisory import _version_key
+    if not entry.get("releases"):
+        return None
+    return max(entry["releases"],
+               key=lambda r: _version_key(str(r["version"]).split(" ")[0]))
+
+
 def _schema(name: str) -> dict:
     with open(SCHEMA_DIR / name) as f:
         return json.load(f)

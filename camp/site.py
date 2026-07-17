@@ -373,12 +373,24 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 
 /* screenshots */
 .shots{margin-top:26px;max-width:620px}
-.shot-main img{width:100%;aspect-ratio:16/10;object-fit:cover;
-  border:1px solid var(--border);border-radius:3px;display:block}
-.shot-thumbs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
-.shot-thumbs img{width:100%;aspect-ratio:16/10;object-fit:cover;
-  border:1px solid var(--border);border-radius:3px;display:block}
-.shot-cap{font-size:12px;color:var(--faint-label);margin-top:6px}
+.shot-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.shot-grid img{width:100%;aspect-ratio:16/10;object-fit:cover;object-position:top;
+  border:1px solid var(--border);border-radius:3px;display:block;
+  background:var(--surface)}
+.shot-grid a:hover img{border-color:var(--muted)}
+.shot-grid.shots-single{grid-template-columns:minmax(0,380px)}
+/* lightbox (js-built; anchors fall back to the raw image without js) */
+.lb{position:fixed;inset:0;background:rgba(12,11,9,.93);z-index:60;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;padding:24px}
+.lb img{max-width:min(1200px,92vw);max-height:76vh;object-fit:contain;border-radius:4px}
+.lb .lb-cap{margin-top:14px;font-size:13.5px;color:#e8e4dd;text-align:center;max-width:82vw}
+.lb .lb-count{font-family:var(--mono);font-size:11px;color:#9b968d;margin-top:6px}
+.lb button{position:absolute;background:none;border:0;color:#c9c4bb;cursor:pointer;
+  font:600 34px var(--mono);padding:14px 18px;line-height:1}
+.lb button:hover{color:#fff}
+.lb .lb-x{top:8px;right:10px}
+.lb .lb-prev{left:0;top:50%;transform:translateY(-50%)}
+.lb .lb-next{right:0;top:50%;transform:translateY(-50%)}
 
 /* prose / banners / advisories */
 .prose{font-size:14.5px;line-height:1.65;color:var(--text);max-width:660px}
@@ -497,7 +509,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   .install-card{padding:16px;gap:18px}
   .install-card .left,.install-card .right{min-width:0}
   .install-card .right{width:100%}
-  .shot-thumbs{grid-template-columns:repeat(3,1fr)}
+  .shot-grid{grid-template-columns:repeat(2,1fr)}
   .tiergrid{grid-template-columns:1fr}
   .bigcard{padding:20px 18px}
   .how h1{font-size:27px}
@@ -645,7 +657,7 @@ BROWSE_JS = """
     }
     if (o.u) meta.appendChild(el('span', null, 'updated ' + relTime(o.u)));
     if (o.h !== -1) meta.appendChild(el('span', null,
-      '\u2605 ' + o.s + ' \u00b7 ' + o.f + ' forks \u00b7 ' + o.o + ' open issues'));
+      '\u2605 ' + o.s + ' \u00b7 ' + o.f + ' forks \u00b7 ' + o.o + ' open issues & PRs'));
     main.appendChild(meta);
     a.appendChild(main);
     var rail = el('div', 'row-rail');
@@ -959,16 +971,83 @@ document.addEventListener('DOMContentLoaded', function(){
 });
 """
 
+LIGHTBOX_JS = """
+document.addEventListener('DOMContentLoaded', function(){
+  // Gallery lightbox. The anchors keep real hrefs, so without JS a click
+  // still opens the raw image; with JS it opens the overlay instead.
+  var links = Array.prototype.slice.call(document.querySelectorAll('[data-lb]'));
+  if (!links.length) return;
+  links.sort(function(a, b){ return (+a.dataset.lb) - (+b.dataset.lb); });
+  var shots = links.map(function(a){
+    return {src: a.getAttribute('href'), cap: a.dataset.caption || ''};
+  });
+  var lb = null, img, capEl, countEl, idx = 0;
+  function build(){
+    lb = document.createElement('div');
+    lb.className = 'lb';
+    lb.innerHTML =
+      '<button class="lb-x" aria-label="Close">\\u00d7</button>' +
+      '<button class="lb-prev" aria-label="Previous">\\u2039</button>' +
+      '<img alt="">' +
+      '<div class="lb-cap"></div><div class="lb-count"></div>' +
+      '<button class="lb-next" aria-label="Next">\\u203a</button>';
+    img = lb.querySelector('img');
+    capEl = lb.querySelector('.lb-cap');
+    countEl = lb.querySelector('.lb-count');
+    lb.querySelector('.lb-x').addEventListener('click', close);
+    lb.querySelector('.lb-prev').addEventListener('click', function(e){
+      e.stopPropagation(); step(-1); });
+    lb.querySelector('.lb-next').addEventListener('click', function(e){
+      e.stopPropagation(); step(1); });
+    lb.addEventListener('click', function(e){ if (e.target === lb) close(); });
+    if (shots.length < 2){
+      lb.querySelector('.lb-prev').style.display = 'none';
+      lb.querySelector('.lb-next').style.display = 'none';
+      countEl.style.display = 'none';
+    }
+    var x0 = null;
+    lb.addEventListener('touchstart', function(e){
+      x0 = e.touches[0].clientX; }, {passive: true});
+    lb.addEventListener('touchend', function(e){
+      if (x0 === null) return;
+      var dx = e.changedTouches[0].clientX - x0; x0 = null;
+      if (Math.abs(dx) > 40) step(dx > 0 ? -1 : 1);
+    }, {passive: true});
+    document.body.appendChild(lb);
+  }
+  function show(){
+    var s = shots[idx];
+    img.src = s.src; img.alt = s.cap || 'screenshot';
+    capEl.textContent = s.cap;
+    capEl.style.display = s.cap ? '' : 'none';
+    countEl.textContent = (idx + 1) + ' / ' + shots.length;
+  }
+  function step(d){ idx = (idx + d + shots.length) % shots.length; show(); }
+  function onkey(e){
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowLeft') step(-1);
+    else if (e.key === 'ArrowRight') step(1);
+  }
+  function open(i){
+    if (!lb) build();
+    idx = i; show();
+    lb.style.display = 'flex';
+    document.addEventListener('keydown', onkey);
+  }
+  function close(){
+    lb.style.display = 'none';
+    document.removeEventListener('keydown', onkey);
+  }
+  links.forEach(function(a, i){
+    a.addEventListener('click', function(e){ e.preventDefault(); open(i); });
+  });
+});
+"""
+
 # ------------------------------------------------------------- helpers -----
 
 
-def _newest_release(entry: dict) -> dict | None:
-    """Highest-versioned release — NOT the last ledger entry: the ledger is
-    append-only in publication order, and backfills append older versions."""
-    from .advisory import _version_key
-    if not entry["releases"]:
-        return None
-    return max(entry["releases"], key=lambda r: _version_key(r["version"].split(" ")[0]))
+from .validate import newest_release as _newest_release  # noqa: E402
 
 
 def _sniff_groups(rules: dict, top: int = 4) -> list[tuple[str, int]]:
@@ -1293,7 +1372,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
         if updated:
             meta_bits.append(f'updated {_rel_time(updated, today)}')
         if metrics:
-            meta_bits.append(f'★ {stars} · {forks} forks · {openi} open issues')
+            meta_bits.append(f'★ {stars} · {forks} forks · {openi} open issues & PRs')
 
         # Search blob: component, display name (when a manifest provides
         # one), summary, and maintainer names/handles.
@@ -1650,19 +1729,17 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     # ---- story ------------------------------------------------------------
     gallery = ""
     if shots:
-        first, rest = shots[0], shots[1:4]
-        cap = (f'<div class="shot-cap">{escape(first.get("caption", ""))}</div>'
-               if first.get("caption") else "")
-        thumbs = ""
-        if rest:
-            thumbs = ('<div class="shot-thumbs">' + "".join(
-                f'<a href="{escape(t["src"])}"><img loading="lazy" '
-                f'src="{escape(t["src"])}" alt="{escape(t.get("caption", "screenshot"))}"></a>'
-                for t in rest) + '</div>')
-        gallery = (f'<div class="shots"><a href="{escape(first["src"])}">'
-                   f'<div class="shot-main"><img src="{escape(first["src"])}" '
-                   f'alt="{escape(first.get("caption", "screenshot"))}"></div></a>'
-                   f'{cap}{thumbs}</div>')
+        # Uniform tiles in wrapping rows: compact at any count (schema caps
+        # at 10), nothing hidden, nothing shrunk — the lightbox is the real
+        # viewer. A lone screenshot gets a wider tile so it doesn't look
+        # like a leftover.
+        tiles = "".join(
+            f'<a href="{escape(t["src"])}" data-lb="{i}" '
+            f'data-caption="{escape(t.get("caption", ""))}"><img loading="lazy" '
+            f'src="{escape(t["src"])}" alt="{escape(t.get("caption", "screenshot"))}"></a>'
+            for i, t in enumerate(shots))
+        single = " shots-single" if len(shots) == 1 else ""
+        gallery = f'<div class="shots"><div class="shot-grid{single}">{tiles}</div></div>'
 
     # The summary shows once, under the title. About renders only when the
     # maintainer published a real description; otherwise a one-line
@@ -1693,7 +1770,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     dev_bits = []
     if metrics:
         dev_bits.append(f'{metrics.get("forks", 0)} forks · '
-                        f'{metrics.get("open-issues", 0)} open issues')
+                        f'{metrics.get("open-issues", 0)} open issues & PRs')
     if upstream.get("tag"):
         when = f' · {_fmt_date(upstream["date"])}' if upstream.get("date") else ""
         dev_bits.append(f'Upstream release {escape(upstream["tag"])}{when}')
@@ -1714,6 +1791,10 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         badge_chips.append(chip)
 
     kv_rows = []
+    # Maintainer-declared links (listing schema): issues overrides the
+    # {source}/issues guess; the rest render as a Links row below.
+    declared_links = listing.get("links") or {}
+    issues_url = declared_links.get("issues") or entry["source"] + "/issues"
     maintainers = entry.get("maintainers") or []
     if maintainers:
         m = maintainers[0]
@@ -1729,14 +1810,25 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             f'<div class="kvrow"><span class="fk">Maintainer</span>'
             f'<span class="fv"><div class="mt-name">{escape(mt_name)}</div>'
             f'{f"<div class=\"mt-sub\">{escape(chr(183).join(sub_bits)) if False else escape(" · ".join(sub_bits))}</div>" if sub_bits else ""}'
-            f'</span>'
-            f'<a href="{escape(entry["source"] + "/issues")}" class="mono" '
-            f'style="font-size:12px;flex:none;font-weight:600">Source &amp; issues →</a>'
-            f'</div>')
+            f'</span></div>')
     kv_rows.append(f'<div class="kvrow"><span class="fk">Source repository</span>'
                    f'<span class="fv mono" style="font-size:12.5px;word-break:break-all">'
                    f'<a href="{escape(entry["source"])}">'
                    f'{escape(entry["source"].removeprefix("https://"))}</a></span></div>')
+    link_bits = []
+    for key, label in (("docs", "Documentation"), ("changelog", "Changelog"),
+                       ("donate", "Support the author")):
+        url = declared_links.get(key, "")
+        if url.startswith("https://"):
+            link_bits.append(f'<a href="{escape(url)}">{escape(label)}</a>')
+    if link_bits:
+        kv_rows.append('<div class="kvrow"><span class="fk">Links</span>'
+                       f'<span class="fv">{" · ".join(link_bits)}'
+                       '<div class="attrib" style="margin-top:6px">declared by the '
+                       'maintainer</div></span></div>')
+    kv_rows.append('<div class="kvrow"><span class="fk">Issues</span>'
+                   f'<span class="fv"><a href="{escape(issues_url)}">'
+                   'Browse known issues or report a problem →</a></span></div>')
     if dev_bits:
         kv_rows.append('<div class="kvrow"><span class="fk">Development</span>'
                        f'<span class="fv">{" · ".join(dev_bits)}</span></div>')
@@ -1774,7 +1866,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
 """
     return _page(f"{name} — CAMP", body,
                  description=summary[:200] if summary else "",
-                 extra_js=COPY_JS)
+                 extra_js=COPY_JS + LIGHTBOX_JS)
 
 
 # ---------------------------------------------------------------- how ------
