@@ -28,4 +28,4 @@ version = {attr = "camp.__version__"}
 include = ["camp*"]
 
 [tool.setuptools.package-data]
-camp = ["schema/*.json", "fonts/*"]
+camp = ["schema/*.json", "fonts/*", "icons/*"]

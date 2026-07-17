@@ -141,13 +141,15 @@ a:hover{color:var(--accent-hover)}
 .wrap{max-width:1180px;margin:0 auto;padding:0 32px}
 .narrow{max-width:860px;margin:0 auto;padding:34px 32px 90px}
 .topbar{display:flex;justify-content:space-between;align-items:baseline;
+  flex-wrap:wrap;row-gap:10px;
   padding:22px 0;border-bottom:1px solid var(--border)}
 .wordmark{display:flex;align-items:baseline;gap:14px;color:var(--ink)}
 .wordmark:hover{color:var(--ink)}
 .wordmark b{font-family:var(--mono);font-weight:600;font-size:22px;letter-spacing:.14em}
 .wordmark small{font-family:var(--mono);font-size:11px;
   letter-spacing:.07em;color:var(--faint-label)}
-nav{display:flex;align-items:center;gap:22px;font-family:var(--mono);font-size:13px}
+nav{display:flex;align-items:center;flex-wrap:wrap;gap:2px 22px;
+  font-family:var(--mono);font-size:13px}
 nav a{color:var(--muted)}
 nav a:hover{color:var(--ink)}
 .theme-toggle{background:none;border:0;cursor:pointer;line-height:0;
@@ -183,8 +185,10 @@ nav a:hover{color:var(--ink)}
   padding-bottom:60px}
 @media(max-width:860px){.body-grid{grid-template-columns:1fr}
   .sidebar{position:static!important;max-height:none!important}
-  .hero h1{font-size:32px}.trust-band{grid-template-columns:1fr}
-  .trust-band>div{border-right:0;border-bottom:1px solid var(--border);padding-left:0}}
+  .hero h1{font-size:32px}
+  /* the hero paragraph already carries the trust claim; the band's
+     stacked form costs screens of scroll before search on phones */
+  .trust-band{display:none}}
 
 /* ---- sidebar facets ---- */
 .sidebar{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow-y:auto}
@@ -207,7 +211,7 @@ nav a:hover{color:var(--ink)}
 .results-head{display:flex;justify-content:space-between;align-items:center;
   flex-wrap:wrap;gap:10px}
 .results-count{font-size:14px;color:var(--muted)}
-.sorts{display:flex;align-items:center;gap:6px}
+.sorts{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .sorts .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.16em;
   text-transform:uppercase;color:var(--faint-label);margin-right:4px}
 .sortbtn{background:transparent;border:1px solid transparent;border-radius:2px;
@@ -441,6 +445,64 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .cta a{display:inline-block;margin-top:14px;padding:12px 22px;border-radius:2px;
   background:var(--ink);color:var(--bg);font:500 13px var(--mono)}
 .cta a:hover{color:var(--bg);opacity:.88}
+
+/* ---- responsive ------------------------------------------------------- */
+/* Long mono strings may break anywhere rather than overflow; acts only on
+   overflow so wide layouts are unchanged. (.cmdline code excluded — it
+   scrolls by design.) */
+.mono,.row-name,.detail h1,.detail .crumb{overflow-wrap:anywhere}
+.filters-toggle{display:none}
+
+@media(max-width:860px){
+  /* iOS zooms the page on focus when a control's font is under 16px */
+  .searchbox input{font-size:16px}
+  .install-card select{font-size:16px}
+  /* touch targets on the most-used controls; desktop keeps its density */
+  nav a{padding:8px 0}
+  .theme-toggle{padding:10px;margin:-10px}
+  .sortbtn{padding:9px 12px}
+  .facet,.facet-more{padding:11px 10px}
+  .chip{padding:8px 10px 8px 12px}
+  .cmdline button{padding:8px 12px}
+  .vmore summary{padding:14px 10px}
+  .vdetail summary{padding:6px 0}
+  /* results come first on phones: facets collapse behind a toggle (the
+     active-filter chips stay visible in the results column) */
+  .filters-toggle{display:block;width:100%;text-align:left;
+    background:none;border:1px solid var(--border);border-radius:4px;
+    padding:12px 14px;margin-top:14px;cursor:pointer;
+    font:600 13px var(--mono);color:var(--muted)}
+  .filters-toggle::before{content:"▸ "}
+  .filters-toggle.open::before{content:"▾ "}
+  .filters-toggle:hover{color:var(--ink)}
+  .sidebar{display:none}
+  .body-grid.filters-open .sidebar{display:block}
+}
+
+@media(max-width:640px){
+  /* the fixed 170px fact label (and the Maintainer row's flex:none link)
+     can't share a phone-width row with its value — stack each row */
+  .kvrow{flex-direction:column;align-items:flex-start;gap:6px}
+  .kvrow .fk{width:auto}
+}
+
+@media(max-width:480px){
+  .wrap{padding:0 18px}
+  .narrow,.detail{padding:28px 18px 70px}
+  .wordmark small{display:none}
+  nav{gap:2px 14px}
+  .nav-xtra{display:none}
+  .hero h1{font-size:30px}
+  .detail h1{font-size:22px}
+  .install-card{padding:16px;gap:18px}
+  .install-card .left,.install-card .right{min-width:0}
+  .install-card .right{width:100%}
+  .shot-thumbs{grid-template-columns:repeat(3,1fr)}
+  .tiergrid{grid-template-columns:1fr}
+  .bigcard{padding:20px 18px}
+  .how h1{font-size:27px}
+  .narrow>ul{padding-left:0}
+}
 """
 
 # ---------------------------------------------------------------- js -------
@@ -661,6 +723,11 @@ BROWSE_JS = """
   }
   function renderChips(){
     var any = state.q || state.group || state.ver || state.tier || state.cost;
+    var ftBtn = document.getElementById('filters-toggle');
+    if (ftBtn){
+      var n = ['group','ver','tier','cost'].filter(function(k){ return state[k]; }).length;
+      ftBtn.textContent = n ? 'Filters · ' + n + ' active' : 'Filters';
+    }
     chipsEl.innerHTML = '';
     chipsEl.style.display = any ? '' : 'none';
     if (!any) return;
@@ -688,6 +755,13 @@ BROWSE_JS = """
     state.q = state.group = state.ver = state.tier = state.cost = '';
     q.value = ''; shown = CHUNK; apply();
   }
+  var filtersToggle = document.getElementById('filters-toggle');
+  if (filtersToggle) filtersToggle.addEventListener('click', function(){
+    var grid = document.querySelector('.body-grid');
+    var open = grid.classList.toggle('filters-open');
+    filtersToggle.classList.toggle('open', open);
+    filtersToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
 
   var debounce = null;
   q.addEventListener('input', function(){
@@ -1051,6 +1125,10 @@ def _page(title: str, body: str, *, description: str = "", extra_js: str = "") -
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)}</title>
 {desc}
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>{CSS}</style>
 <script>{THEME_JS}</script>
 </head>
@@ -1069,7 +1147,7 @@ def _header() -> str:
     <a href="/">Browse</a>
     <a href="/how-it-works.html">How it works</a>
     <a href="https://github.com/camp-registry/camp-docs">Docs</a>
-    <a href="{MIRROR_URL}">Mirror this archive</a>
+    <a href="{MIRROR_URL}">Mirror<span class="nav-xtra"> this archive</span></a>
     <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
       <svg class="ic-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
       <svg class="ic-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
@@ -1272,6 +1350,8 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     <input id="q" type="search" autocomplete="off"
       placeholder="Search {total:,} plugins by name, purpose, or keyword…">
   </div>
+
+  <button class="filters-toggle" id="filters-toggle" aria-expanded="false">Filters</button>
 
   <div class="body-grid">
     <aside class="sidebar">
@@ -1859,5 +1939,10 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     fonts_src = Path(__file__).resolve().parent / "fonts"
     if fonts_src.exists():
         shutil.copytree(fonts_src, out / "fonts", dirs_exist_ok=True)
+
+    icons_src = Path(__file__).resolve().parent / "icons"
+    if icons_src.exists():
+        for icon in icons_src.iterdir():
+            shutil.copy(icon, out / icon.name)
 
     return len(entries)
