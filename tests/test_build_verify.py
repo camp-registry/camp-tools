@@ -75,3 +75,66 @@ def test_verify_detects_listing_tamper(plugin_repo, entry_path):
     results = verify_entry(entry_path, source_override=str(plugin_repo))
     assert not results[0].ok
     assert any("listing" in problem for problem in results[0].problems)
+
+
+THIRDPARTYLIBS = """<?xml version="1.0"?>
+<libraries>
+    <library>
+        <location>{location}</location>
+        <name>Example Lib</name>
+        <version>1.0</version>
+        <license>MIT</license>
+    </library>
+</libraries>
+"""
+
+
+def _retag_with_thirdpartylibs(plugin_repo, entry_path, xml, extra=None):
+    """Commit a thirdpartylibs.xml (and optional extra files), re-record
+    the release at a new tag with hashes computed by the real build code."""
+    from camp.build import build_zip, resolve_tag
+
+    (plugin_repo / "thirdpartylibs.xml").write_text(xml)
+    for relpath, content in (extra or {}).items():
+        path = plugin_repo / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "declare third-party libs")
+    git(plugin_repo, "tag", "v1.1.0")
+
+    entry = yaml.safe_load(entry_path.read_text())
+    release = entry["releases"][0]
+    release["tag"] = "v1.1.0"
+    release["commit"] = resolve_tag(str(plugin_repo), "v1.1.0")
+    release["zip-sha256"] = build_zip(str(plugin_repo), "v1.1.0", "mod_example").sha256
+    del release["listing-sha256"]
+    entry_path.write_text(yaml.safe_dump(entry))
+
+
+def test_verify_detects_declared_thirdparty_missing(plugin_repo, entry_path):
+    _retag_with_thirdpartylibs(
+        plugin_repo, entry_path, THIRDPARTYLIBS.format(location="vendor/composer"))
+
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert not results[0].ok
+    assert any("vendor/composer" in p and "not in the release" in p
+               for p in results[0].problems)
+
+
+def test_verify_accepts_declared_thirdparty_present(plugin_repo, entry_path):
+    _retag_with_thirdpartylibs(
+        plugin_repo, entry_path, THIRDPARTYLIBS.format(location="vendor/lib/"),
+        extra={"vendor/lib/lib.php": "<?php // vendored\n"})
+
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert results[0].ok
+    assert any("thirdpartylibs" in c for c in results[0].checks)
+
+
+def test_verify_detects_malformed_thirdpartylibs(plugin_repo, entry_path):
+    _retag_with_thirdpartylibs(plugin_repo, entry_path, "<libraries><library>")
+
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert not results[0].ok
+    assert any("not well-formed" in p for p in results[0].problems)
