@@ -357,8 +357,26 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vrow.sel{background:var(--accent-soft)}
 .vrow .v{font-family:var(--mono);font-weight:600;color:var(--ink)}
 .vrow .vrev{display:inline-block;margin-left:7px;padding:1px 6px;border-radius:3px;
-  font:700 10px var(--mono);color:#fff;vertical-align:1px}
-.vrow .vrev:hover{color:#fff;opacity:.85}
+  font:700 10px var(--mono);color:#fff;vertical-align:1px;position:relative}
+.vrow .vrev:hover{color:#fff;opacity:.92}
+.vrow .vrev:not(:has(.vrev-full))::after{content:"MDL Shield security review";
+  display:none;position:absolute;left:0;bottom:calc(100% + 6px);z-index:5;
+  background:var(--ink);color:var(--bg);font:600 10.5px var(--mono);
+  padding:4px 8px;border-radius:3px;white-space:nowrap}
+.vrow .vrev:not(:has(.vrev-full)):hover::after{display:block}
+.vrow .vrev-full{display:none;position:absolute;left:0;bottom:calc(100% + 6px);
+  z-index:5;height:20px;max-width:none;border-radius:3px;
+  box-shadow:0 2px 10px rgba(0,0,0,.45)}
+.vrow .vrev:hover .vrev-full{display:block}
+.vhead{font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint-label);font-family:var(--mono);
+  border-bottom:1px solid var(--border)}
+.vhead:hover{background:transparent}
+.vhead span{font-weight:400}
+.qmark{display:inline-block;width:14px;height:14px;line-height:14px;
+  text-align:center;border:1px solid var(--border-strong);border-radius:50%;
+  font:600 10px var(--mono);color:var(--muted);vertical-align:1px}
+.qmark:hover{color:var(--ink);border-color:var(--muted)}
 .vrow.sel .v{color:var(--accent)}
 .vrow .d{color:var(--muted)}
 .vrow .chk{font-family:var(--mono);font-size:11.5px}
@@ -441,9 +459,12 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .health-line{margin-top:12px;font-family:var(--mono);font-size:13px;
   color:var(--muted)}
 .labels{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-.lbl-pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
-  padding:3px 12px;border-radius:999px;white-space:nowrap;
-  border:1px solid var(--border);background:var(--surface);color:var(--muted)}
+.lbl-pill{font-family:var(--mono);font-size:11.5px;letter-spacing:.02em;
+  padding:4px 13px;border-radius:999px;white-space:nowrap;
+  border:1px solid var(--border-strong);background:var(--surface);
+  color:var(--text)}
+.msbadge{height:20px;display:inline-block;vertical-align:middle}
+.msbadge-link{line-height:0}
 .hdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;
   vertical-align:1px}
 .tb{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 8px;
@@ -1530,9 +1551,22 @@ def _advisory_cards(component: str, advisories: AdvisorySet) -> str:
     return "\n".join(cards)
 
 
+def _review_badge(review: dict, component: str, badge_src) -> str:
+    """MDL Shield's own badge (publish-fetched, sanitized, self-hosted) —
+    or camp's HTML chip whenever the official artwork isn't available."""
+    src = badge_src(review) if badge_src else None
+    if src:
+        return (f'<img class="msbadge" src="{escape(src)}" '
+                f'alt="MDL Shield {escape(review["grade"])}">')
+    return (f'<span class="abadge"><span class="l">MDL Shield</span>'
+            f'<span class="m" style="background:{review["color"]}">'
+            f'{escape(review["grade"])}</span></span>')
+
+
 def _detail_page(entry: dict, listing: dict, base_url: str,
                  advisories: AdvisorySet, today: datetime.date,
-                 checks_dir=None, shots=None, reviews=None) -> str:
+                 checks_dir=None, shots=None, reviews=None,
+                 badge_src=None) -> str:
     component = entry["component"]
     plugintype = component.partition("_")[0]
     name = listing.get("name") or component
@@ -1550,12 +1584,12 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     # badges (brand-coherent); tier 0 keeps the quiet plain pill — the
     # shield is the author's reward, same rule as the badge endpoint.
     if tier >= 1:
-        tier_msg, tier_color = badge_mod.TIER_BADGE_STYLE[tier]
+        # The literal embeddable badge (badge.py writes it every publish) —
+        # the strip shows the real artifacts, camp's beside the reviewer's.
         meta_bits = [
-            f'<a href="/how-it-works.html"><span class="abadge">'
-            f'<span class="l">camp</span>'
-            f'<span class="m" style="background:{tier_color}">{escape(tier_msg)}</span>'
-            f'</span></a>']
+            f'<a href="/how-it-works.html" class="msbadge-link">'
+            f'<img class="msbadge" src="/badge/{escape(component)}.svg" '
+            f'alt="camp {escape(badge_mod.TIER_BADGE_STYLE[tier][0])}"></a>']
     else:
         meta_bits = [_tier_badge(tier)]
     # The strip carries the security review only when it covers the release
@@ -1565,10 +1599,9 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                     if latest else None)
     if strip_review:
         meta_bits.append(
-            f'<a href="{escape(strip_review["review_url"] or MDLSHIELD_PLUGIN_URL + component)}">'
-            f'<span class="abadge"><span class="l">MDL Shield</span>'
-            f'<span class="m" style="background:{strip_review["color"]}">'
-            f'{escape(strip_review["grade"])}</span></span></a>')
+            f'<a href="{escape(strip_review["review_url"] or MDLSHIELD_PLUGIN_URL + component)}" '
+            f'class="msbadge-link">'
+            f'{_review_badge(strip_review, component, badge_src)}</a>')
     # Health is a conclusion derived from update recency — it renders as
     # one phrase with its evidence, on its own line. Stars are popularity,
     # not trust: they live with the other repo metrics in Development.
@@ -1664,15 +1697,21 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             for_moodle = (f'<span class="inst-for">for Moodle '
                           f'{escape(_moodle_range(latest))}</span>')
         newest_check = checks_mod.for_version(check_doc, latest_v.lstrip("v"))
+        check_label = ('<span title="Static checks the registry runs at every '
+                       'publish: PHP lint plus the Moodle Code Checker. '
+                       '‘clean’ means no findings; style findings are '
+                       'quality signals, not trust signals.">Code check</span> '
+                       '<a href="/how-it-works.html" class="qmark" '
+                       'aria-label="What is the code check?">?</a>: ')
         if newest_check:
             text, color = checks_mod.chip(newest_check)
-            check_line = (f'<div class="inst-meta">Code check: '
+            check_line = (f'<div class="inst-meta">{check_label}'
                           f'<b id="cc-text" style="color:{color}">{escape(text)}</b>'
                           f' <span id="cc-meta"></span>'
                           f'<div class="cc-chips" id="cc-chips">'
                           f'{_check_chips(newest_check)}</div></div>')
         else:
-            check_line = ('<div class="inst-meta">Code check: '
+            check_line = (f'<div class="inst-meta">{check_label}'
                           '<b id="cc-text" style="color:var(--faint)">not yet '
                           'checked</b> <span id="cc-meta"></span>'
                           '<div class="cc-chips" id="cc-chips"></div></div>')
@@ -1731,14 +1770,21 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                 text, color = checks_mod.chip(vcheck)
                 chk = f'<span class="chk" style="color:{color}">{escape(text)}</span>'
             else:
-                chk = '<span class="chk" style="color:var(--faint)">—</span>'
+                chk = ('<span class="chk" style="color:var(--faint)" '
+                       'title="not yet checked — the first code check runs at '
+                       'the next publish">—</span>')
             review = (reviews or {}).get(str(r.get("moodle-version", "")))
             rev = ""
             if review:
                 title = f'MDL Shield {review["grade"]} · {review["reviewed_at"]}'
+                # hover reveals the official badge (their suggestion) without
+                # disturbing the columns; the pill stays the compact anchor
+                full_src = badge_src(review) if badge_src else None
+                full = (f'<img class="vrev-full" src="{escape(full_src)}" alt="">'
+                        if full_src else "")
                 rev = (f'<a class="vrev" style="background:{review["color"]}" '
                        f'href="{escape(review["review_url"] or MDLSHIELD_PLUGIN_URL + component)}" '
-                       f'title="{escape(title)}">{escape(review["grade"])}</a>')
+                       f'title="{escape(title)}">{escape(review["grade"])}{full}</a>')
             return (f'<div class="vrow rel-row" data-ver="{escape(v)}">'
                     f'<span class="v">{escape(v)}{rev}</span>'
                     f'<span class="d">{when}</span>'
@@ -1778,8 +1824,11 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                 label += ' · superseded by the releases above'
                 older_html = (f'<details class="vmore"><summary>{label}'
                               f'</summary>{"".join(old_rows)}</details>')
+            vhead = ('<div class="vrow vhead"><span>Version</span>'
+                     '<span>Released</span><span class="rng">Moodle</span>'
+                     '<span class="chk">Code check</span><span></span></div>')
             versions_table = ('<div class="sect">All versions</div>'
-                              '<div class="vtable">'
+                              '<div class="vtable">' + vhead
                               + "".join(cur_rows) + older_html + '</div>')
     else:
         install = """
@@ -1932,20 +1981,21 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                 review = reviews[mv]
                 caveat = (f' · reviewed version {escape(review["release"])} is '
                           f'not in the archive')
-        chip = (f'<a href="{MDLSHIELD_PLUGIN_URL}{escape(component)}">'
-                f'<span class="abadge"><span class="l">MDL Shield</span>'
-                f'<span class="m" style="background:{review["color"]}">'
-                f'{escape(review["grade"])}</span></span></a>')
+        # The badge itself is the link to the review — MDL Shield's intended
+        # use of review_url; the plugin's review index is the quiet trailer.
+        chip_target = review["review_url"] or MDLSHIELD_PLUGIN_URL + component
+        chip = (f'<a href="{escape(chip_target)}" class="msbadge-link">'
+                f'{_review_badge(review, component, badge_src)}</a>')
         when = f' · {escape(review["reviewed_at"])}' if review["reviewed_at"] else ""
-        full = (f' <a href="{escape(review["review_url"])}">Full review</a>'
-                if review["review_url"] else "")
         kv_rows.append(
             '<div class="kvrow"><span class="fk">Security review</span>'
             f'<span class="fv"><span class="abadges">{chip}</span> '
-            f'{escape(review["release"])}{when}{full}'
+            f'{escape(review["release"])}{when}'
             f'<div class="attrib" style="margin-top:6px">published review of the '
             f'moodle.org distribution · fetched by the registry from '
-            f'mdlshield.com{caveat}</div></span></div>')
+            f'mdlshield.com{caveat} · '
+            f'<a href="{MDLSHIELD_PLUGIN_URL}{escape(component)}">more at '
+            f'mdlshield.com</a></div></span></div>')
     if badge_chips:
         kv_rows.append('<div class="kvrow"><span class="fk">Author badges</span>'
                        f'<span class="fv"><span class="abadges">{"".join(badge_chips)}'
@@ -2077,6 +2127,40 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     reviews_by_component = (reviews_mod.fetch_feed(reviews_source)
                            if reviews_source else None) or {}
 
+    # Official MDL Shield badge artwork, self-hosted at /mdlshield/<hash>.svg.
+    # Content-addressed by badge_url, and the previously published site is
+    # the cache: shields.io is contacted only for badges never seen before.
+    mdlshield_out = out / "mdlshield"
+    _badge_cache: dict[str, str | None] = {}
+
+    def badge_src(review: dict) -> str | None:
+        url = review.get("badge_url") or ""
+        if not url:
+            return None
+        if url in _badge_cache:
+            return _badge_cache[url]
+        import hashlib as _hashlib
+        import urllib.request as _request
+        rel = f"/mdlshield/{_hashlib.sha256(url.encode()).hexdigest()[:12]}.svg"
+        raw = None
+        try:                                   # previous publish first
+            with _request.urlopen(_request.Request(
+                    base_url + rel, headers={"User-Agent": "camp-badge-reuse"}),
+                    timeout=10) as resp:
+                raw = reviews_mod.sanitize_badge_svg(
+                    resp.read(reviews_mod.MAX_BADGE_BYTES))
+        except Exception:
+            raw = None
+        if raw is None:
+            raw = reviews_mod.fetch_badge_svg(url)
+        if raw is None:
+            _badge_cache[url] = None
+            return None
+        mdlshield_out.mkdir(parents=True, exist_ok=True)
+        (mdlshield_out / rel.rsplit("/", 1)[1]).write_bytes(raw)
+        _badge_cache[url] = rel
+        return rel
+
     entries: list[tuple[dict, dict]] = []
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
         entry = load_entry(entry_path)
@@ -2103,7 +2187,8 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
                               "caption": shot.get("caption", "")})
         page = _detail_page(entry, listing, base_url, advisories, today,
                             checks_dir=checks_dir, shots=shots,
-                            reviews=reviews_by_component.get(component))
+                            reviews=reviews_by_component.get(component),
+                            badge_src=badge_src)
         (out / "plugin" / f"{component}.html").write_text(page)
 
     browse_html, records = _browse_page(entries, today)
@@ -2137,7 +2222,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
                 doc, newest["version"].split(" ")[0].lstrip("v")) if newest else None
             if summary:
                 text, color = checks_mod.chip(summary)
-                doc = {"schemaVersion": 1, "label": "camp check",
+                doc = {"schemaVersion": 1, "label": "CAMP check",
                        "message": text, "color": color}
                 (out / "badge").mkdir(parents=True, exist_ok=True)
                 (out / "badge" / f'{entry["component"]}-checks.json').write_text(

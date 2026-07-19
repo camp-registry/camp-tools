@@ -275,7 +275,14 @@ def _cmd_scan_malware(args: argparse.Namespace) -> int:
 
 def _cmd_checks(args: argparse.Namespace) -> int:
     from .checks import run_checks
-    run_checks(args.index_dir, args.out_dir)
+    run_checks(args.index_dir, args.out_dir, reuse=args.reuse)
+    return 0
+
+
+def _cmd_ingest_all(args: argparse.Namespace) -> int:
+    from .ingest import ingest_all
+    ingested, reused = ingest_all(args.index_dir, args.out, reuse=args.reuse)
+    print(f"ingest-all: {ingested} ingested, {reused} reused from prior publish")
     return 0
 
 
@@ -581,7 +588,17 @@ def main(argv: list[str] | None = None) -> int:
                        help="static code-check summaries for released plugins (the prechecker)")
     p.add_argument("index_dir")
     p.add_argument("out_dir")
+    p.add_argument("--reuse", help="previous publish's checks (URL base or dir); "
+                   "commit-matched summaries are reused instead of recomputed")
     p.set_defaults(func=_cmd_checks)
+
+    p = sub.add_parser("ingest-all",
+                       help="ingest listings for every released entry (one clone "
+                       "each; --reuse skips entries unchanged since the last publish)")
+    p.add_argument("index_dir")
+    p.add_argument("--out", required=True)
+    p.add_argument("--reuse", help="the live site's base URL (or a prior dist dir)")
+    p.set_defaults(func=_cmd_ingest_all)
 
     p = sub.add_parser("artifacts",
                        help="materialize every ledger release's canonical ZIP (rebuild + hash-gate)")

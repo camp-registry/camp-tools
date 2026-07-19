@@ -104,7 +104,7 @@ def test_tier_badges_emitted_for_claimed_and_up(index_dir, entry_path, tmp_path)
     site_generate(index_dir, "https://repo.test", out)   # fixture entry is tier 2
     import json
     doc = json.loads((out / "badge" / "mod_example.json").read_text())
-    assert doc == {"schemaVersion": 1, "label": "camp",
+    assert doc == {"schemaVersion": 1, "label": "CAMP",
                    "message": "Tier 2 \u00b7 Verified", "color": "#23854f"}
     svg = (out / "badge" / "mod_example.svg").read_text()
     assert "Tier 2" in svg and "<script" not in svg
@@ -212,7 +212,7 @@ def test_code_check_chip_and_badge(index_dir, tmp_path):
     html = (out / "plugin" / "mod_example.html").read_text()
     assert "Code check" in html and "0 errors · 7 warnings" in html
     badge = (out / "badge" / "mod_example-checks.svg").read_text()
-    assert "camp check" in badge
+    assert "CAMP check" in badge
 
     assert chip({"phplint": False}) == ("parse errors", "#e05d44")
     assert chip({"phplint": True, "errors": 3, "warnings": 1})[0] == "3 errors · 1 warnings"

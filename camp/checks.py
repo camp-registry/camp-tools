@@ -24,10 +24,35 @@ import json
 import shutil
 import subprocess
 import tempfile
+import urllib.request
 from pathlib import Path
 
 from .validate import load_entry
 from .verify import _clone
+
+# Check results are commit-deterministic, so summaries from the previous
+# publish are reusable verbatim — unless the checking itself changed.
+# Bump this when the tools or standard change; prior summaries with a
+# different (or missing) value are recomputed.
+CHECKER_VERSION = 1
+
+
+def _fetch_prior(reuse: str, component: str) -> dict | None:
+    """Prior summary from the previously published site (URL base or dir)."""
+    try:
+        if reuse.startswith("https://"):
+            req = urllib.request.Request(
+                f"{reuse}/{component}.json",
+                headers={"User-Agent": "camp-checks-reuse"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                doc = json.loads(resp.read(2 * 1024 * 1024))
+        else:
+            doc = json.loads((Path(reuse) / f"{component}.json").read_text())
+    except Exception:
+        return None
+    if not isinstance(doc, dict) or doc.get("checker") != CHECKER_VERSION:
+        return None
+    return doc
 
 
 def chip(summary: dict) -> tuple[str, str]:
@@ -93,13 +118,16 @@ def for_version(doc: dict | None, version: str) -> dict | None:
     return (doc.get("versions") or {}).get(version)
 
 
-def run_checks(index_dir: str | Path, out_dir: str | Path, log=print) -> int:
+def run_checks(index_dir: str | Path, out_dir: str | Path, log=print,
+               reuse: str | None = None) -> int:
     """Compute summaries for every non-revoked release of every entry.
     Existing per-version results with matching commits are kept (checks
-    are commit-deterministic); only new or changed versions run."""
-    if not (shutil.which("php") and shutil.which("phpcs")):
-        log("checks: php/phpcs not on PATH; skipping (summaries unchanged)")
-        return 0
+    are commit-deterministic); only new or changed versions run. `reuse`
+    seeds from the previously published site (its /checks base URL, or a
+    directory) so a fresh CI runner only computes what's actually new."""
+    have_tools = bool(shutil.which("php") and shutil.which("phpcs"))
+    if not have_tools:
+        log("checks: php/phpcs not on PATH; reusing prior summaries only")
     from .advisory import AdvisorySet
     advisories = AdvisorySet.load(index_dir)
     out = Path(out_dir)
@@ -111,7 +139,14 @@ def run_checks(index_dir: str | Path, out_dir: str | Path, log=print) -> int:
         if not entry["releases"] or entry.get("status", "active") == "delisted":
             continue
         component = entry["component"]
-        doc = load(out, component) or {"component": component, "versions": {}}
+        doc = load(out, component)
+        fetched = None
+        if doc is None and reuse:
+            fetched = _fetch_prior(reuse, component)
+            doc = fetched
+        if doc is None:
+            doc = {"component": component, "versions": {}}
+        doc["checker"] = CHECKER_VERSION
         versions = doc.setdefault("versions", {})
         pending = []
         for r in entry["releases"]:
@@ -122,6 +157,20 @@ def run_checks(index_dir: str | Path, out_dir: str | Path, log=print) -> int:
                 continue
             pending.append((version, r))
         if not pending:
+            if fetched is not None:
+                # entirely reused from the previous publish: persist it so
+                # the site (and the next publish) can read it from here
+                (out / f"{component}.json").write_text(
+                    json.dumps(doc, sort_keys=True) + "\n")
+                log(f"checks: {component}: reused "
+                    f"{len(versions)} summaries from prior publish")
+            continue
+        if not have_tools:
+            log(f"checks: {component}: {len(pending)} version(s) need tools; "
+                "skipped (never guessed)")
+            if fetched is not None:
+                (out / f"{component}.json").write_text(
+                    json.dumps(doc, sort_keys=True) + "\n")
             continue
         with tempfile.TemporaryDirectory(prefix="camp-checks-") as tmp:
             repo = Path(tmp) / "src"

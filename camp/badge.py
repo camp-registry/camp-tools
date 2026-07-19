@@ -70,10 +70,10 @@ def render_svg(label: str, message: str, color: str) -> str:
 <rect width="{w}" height="20" fill="url(#s)"/>
 </g>
 <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="110" text-rendering="geometricPrecision">
-<text x="{lx}" y="140" transform="scale(.1)" fill="#010101" fill-opacity=".3">{label_e}</text>
-<text x="{lx}" y="130" transform="scale(.1)">{label_e}</text>
-<text x="{mx}" y="140" transform="scale(.1)" fill="#010101" fill-opacity=".3">{message_e}</text>
-<text x="{mx}" y="130" transform="scale(.1)">{message_e}</text>
+<text x="{lx}" y="150" transform="scale(.1)" fill="#010101" fill-opacity=".3">{label_e}</text>
+<text x="{lx}" y="140" transform="scale(.1)">{label_e}</text>
+<text x="{mx}" y="150" transform="scale(.1)" fill="#010101" fill-opacity=".3">{message_e}</text>
+<text x="{mx}" y="140" transform="scale(.1)">{message_e}</text>
 </g>
 </svg>
 """
@@ -81,7 +81,8 @@ def render_svg(label: str, message: str, color: str) -> str:
 
 def endpoint_document(tier: int) -> dict:
     message, color = TIER_BADGE_STYLE[tier]
-    return {"schemaVersion": 1, "label": "camp",
+    # The label is the brand mark, not prose — it matches the wordmark.
+    return {"schemaVersion": 1, "label": "CAMP",
             "message": message, "color": color}
 
 
