@@ -362,9 +362,45 @@ def _cmd_ledger_check(args: argparse.Namespace) -> int:
 
 
 def _cmd_composer(args: argparse.Namespace) -> int:
-    count = composer_mod.write(args.index_dir, args.base_url.rstrip("/"), args.out)
+    count = composer_mod.write(args.index_dir, args.base_url.rstrip("/"), args.out,
+                               artifacts_base=(args.artifacts_base or "").rstrip("/") or None)
     print(f"wrote {args.out} ({count} packages)")
     return 0
+
+
+def _archive_store(args):
+    import os
+    from .archive import s3_store
+    key_id = os.environ.get("B2_KEY_ID", "")
+    app_key = os.environ.get("B2_APPLICATION_KEY", "")
+    if not (key_id and app_key):
+        print("error: B2_KEY_ID and B2_APPLICATION_KEY must be set", file=sys.stderr)
+        return None
+    return s3_store(args.bucket, args.endpoint, key_id, app_key)
+
+
+def _cmd_deposit(args: argparse.Namespace) -> int:
+    from .archive import deposit
+    store = _archive_store(args)
+    if store is None:
+        return 1
+    result = deposit(args.index_dir, store)
+    print(f"deposit: {result.deposited} deposited, {result.present} already archived")
+    for problem in result.problems:
+        print(f"  ! {problem}", file=sys.stderr)
+    return 0 if result.ok else 1
+
+
+def _cmd_archive_audit(args: argparse.Namespace) -> int:
+    from .archive import audit
+    store = _archive_store(args)
+    if store is None:
+        return 1
+    result = audit(args.index_dir, store)
+    print(f"archive-audit: {result.present} verified")
+    for problem in result.problems:
+        print(f"  ! {problem}", file=sys.stderr)
+    return 0 if result.ok else 1
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
@@ -503,7 +539,8 @@ def _cmd_site(args: argparse.Namespace) -> int:
     from . import site as site_mod
     count = site_mod.generate(args.index_dir, args.base_url.rstrip("/"), args.out_dir,
                               listings_dir=args.listings, checks_dir=args.checks,
-                              reviews_source=args.reviews)
+                              reviews_source=args.reviews,
+                              artifacts_base=(args.artifacts_base or "").rstrip("/") or None)
     print(f"generated site in {args.out_dir} ({count} plugins)")
     return 0
 
@@ -549,7 +586,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("base_url")
     p.add_argument("out")
+    p.add_argument("--artifacts-base", help="artifact archive base URL "
+                   "(default: <base_url>/artifacts)")
     p.set_defaults(func=_cmd_composer)
+
+    for verb, fn, hlp in (
+            ("deposit", _cmd_deposit,
+             "deposit every ledger release into the append-only archive"),
+            ("archive-audit", _cmd_archive_audit,
+             "verify the archive holds every ledger release, hash-exact")):
+        p = sub.add_parser(verb, help=hlp)
+        p.add_argument("index_dir")
+        p.add_argument("--bucket", required=True)
+        p.add_argument("--endpoint", required=True,
+                       help="S3-compatible endpoint hostname")
+        p.set_defaults(func=fn)
 
     p = sub.add_parser("rekor", help="build a Rekor transparency-log entry (dry-run unless --submit)")
     p.add_argument("artifact")
@@ -694,6 +745,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--checks", help="directory of code-check summaries (camp checks)")
     p.add_argument("--reviews", help="published security-reviews feed to render "
                    "(URL or local path; omit to render no review chips)")
+    p.add_argument("--artifacts-base", help="artifact archive base URL "
+                   "(default: <base_url>/artifacts)")
     p.set_defaults(func=_cmd_site)
 
     args = parser.parse_args(argv)

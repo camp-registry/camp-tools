@@ -1207,8 +1207,8 @@ def _type_label(plugintype: str) -> str:
     return PLUGINTYPE_NAMES.get(plugintype, plugintype)
 
 
-def _zip_url(base_url: str, component: str, version: str) -> str:
-    return f"{base_url}/artifacts/{component}/{component}-{version}.zip"
+def _zip_url(artifacts_base: str, component: str, version: str) -> str:
+    return f"{artifacts_base}/{component}/{component}-{version}.zip"
 
 
 def _load_listing(listings_dir: Path | None, component: str) -> dict:
@@ -1566,8 +1566,9 @@ def _review_badge(review: dict, component: str, badge_src) -> str:
 def _detail_page(entry: dict, listing: dict, base_url: str,
                  advisories: AdvisorySet, today: datetime.date,
                  checks_dir=None, shots=None, reviews=None,
-                 badge_src=None) -> str:
+                 badge_src=None, artifacts_base: str | None = None) -> str:
     component = entry["component"]
+    artifacts_base = artifacts_base or f"{base_url}/artifacts"
     plugintype = component.partition("_")[0]
     name = listing.get("name") or component
     summary = (listing.get("summary") or entry.get("summary") or "").strip()
@@ -1675,7 +1676,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                 "commit": r["commit"][:12], "sha": r["zip-sha256"],
                 "date": _fmt_date(r["published"]),
                 "lo": VORDER.index(known[0]), "hi": VORDER.index(known[-1]),
-                "zip": _zip_url(base_url, component, version),
+                "zip": _zip_url(artifacts_base, component, version),
             }
             vcheck = checks_mod.for_version(check_doc, version.lstrip("v"))
             if vcheck:
@@ -1749,7 +1750,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         <button id="copy-install" data-cmd="{escape(cmd)}">Copy</button></div>
     </div>
     <div class="right">
-      <a class="btn act-secondary" id="zip-btn" href="{escape(_zip_url(base_url, component, latest_v))}">Download ZIP</a>
+      <a class="btn act-secondary" id="zip-btn" href="{escape(_zip_url(artifacts_base, component, latest_v))}">Download ZIP</a>
     </div>
   </div>
   <script id="rel-data" type="application/json">{rel_json}</script>"""
@@ -1790,7 +1791,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                     f'<span class="d">{when}</span>'
                     f'<span class="d rng">Moodle {escape(rng)}</span>'
                     f'{chk}'
-                    f'<a class="zl" href="{escape(_zip_url(base_url, component, version))}">ZIP</a></div>')
+                    f'<a class="zl" href="{escape(_zip_url(artifacts_base, component, version))}">ZIP</a></div>')
         from .advisory import _version_key
         ordered = sorted(entry["releases"], reverse=True,
                          key=lambda r: _version_key(r["version"].split(" ")[0]))
@@ -2118,7 +2119,8 @@ def _how_page() -> str:
 def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
              listings_dir: str | Path | None = None,
              checks_dir: str | Path | None = None,
-             reviews_source: str | None = None) -> int:
+             reviews_source: str | None = None,
+             artifacts_base: str | None = None) -> int:
     out = Path(out_dir)
     (out / "plugin").mkdir(parents=True, exist_ok=True)
     listings = Path(listings_dir) if listings_dir else None
@@ -2188,7 +2190,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
         page = _detail_page(entry, listing, base_url, advisories, today,
                             checks_dir=checks_dir, shots=shots,
                             reviews=reviews_by_component.get(component),
-                            badge_src=badge_src)
+                            badge_src=badge_src, artifacts_base=artifacts_base)
         (out / "plugin" / f"{component}.html").write_text(page)
 
     browse_html, records = _browse_page(entries, today)

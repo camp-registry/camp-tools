@@ -12,6 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 screenshots = ["Pillow>=10.0"]
+archive = ["boto3>=1.34"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
