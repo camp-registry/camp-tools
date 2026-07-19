@@ -20,6 +20,7 @@ tests use an in-memory fake.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import tempfile
 from dataclasses import dataclass, field
@@ -40,6 +41,12 @@ class ArchiveResult:
     @property
     def ok(self) -> bool:
         return not self.problems
+
+
+# Every deposited object gets an explicit compliance-mode lock for this
+# long, independent of any bucket default. Extend by re-depositing epochs
+# before expiry; never shorten (the platform refuses anyway).
+RETENTION_YEARS = 7
 
 
 def s3_store(bucket: str, endpoint: str, key_id: str, application_key: str):
@@ -64,10 +71,14 @@ def s3_store(bucket: str, endpoint: str, key_id: str, application_key: str):
                     (response.get("Metadata") or {}).items()}
 
         def put(self, key: str, data: bytes, sha256: str) -> None:
+            retain_until = (datetime.datetime.now(datetime.UTC)
+                            + datetime.timedelta(days=365 * RETENTION_YEARS))
             client.put_object(
                 Bucket=bucket, Key=key, Body=data,
                 ContentType="application/zip",
                 CacheControl="public, max-age=31536000, immutable",
+                ObjectLockMode="COMPLIANCE",
+                ObjectLockRetainUntilDate=retain_until,
                 Metadata={"sha256": sha256})
 
     return _Store()
@@ -92,7 +103,6 @@ def deposit(index_dir: str | Path, store, log=print) -> ArchiveResult:
     is deeply wrong and a human must look)."""
     result = ArchiveResult()
     by_source: dict[str, list] = {}
-    pending_meta = []
     for entry, release in _releases(index_dir):
         key = artifact_relpath(entry["component"], release)
         existing = store.head(key)
