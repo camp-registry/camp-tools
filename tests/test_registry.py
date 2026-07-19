@@ -160,10 +160,12 @@ def test_author_badges_rendered_from_stubbed_fetch(index_dir, tmp_path, monkeypa
                                      "color": "#22c55e"})
     listings = tmp_path / "listings"
     listings.mkdir()
+    # mdlshield endpoints are registry-level now (suppressed here); any other
+    # allowlisted host still renders via the author-declared path.
     (listings / "mod_example.yml").write_text(
         "name: Example\nsummary: s\nbadges:\n"
-        "- endpoint: https://mdlshield.com/api/badge/mod_example\n"
-        "  link: https://mdlshield.com/plugins/mod_example\n")
+        "- endpoint: https://camp-registry.org/badge/mod_example.json\n"
+        "  link: https://camp-registry.org/plugin/mod_example.html\n")
     out = tmp_path / "site"
     site_generate(index_dir, "https://repo.test", out, listings_dir=listings)
     html = (out / "plugin" / "mod_example.html").read_text()

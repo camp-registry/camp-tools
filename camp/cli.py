@@ -495,7 +495,8 @@ def _cmd_scan_report(args: argparse.Namespace) -> int:
 def _cmd_site(args: argparse.Namespace) -> int:
     from . import site as site_mod
     count = site_mod.generate(args.index_dir, args.base_url.rstrip("/"), args.out_dir,
-                              listings_dir=args.listings, checks_dir=args.checks)
+                              listings_dir=args.listings, checks_dir=args.checks,
+                              reviews_source=args.reviews)
     print(f"generated site in {args.out_dir} ({count} plugins)")
     return 0
 
@@ -674,6 +675,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--listings", help="directory of <component>.yml listing manifests "
                                       "(preview flag until release-time ingestion lands)")
     p.add_argument("--checks", help="directory of code-check summaries (camp checks)")
+    p.add_argument("--reviews", help="published security-reviews feed to render "
+                   "(URL or local path; omit to render no review chips)")
     p.set_defaults(func=_cmd_site)
 
     args = parser.parse_args(argv)

@@ -34,6 +34,8 @@ from . import __version__ as TOOLS_VERSION
 from .advisory import AdvisorySet
 from . import badge as badge_mod
 from . import checks as checks_mod
+from . import reviews as reviews_mod
+from .reviews import PLUGIN_URL_PREFIX as MDLSHIELD_PLUGIN_URL
 from .composer import _package_name
 from .validate import load_entry
 
@@ -354,6 +356,9 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vrow:hover{background:var(--surface)}
 .vrow.sel{background:var(--accent-soft)}
 .vrow .v{font-family:var(--mono);font-weight:600;color:var(--ink)}
+.vrow .vrev{display:inline-block;margin-left:7px;padding:1px 6px;border-radius:3px;
+  font:700 10px var(--mono);color:#fff;vertical-align:1px}
+.vrow .vrev:hover{color:#fff;opacity:.85}
 .vrow.sel .v{color:var(--accent)}
 .vrow .d{color:var(--muted)}
 .vrow .chk{font-family:var(--mono);font-size:11.5px}
@@ -433,6 +438,12 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   overflow:hidden;border:1px solid var(--border-strong);color:inherit}
 .abadge .l{background:var(--ink);color:var(--bg);padding:3px 8px}
 .abadge .m{color:#fff;padding:3px 8px;font-weight:600}
+.health-line{margin-top:12px;font-family:var(--mono);font-size:13px;
+  color:var(--muted)}
+.labels{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.lbl-pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;
+  padding:3px 12px;border-radius:999px;white-space:nowrap;
+  border:1px solid var(--border);background:var(--surface);color:var(--muted)}
 .hdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;
   vertical-align:1px}
 .tb{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 8px;
@@ -1135,6 +1146,16 @@ def _health(entry: dict, today: datetime.date) -> tuple[str, str] | None:
     return ("var(--red)", "Dormant")
 
 
+LABEL_NAMES = {
+    "fully-free": "Fully free",
+    "freemium": "Freemium",
+    "paid-service": "Paid service",
+    "external-account": "External account required",
+    "donation-supported": "Donation supported",
+    "commercial-support-available": "Commercial support available",
+}
+
+
 def _cost_text(entry: dict) -> str:
     labels = entry.get("labels", [])
     for key in ("paid-service", "freemium", "fully-free"):
@@ -1511,7 +1532,7 @@ def _advisory_cards(component: str, advisories: AdvisorySet) -> str:
 
 def _detail_page(entry: dict, listing: dict, base_url: str,
                  advisories: AdvisorySet, today: datetime.date,
-                 checks_dir=None, shots=None) -> str:
+                 checks_dir=None, shots=None, reviews=None) -> str:
     component = entry["component"]
     plugintype = component.partition("_")[0]
     name = listing.get("name") or component
@@ -1524,20 +1545,47 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     upstream = metrics.get("latest-release") or {}
     check_doc = checks_mod.load(checks_dir, component)
 
-    # Trust strip: the at-a-glance evaluation signals.
-    meta_bits = [_tier_badge(tier)]
+    # Trust strip: the at-a-glance evaluation signals. The two trust
+    # authorities render as two-segment shields matching the embeddable
+    # badges (brand-coherent); tier 0 keeps the quiet plain pill — the
+    # shield is the author's reward, same rule as the badge endpoint.
+    if tier >= 1:
+        tier_msg, tier_color = badge_mod.TIER_BADGE_STYLE[tier]
+        meta_bits = [
+            f'<a href="/how-it-works.html"><span class="abadge">'
+            f'<span class="l">camp</span>'
+            f'<span class="m" style="background:{tier_color}">{escape(tier_msg)}</span>'
+            f'</span></a>']
+    else:
+        meta_bits = [_tier_badge(tier)]
+    # The strip carries the security review only when it covers the release
+    # the install card offers — an unqualified signal or none. Reviews of
+    # other versions render below, in Project, with their caveats.
+    strip_review = ((reviews or {}).get(str(latest.get("moodle-version", "")))
+                    if latest else None)
+    if strip_review:
+        meta_bits.append(
+            f'<a href="{escape(strip_review["review_url"] or MDLSHIELD_PLUGIN_URL + component)}">'
+            f'<span class="abadge"><span class="l">MDL Shield</span>'
+            f'<span class="m" style="background:{strip_review["color"]}">'
+            f'{escape(strip_review["grade"])}</span></span></a>')
+    # Health is a conclusion derived from update recency — it renders as
+    # one phrase with its evidence, on its own line. Stars are popularity,
+    # not trust: they live with the other repo metrics in Development.
+    health_line = ""
     if health:
         color, label = health
-        meta_bits.append(f'<span style="color:{color}">'
-                         f'<span class="hdot" style="background:{color}"></span>'
-                         f'{label}</span>')
-    if metrics.get("updated"):
-        meta_bits.append(f'<span>updated {_rel_time(metrics["updated"], today)}</span>')
-    if metrics:
-        meta_bits.append(f'<span>★ {metrics.get("stars", 0)}</span>')
-    cost = _cost_text(entry)
-    if cost:
-        meta_bits.append(f'<span>{escape(cost)}</span>')
+        when = (f' · updated {_rel_time(metrics["updated"], today)}'
+                if metrics.get("updated") else "")
+        health_line = (f'<div class="health-line"><span style="color:{color}">'
+                       f'<span class="hdot" style="background:{color}"></span>'
+                       f'{label}</span>{when}</div>')
+    # Every declared disclosure label shows — not just the cost model —
+    # on their own row beneath the strip.
+    label_pills = "".join(
+        f'<span class="lbl-pill">{escape(LABEL_NAMES[lab])}</span>'
+        for lab in entry.get("labels") or [] if lab in LABEL_NAMES)
+    labels_row = f'<div class="labels">{label_pills}</div>' if label_pills else ""
     license_id = entry.get("license", "")
     if license_id and not license_id.startswith(("GPL-", "AGPL-", "LGPL-")):
         meta_bits.append(
@@ -1684,8 +1732,15 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                 chk = f'<span class="chk" style="color:{color}">{escape(text)}</span>'
             else:
                 chk = '<span class="chk" style="color:var(--faint)">—</span>'
+            review = (reviews or {}).get(str(r.get("moodle-version", "")))
+            rev = ""
+            if review:
+                title = f'MDL Shield {review["grade"]} · {review["reviewed_at"]}'
+                rev = (f'<a class="vrev" style="background:{review["color"]}" '
+                       f'href="{escape(review["review_url"] or MDLSHIELD_PLUGIN_URL + component)}" '
+                       f'title="{escape(title)}">{escape(review["grade"])}</a>')
             return (f'<div class="vrow rel-row" data-ver="{escape(v)}">'
-                    f'<span class="v">{escape(v)}</span>'
+                    f'<span class="v">{escape(v)}{rev}</span>'
                     f'<span class="d">{when}</span>'
                     f'<span class="d rng">Moodle {escape(rng)}</span>'
                     f'{chk}'
@@ -1781,7 +1836,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     # ---- project facts: one full-width row per field -----------------------
     dev_bits = []
     if metrics:
-        dev_bits.append(f'{metrics.get("forks", 0)} forks · '
+        dev_bits.append(f'★ {metrics.get("stars", 0)} · '
+                        f'{metrics.get("forks", 0)} forks · '
                         f'{metrics.get("open-issues", 0)} open issues & PRs')
     if upstream.get("tag"):
         when = f' · {_fmt_date(upstream["date"])}' if upstream.get("date") else ""
@@ -1790,6 +1846,12 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     badge_chips = []
     for b in (listing.get("badges") or []):
         if not isinstance(b, dict):
+            continue
+        if "mdlshield.com/" in b.get("endpoint", ""):
+            # MDL Shield is registry-level now (the published-reviews feed);
+            # an author-declared endpoint would only duplicate it — or add a
+            # meaningless grey "not reviewed" chip, which the feed's privacy
+            # model deliberately never renders.
             continue
         doc = badge_mod.fetch_endpoint(b.get("endpoint", ""))
         if doc is None:
@@ -1847,6 +1909,43 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     if not advisory_items:
         kv_rows.append('<div class="kvrow"><span class="fk">Security advisories</span>'
                        '<span class="fv">None published</span></div>')
+    if reviews and latest:
+        # Prefer the review of the release camp currently offers; fall back
+        # to a review of any ledger release, then to the reviewer's most
+        # recent — each with an honest caveat. The reviewer's subject is
+        # always the moodle.org distribution, never camp's tag-built ZIP.
+        current_mv = str(latest.get("moodle-version", ""))
+        ledger_mvs = {str(r.get("moodle-version", "")): r["version"].split(" ")[0]
+                      for r in entry["releases"]}
+        caveat = ""
+        if current_mv in reviews:
+            review = reviews[current_mv]
+        else:
+            in_ledger = [mv for mv in reviews if mv in ledger_mvs]
+            if in_ledger:
+                mv = max(in_ledger, key=lambda m: reviews[m]["reviewed_at"])
+                review = reviews[mv]
+                caveat = (f' · reviewed version is {escape(review["release"])}, '
+                          f'not the current release')
+            else:
+                mv = max(reviews, key=lambda m: reviews[m]["reviewed_at"])
+                review = reviews[mv]
+                caveat = (f' · reviewed version {escape(review["release"])} is '
+                          f'not in the archive')
+        chip = (f'<a href="{MDLSHIELD_PLUGIN_URL}{escape(component)}">'
+                f'<span class="abadge"><span class="l">MDL Shield</span>'
+                f'<span class="m" style="background:{review["color"]}">'
+                f'{escape(review["grade"])}</span></span></a>')
+        when = f' · {escape(review["reviewed_at"])}' if review["reviewed_at"] else ""
+        full = (f' <a href="{escape(review["review_url"])}">Full review</a>'
+                if review["review_url"] else "")
+        kv_rows.append(
+            '<div class="kvrow"><span class="fk">Security review</span>'
+            f'<span class="fv"><span class="abadges">{chip}</span> '
+            f'{escape(review["release"])}{when}{full}'
+            f'<div class="attrib" style="margin-top:6px">published review of the '
+            f'moodle.org distribution · fetched by the registry from '
+            f'mdlshield.com{caveat}</div></span></div>')
     if badge_chips:
         kv_rows.append('<div class="kvrow"><span class="fk">Author badges</span>'
                        f'<span class="fv"><span class="abadges">{"".join(badge_chips)}'
@@ -1864,6 +1963,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
   <h1>{escape(name)}</h1>
   {f'<div class="mono" style="color:var(--faint-label);font-size:13px;margin-top:4px">{escape(component)}</div>' if name != component else ''}
   <div class="strip">{''.join(meta_bits)}</div>
+  {health_line}
+  {labels_row}
   {f'<p class="dsummary">{escape(summary)}</p>' if summary else ''}
   {attrib}
   {banners}
@@ -1966,12 +2067,15 @@ def _how_page() -> str:
 
 def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
              listings_dir: str | Path | None = None,
-             checks_dir: str | Path | None = None) -> int:
+             checks_dir: str | Path | None = None,
+             reviews_source: str | None = None) -> int:
     out = Path(out_dir)
     (out / "plugin").mkdir(parents=True, exist_ok=True)
     listings = Path(listings_dir) if listings_dir else None
     advisories = AdvisorySet.load(index_dir)
     today = datetime.date.today()
+    reviews_by_component = (reviews_mod.fetch_feed(reviews_source)
+                           if reviews_source else None) or {}
 
     entries: list[tuple[dict, dict]] = []
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
@@ -1998,7 +2102,8 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
                 shots.append({"src": f"/shots/{component}/{stem}.png",
                               "caption": shot.get("caption", "")})
         page = _detail_page(entry, listing, base_url, advisories, today,
-                            checks_dir=checks_dir, shots=shots)
+                            checks_dir=checks_dir, shots=shots,
+                            reviews=reviews_by_component.get(component))
         (out / "plugin" / f"{component}.html").write_text(page)
 
     browse_html, records = _browse_page(entries, today)
