@@ -517,6 +517,8 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   color:var(--text)}
 .msbadge{height:20px;display:inline-block;vertical-align:middle}
 .msbadge-link{line-height:0}
+.rev-item{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+.rev-item:first-child{margin-top:0}
 .hdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;
   vertical-align:1px}
 .tb{font-family:var(--mono);font-size:0.75rem;letter-spacing:.06em;padding:2px 8px;
@@ -2192,41 +2194,32 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         kv_rows.append('<div class="kvrow"><span class="fk">Security advisories</span>'
                        '<span class="fv">None published</span></div>')
     if reviews and latest:
-        # Prefer the review of the release camp currently offers; fall back
-        # to a review of any ledger release, then to the reviewer's most
-        # recent — each with an honest caveat. The reviewer's subject is
-        # always the moodle.org distribution, never camp's tag-built ZIP.
-        current_mv = str(latest.get("moodle-version", ""))
-        ledger_mvs = {str(r.get("moodle-version", "")): r["version"].split(" ")[0]
-                      for r in entry["releases"]}
-        caveat = ""
-        if current_mv in reviews:
-            review = reviews[current_mv]
-        else:
-            in_ledger = [mv for mv in reviews if mv in ledger_mvs]
-            if in_ledger:
-                mv = max(in_ledger, key=lambda m: reviews[m]["reviewed_at"])
-                review = reviews[mv]
-                caveat = (f' · reviewed version is {escape(review["release"])}, '
-                          f'not the current release')
-            else:
-                mv = max(reviews, key=lambda m: reviews[m]["reviewed_at"])
-                review = reviews[mv]
-                caveat = (f' · reviewed version {escape(review["release"])} is '
-                          f'not in the archive')
-        # The badge itself is the link to the review — MDL Shield's intended
-        # use of review_url; the plugin's review index is the quiet trailer.
-        chip_target = review["review_url"] or MDLSHIELD_PLUGIN_URL + component
-        chip = (f'<a href="{escape(chip_target)}" class="msbadge-link">'
-                f'{_review_badge(review, component, badge_src)}</a>')
-        when = f' · {escape(review["reviewed_at"])}' if review["reviewed_at"] else ""
+        # The Project row is the complete public record: every published
+        # review, newest first, each linking its own review — while the strip
+        # shows only the current release's and the install card follows the
+        # selection. The reviewer's subject is always the moodle.org
+        # distribution, never camp's tag-built ZIP.
+        ledger_mvs = {str(r.get("moodle-version", "")) for r in entry["releases"]}
+        rev_items = []
+        for mv in sorted(reviews, key=lambda m: reviews[m]["reviewed_at"],
+                         reverse=True):
+            review = reviews[mv]
+            chip_target = review["review_url"] or MDLSHIELD_PLUGIN_URL + component
+            chip = (f'<a href="{escape(chip_target)}" class="msbadge-link">'
+                    f'{_review_badge(review, component, badge_src)}</a>')
+            when = (f' · {escape(review["reviewed_at"])}'
+                    if review["reviewed_at"] else "")
+            note = "" if mv in ledger_mvs else " · not in the archive"
+            rev_items.append(
+                f'<div class="rev-item"><span class="abadges">{chip}</span> '
+                f'{escape(review["release"])}{when}{note}</div>')
+        plural = "s" if len(rev_items) != 1 else ""
         kv_rows.append(
             '<div class="kvrow"><span class="fk">Security review</span>'
-            f'<span class="fv"><span class="abadges">{chip}</span> '
-            f'{escape(review["release"])}{when}'
-            f'<div class="attrib" style="margin-top:6px">published review of the '
-            f'moodle.org distribution · fetched by the registry from '
-            f'mdlshield.com{caveat} · '
+            f'<span class="fv">{"".join(rev_items)}'
+            f'<div class="attrib" style="margin-top:6px">published review{plural} '
+            f'of the moodle.org distribution · fetched by the registry from '
+            f'mdlshield.com · '
             f'<a href="{MDLSHIELD_PLUGIN_URL}{escape(component)}">more at '
             f'mdlshield.com</a></div></span></div>')
     if badge_chips:
