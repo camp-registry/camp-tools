@@ -204,6 +204,8 @@ nav a:hover{color:var(--ink)}
 /* ---- sidebar facets ---- */
 .sidebar{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow-y:auto}
 .facet-group{margin-bottom:26px}
+fieldset.facet-group{border:0;padding:0;min-width:0}
+legend.facet-label{padding:0}
 .facet-h{font-family:var(--mono);font-size:12px;font-weight:600;
   text-transform:uppercase;letter-spacing:.16em;color:var(--muted);
   margin:0 0 16px}
@@ -214,7 +216,8 @@ nav a:hover{color:var(--ink)}
   padding:7px 10px;border:0;border-radius:2px;background:transparent;cursor:pointer;
   font:13.5px var(--sans);color:var(--ink);text-align:left;gap:8px}
 .facet .n{font-family:var(--mono);font-size:11px;color:var(--faint)}
-.facet.active{background:var(--accent-soft);color:var(--accent);font-weight:500}
+.facet.active{background:var(--accent-soft);color:var(--accent);font-weight:500;
+  box-shadow:inset 3px 0 0 0 currentColor}
 .facet.active .n{color:var(--accent)}
 .facet .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
   margin-right:6px;vertical-align:1px}
@@ -230,7 +233,9 @@ nav a:hover{color:var(--ink)}
   text-transform:uppercase;color:var(--faint-label);margin-right:4px}
 .sortbtn{background:transparent;border:1px solid transparent;border-radius:2px;
   cursor:pointer;font:12px var(--mono);color:var(--muted);padding:5px 10px}
-.sortbtn.active{border-color:var(--border-strong);background:var(--surface);color:var(--ink)}
+.sortbtn.active{border-color:var(--border-strong);background:var(--surface);color:var(--ink);
+  box-shadow:inset 0 -2px 0 0 currentColor}
+.sortbtn.outline{border-color:var(--border-strong);background:var(--surface);color:var(--ink)}
 .chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
 .chip{display:inline-flex;align-items:center;gap:7px;padding:5px 10px 5px 12px;
   background:var(--surface);border:1px solid var(--border-strong);border-radius:2px;
@@ -728,6 +733,13 @@ BROWSE_JS = """
     return {el:f, g:f.dataset.facet, v:f.dataset.value, n:f.querySelector('.n')};
   });
 
+  // The single place toggle state is rendered: the class and the ARIA
+  // state can never diverge, whatever path (click, restore, clear) led here.
+  function setPressed(el, on){
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-pressed', String(on));
+  }
+
   function apply(){
     if (!data){ persist(); return; }   // still loading; state applies on arrival
     var matched = [];
@@ -766,17 +778,23 @@ BROWSE_JS = """
     moreBtn.textContent = 'Show ' +
       Math.min(CHUNK, matched.length - shown) + ' more of ' + matched.length;
 
-    countEl.textContent = matched.length + ' plugin' +
-      (matched.length === 1 ? '' : 's') +
-      (state.q ? ' matching \u201c' + state.q + '\u201d' : '');
+    var n = matched.length;
+    if (!n){
+      countEl.textContent = 'No plugins match the selected filters.';
+    } else {
+      var msg = n.toLocaleString() + ' plugin' + (n === 1 ? '' : 's') +
+        (state.q ? ' match' + (n === 1 ? 'es' : '') +
+          ' \u201c' + state.q + '\u201d.' : ' found.');
+      if (n > shown) msg += ' First ' + shown.toLocaleString() + ' shown.';
+      countEl.textContent = msg;
+    }
     emptyEl.style.display = matched.length ? 'none' : '';
     facets.forEach(function(f){
       if (f.n) f.n.textContent = counts[f.g + '|' + f.v];
-      f.el.classList.toggle('active', state[f.g] === f.v || (!state[f.g] && !f.v));
+      setPressed(f.el, state[f.g] === f.v || (!state[f.g] && !f.v));
     });
-    document.querySelectorAll('.sortbtn').forEach(function(b){
-      if (b.dataset.sort)
-        b.classList.toggle('active', b.dataset.sort === state.sort);
+    document.querySelectorAll('.sortbtn[data-sort]').forEach(function(b){
+      setPressed(b, b.dataset.sort === state.sort);
     });
     renderChips();
     persist();
@@ -803,14 +821,20 @@ BROWSE_JS = """
       if (!state[k]) return;
       var c = document.createElement('button');
       c.className = 'chip';
+      c.setAttribute('aria-label',
+        'Remove filter: ' + CHIP_FIELDS[k] + ', ' + chipLabel(k));
       c.innerHTML = '<span class="f">' + CHIP_FIELDS[k] + '</span>';
       var val = document.createElement('span');
       val.textContent = chipLabel(k);
       c.appendChild(val);
-      c.insertAdjacentHTML('beforeend', ' <span class="x">\u00d7</span>');
+      c.insertAdjacentHTML('beforeend', ' <span class="x" aria-hidden="true">\u00d7</span>');
       c.addEventListener('click', function(){
         state[k] = ''; if (k === 'q') q.value = '';
         shown = CHUNK; apply();
+        // Keep focus predictable after removal: the next chip if any
+        // remain, otherwise the search field \u2014 never the result list.
+        var left = chipsEl.querySelectorAll('.chip');
+        if (left.length) left[0].focus(); else q.focus();
       });
       chipsEl.appendChild(c);
     });
@@ -836,7 +860,7 @@ BROWSE_JS = """
     clearTimeout(debounce);
     debounce = setTimeout(function(){
       state.q = q.value.trim().toLowerCase(); shown = CHUNK; apply();
-    }, 120);
+    }, 250);
   });
   document.querySelectorAll('.facet').forEach(function(f){
     f.addEventListener('click', function(){
@@ -852,8 +876,9 @@ BROWSE_JS = """
   document.querySelectorAll('.facet-more').forEach(function(btn){
     btn.addEventListener('click', function(){
       var tgt = document.getElementById(btn.dataset.target);
-      var open = tgt.style.display !== 'none';
-      tgt.style.display = open ? 'none' : '';
+      var open = !tgt.hidden;
+      tgt.hidden = open;
+      btn.setAttribute('aria-expanded', String(!open));
       btn.textContent = open ? btn.dataset.more : btn.dataset.less;
     });
   });
@@ -862,6 +887,7 @@ BROWSE_JS = """
   if (clearEmpty) clearEmpty.addEventListener('click', clearAll);
 
   restore();
+  countEl.textContent = 'Loading plugins\u2026';
   fetch('/index.json').then(function(r){ return r.json(); }).then(function(j){
     data = j.plugins.map(function(o){
       o.blob = (o.c + ' ' + (o.m || '') + ' ' + (o.n || '')).toLowerCase();
@@ -871,8 +897,10 @@ BROWSE_JS = """
     apply();
   }).catch(function(){
     // JSON unavailable: the server-rendered first page stays; filters
-    // are disabled rather than silently wrong.
-    countEl.textContent = 'showing the first rows only \u2014 full index unavailable';
+    // are disabled rather than silently wrong. The count element is the
+    // status region, so this is announced as well as shown.
+    countEl.innerHTML = 'Showing the first rows only \u2014 the full index ' +
+      'is unavailable. Browse the <a href="/all.html">complete plain index</a>.';
   });
 })();
 """
@@ -1324,7 +1352,8 @@ def _footer(wrap: bool = True) -> str:
 
 def _facet(group: str, value: str, text: str, *, dot: str = "") -> str:
     dothtml = f'<span class="dot" style="background:{dot}"></span>' if dot else ""
-    return (f'<button class="facet" data-facet="{group}" data-value="{escape(value)}">'
+    return (f'<button class="facet" data-facet="{group}" data-value="{escape(value)}" '
+            f'aria-pressed="false">'
             f'<span>{dothtml}<span class="t">{escape(text)}</span></span>'
             f'<span class="n"></span></button>')
 
@@ -1343,8 +1372,9 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     if more_types:
         hidden = "".join(_facet("group", t, _type_label(t)) for t in sorted(
             more_types, key=lambda t: _type_label(t).lower()))
-        more_html = (f'<div id="more-types" style="display:none">{hidden}</div>'
+        more_html = (f'<div id="more-types" hidden>{hidden}</div>'
                      f'<button class="facet-more" data-target="more-types" '
+                     f'aria-expanded="false" aria-controls="more-types" '
                      f'data-more="+ Show all {len(more_types)} more types" '
                      f'data-less="− Show fewer types">'
                      f'+ Show all {len(more_types)} more types</button>')
@@ -1356,8 +1386,9 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     ver_more = ""
     if more_vers:
         hidden = "".join(_facet("ver", v, f"Moodle {v}") for v in more_vers)
-        ver_more = (f'<div id="more-vers" style="display:none">{hidden}</div>'
+        ver_more = (f'<div id="more-vers" hidden>{hidden}</div>'
                     f'<button class="facet-more" data-target="more-vers" '
+                    f'aria-expanded="false" aria-controls="more-vers" '
                     f'data-more="+ Show {len(more_vers)} older versions" '
                     f'data-less="− Show fewer versions">'
                     f'+ Show {len(more_vers)} older versions</button>')
@@ -1506,24 +1537,26 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     <aside class="sidebar" aria-labelledby="filter-heading">
       <a class="skip-link skip-inline" href="#results">Skip filters to results</a>
       <h2 class="facet-h" id="filter-heading">Filter plugins</h2>
-      <div class="facet-group"><div class="facet-label">Type</div>
-        <div class="facet-list">{type_facets}{more_html}</div></div>
-      <div class="facet-group"><div class="facet-label">Moodle version</div>
-        <div class="facet-list">{ver_facets}{ver_more}</div></div>
-      <div class="facet-group"><div class="facet-label">Trust tier</div>
-        <div class="facet-list">{tier_facets}</div></div>
-      <div class="facet-group"><div class="facet-label">Cost model</div>
-        <div class="facet-list">{cost_facets}</div></div>
+      <fieldset class="facet-group"><legend class="facet-label">Type</legend>
+        <div class="facet-list">{type_facets}{more_html}</div></fieldset>
+      <fieldset class="facet-group"><legend class="facet-label">Moodle version</legend>
+        <div class="facet-list">{ver_facets}{ver_more}</div></fieldset>
+      <fieldset class="facet-group"><legend class="facet-label">Trust tier</legend>
+        <div class="facet-list">{tier_facets}</div></fieldset>
+      <fieldset class="facet-group"><legend class="facet-label">Cost model</legend>
+        <div class="facet-list">{cost_facets}</div></fieldset>
     </aside>
     <div id="results" tabindex="-1">
       <h2 class="visually-hidden">Plugins</h2>
       <div class="results-head">
-        <span class="results-count" id="count"></span>
-        <div class="sorts"><span class="lbl">Sort</span>
-          <button class="sortbtn" data-sort="relevance">Relevance</button>
-          <button class="sortbtn" data-sort="stars">Stars</button>
-          <button class="sortbtn" data-sort="recent">Recent</button>
-          <button class="sortbtn" data-sort="az">A–Z</button>
+        <p class="results-count" id="count" role="status" aria-live="polite"
+          aria-atomic="true">{total:,} plugins found.</p>
+        <div class="sorts" role="group" aria-labelledby="sort-lbl">
+          <span class="lbl" id="sort-lbl">Sort</span>
+          <button class="sortbtn" data-sort="relevance" aria-pressed="false">Relevance</button>
+          <button class="sortbtn" data-sort="stars" aria-pressed="false">Stars</button>
+          <button class="sortbtn" data-sort="recent" aria-pressed="false">Recent</button>
+          <button class="sortbtn" data-sort="az" aria-pressed="false">A–Z</button>
         </div>
       </div>
       <div class="chips" id="chips" style="display:none"></div>
@@ -1535,7 +1568,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
         <a href="/all.html">complete plain index</a>.</p></noscript>
       <div class="empty" id="empty" style="display:none">
         No plugins match these filters.
-        <button class="sortbtn active" id="clear-empty">Clear all filters</button>
+        <button class="sortbtn outline" id="clear-empty">Clear all filters</button>
       </div>
     </div>
   </div>
