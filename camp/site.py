@@ -299,6 +299,8 @@ legend.facet-label{padding:0}
 footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   font-family:var(--mono);font-size:0.875rem;color:var(--text-subtle);
   display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+footer .fine{font-size:0.75rem;align-self:flex-end}
+footer .build{display:block;margin-top:4px}
 
 /* ---- plugin detail page ---- */
 .detail{max-width:860px;margin:0 auto;padding:34px 32px 90px}
@@ -1495,8 +1497,8 @@ def _footer(wrap: bool = True) -> str:
     inner = (f"""<footer>
   <span>CAMP is a community-governed archive of plugins for Moodle™.
   Open data, mirrorable by anyone.</span>
-  <span>Not affiliated with or endorsed by Moodle Pty Ltd.
-  <span>· camp-tools v{TOOLS_VERSION} · built {built}</span></span>
+  <span class="fine">Not affiliated with or endorsed by Moodle Pty Ltd.
+  <span class="build">camp-tools v{TOOLS_VERSION} · built {built}</span></span>
 </footer>""")
     return f'<div class="wrap">{inner}</div>' if wrap else inner
 
