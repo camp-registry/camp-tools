@@ -279,9 +279,10 @@ legend.facet-label{padding:0}
   font-family:var(--mono);font-size:0.78125rem;color:var(--faint-label);flex-wrap:wrap}
 .hdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;
   vertical-align:1px}
-.row-rail{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none;
+.row-rail{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:8px;flex:none;
   padding-top:2px}
-.row-cost{font-family:var(--mono);font-size:0.75rem;color:var(--text-subtle)}
+.row-cost{font-family:var(--mono);font-size:0.75rem;color:var(--text-secondary);
+  border:1px solid var(--border-strong);border-radius:999px;padding:2px 10px}
 .row-arrow{font-size:1rem;color:var(--faint-2)}
 .empty{text-align:center;padding:70px 0;font-family:var(--mono);font-size:0.875rem;
   color:var(--muted)}
@@ -677,8 +678,7 @@ BROWSE_JS = """
   var HEALTH = {0:['Archived upstream','var(--text-subtle)'],
     1:['Actively maintained','var(--ok-text)'], 2:['Maintained','var(--ok-text)'],
     3:['Slowing down','var(--warn-text)'], 4:['Dormant','var(--bad-text)']};
-  var COST = {'paid-service':'Paid service', 'freemium':'Freemium',
-    'fully-free':'Fully free'};
+  var COST = {'paid-service':'Paid service', 'freemium':'Freemium'};
   var TIERS = ['Discovered','Claimed','Verified','Reviewed'];
 
   var state = {q:'', group:'', ver:'', tier:'', cost:'', health:'', sort:'relevance'};
@@ -1375,10 +1375,10 @@ LABEL_NAMES = {
 
 def _cost_text(entry: dict) -> str:
     labels = entry.get("labels", [])
-    for key in ("paid-service", "freemium", "fully-free"):
+    for key in ("paid-service", "freemium"):
         if key in labels:
-            return {"paid-service": "Paid service", "freemium": "Freemium",
-                    "fully-free": "Fully free"}[key]
+            return {"paid-service": "Paid service",
+                    "freemium": "Freemium"}[key]
     return ""
 
 
