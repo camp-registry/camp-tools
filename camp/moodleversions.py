@@ -12,9 +12,11 @@ works on later branches too, but the registry does not invent claims the
 author didn't make (authors can widen it via --supported-moodle or a new
 release).
 
-BRANCHES must be extended as Moodle releases; codes through 5.0 are the
-published release versions, 5.1/5.2 entries follow the release cadence and
-should be confirmed against upstream when 5.x entries first matter.
+BRANCHES must be extended as Moodle releases. All codes through 5.2 are
+verified against upstream tags (July 2026; 5.1 = 20251006, 5.2 =
+20260420). NB: core's own version.php moved to public/version.php in
+Moodle 5.1 — irrelevant here (plugins keep their layout) but a trap for
+anything that ever reads the core file.
 """
 
 from __future__ import annotations
