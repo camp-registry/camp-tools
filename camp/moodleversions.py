@@ -115,3 +115,21 @@ def check_upstream(ls_remote: str | None = None,
                     else f"    ({code}, \"{name}\", <branching-date>00),"),
         })
     return sorted(findings, key=lambda f: f["code"])
+
+
+def next_branch(name: str) -> str | None:
+    """The branch after `name` in release order (4.5 -> 5.0), or None if
+    `name` is the newest known branch."""
+    names = branch_names()
+    try:
+        i = names.index(name)
+    except ValueError:
+        return None
+    return names[i + 1] if i + 1 < len(names) else None
+
+
+def branches_known_at(yyyymmdd: int) -> list[str]:
+    """Branches that existed (had branched) on a given date — used to
+    distinguish an author's deliberate exclusion from mere ignorance of
+    branches that didn't exist yet."""
+    return [name for _, name, first in BRANCHES if first // 100 <= yyyymmdd]

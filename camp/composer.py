@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 from .advisory import AdvisorySet
+from .moodleversions import branch_names, branches_known_at, next_branch
 from .validate import load_entry
 
 PLUGIN_TYPE_PREFIX = "moodle-"
@@ -73,6 +74,13 @@ def package_definition(entry: dict, base_url: str,
                 "moodle/moodle-composer-installer": "*",
                 "php": f">={release.get('php-min', '7.4')}",
             },
+            # Branch compatibility as resolver-visible constraints. conflict
+            # (not require): it only bites when moodle/moodle is actually in
+            # the dependency graph — tree-only installs are untouched. The
+            # upper bound exists only when the author deliberately stopped
+            # short of a branch that already existed at publish time; camp
+            # doesn't invent claims in either direction.
+            **_core_conflict(release),
             "extra": {
                 "camp": {
                     "component": component,
@@ -93,6 +101,20 @@ def package_definition(entry: dict, base_url: str,
             versions[version]["extra"]["camp"]["moved-to"] = entry["moved-to"]
 
     return name, versions
+
+
+def _core_conflict(release: dict) -> dict:
+    supported = [b for b in release.get("supported-moodle") or []
+                 if b in branch_names()]
+    if not supported:
+        return {}
+    parts = [f"<{supported[0]}"]
+    successor = next_branch(supported[-1])
+    published = str(release.get("published", "")).replace("-", "")[:8]
+    if successor and published.isdigit() and \
+            successor in branches_known_at(int(published)):
+        parts.append(f">={successor}")
+    return {"conflict": {"moodle/moodle": " || ".join(parts)}}
 
 
 def generate(index_dir: str | Path, base_url: str,
