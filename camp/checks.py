@@ -55,16 +55,21 @@ def _fetch_prior(reuse: str, component: str) -> dict | None:
     return doc
 
 
+# Fixed-colour consumers (shields-style badge JSON) map semantic status to
+# hex here; the site renders status as theme-aware CSS classes instead.
+STATUS_COLORS = {"ok": "#23854f", "warn": "#fe7d37", "bad": "#e05d44"}
+
+
 def chip(summary: dict) -> tuple[str, str]:
-    """(text, color) for rendering a check summary."""
+    """(text, status) for rendering a check summary; status is ok|warn|bad."""
     if not summary.get("phplint", True):
-        return ("parse errors", "#e05d44")
+        return ("parse errors", "bad")
     errors, warnings = summary.get("errors", 0), summary.get("warnings", 0)
     if errors:
-        return (f"{errors} errors · {warnings} warnings", "#fe7d37")
+        return (f"{errors} errors · {warnings} warnings", "warn")
     if warnings:
-        return (f"0 errors · {warnings} warnings", "#23854f")
-    return ("clean", "#23854f")
+        return (f"0 errors · {warnings} warnings", "ok")
+    return ("clean", "ok")
 
 
 def load(checks_dir: str | Path | None, component: str) -> dict | None:

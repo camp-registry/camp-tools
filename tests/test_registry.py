@@ -214,9 +214,9 @@ def test_code_check_chip_and_badge(index_dir, tmp_path):
     badge = (out / "badge" / "mod_example-checks.svg").read_text()
     assert "CAMP check" in badge
 
-    assert chip({"phplint": False}) == ("parse errors", "#e05d44")
+    assert chip({"phplint": False}) == ("parse errors", "bad")
     assert chip({"phplint": True, "errors": 3, "warnings": 1})[0] == "3 errors · 1 warnings"
-    assert chip({"phplint": True, "errors": 0, "warnings": 0}) == ("clean", "#23854f")
+    assert chip({"phplint": True, "errors": 0, "warnings": 0}) == ("clean", "ok")
 
 
 def test_release_history_multiple_versions_and_revocation(index_dir, entry_path, tmp_path):

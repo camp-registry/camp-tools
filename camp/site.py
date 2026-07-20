@@ -116,6 +116,7 @@ CSS = FONT_CSS + """
   --green-border:oklch(0.85 0.03 150); --green-bg:oklch(0.97 0.02 150);
   --green-head:oklch(0.4 0.09 150); --green-body:oklch(0.38 0.04 150);
   --amber:oklch(0.62 0.12 65); --red:oklch(0.55 0.15 30);
+  --ok-text:#23854f; --warn-text:#fe7d37; --bad-text:#e05d44;
   --scrim:oklch(0.24 0.012 65 / 0.42); --shadow:oklch(0.24 0.012 65 / 0.14);
   --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --serif:'Playfair Display',Georgia,serif;
@@ -132,6 +133,7 @@ CSS = FONT_CSS + """
   --green-border:oklch(0.42 0.06 150); --green-bg:oklch(0.27 0.05 150);
   --green-head:oklch(0.78 0.1 150); --green-body:oklch(0.74 0.06 150);
   --amber:oklch(0.74 0.12 65); --red:oklch(0.7 0.15 30);
+  --ok-text:#23854f; --warn-text:#fe7d37; --bad-text:#e05d44;
   --scrim:oklch(0.1 0.006 75 / 0.62); --shadow:oklch(0 0 0 / 0.55);
 }
 *{box-sizing:border-box;margin:0}
@@ -348,6 +350,10 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .lnote{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);
   font-size:11.5px;color:var(--muted)}
 .cc-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chk-ok{color:var(--ok-text)}
+.chk-warn{color:var(--warn-text)}
+.chk-bad{color:var(--bad-text)}
+.chk-muted{color:var(--faint)}
 .cchip{display:inline-flex;font-family:var(--mono);font-size:10.5px;
   border-radius:2px;overflow:hidden;border:1px solid var(--border-strong)}
 .cchip .l{background:var(--surface);color:var(--muted);padding:2px 7px}
@@ -367,9 +373,18 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 
 /* versions table */
 .vtable{margin-top:8px}
-.vrow{display:grid;grid-template-columns:86px 130px 1fr 1fr 44px;gap:12px;
+.vrows{list-style:none;margin:0;padding:0}
+.vrow{display:grid;grid-template-columns:1fr 44px;gap:12px;
   padding:10px 8px;border-bottom:1px solid var(--border);font-size:13px;
-  align-items:baseline;cursor:pointer;border-radius:2px}
+  align-items:baseline;border-radius:2px}
+.vsel{display:grid;grid-template-columns:86px 130px 1fr 1fr;gap:12px;
+  align-items:baseline;width:100%;background:none;border:0;padding:0;
+  font:inherit;color:inherit;text-align:left;cursor:pointer}
+.vrow.revoked{grid-template-columns:86px 130px 1fr 1fr 44px}
+.vrow .v::before{content:"" / "";display:inline-block;width:15px}
+.vrow.sel .v::before{content:"✓" / ""}
+.vhead span:first-child{padding-left:15px}
+.vm{display:none}
 .vrow:hover{background:var(--surface)}
 .vrow.sel{background:var(--accent-soft)}
 .vrow .v{font-family:var(--mono);font-weight:600;color:var(--ink)}
@@ -387,6 +402,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vrow .vrev:hover .vrev-full{display:block}
 .vhead{font-size:10px;letter-spacing:.14em;text-transform:uppercase;
   color:var(--faint-label);font-family:var(--mono);
+  grid-template-columns:86px 130px 1fr 1fr 44px;
   border-bottom:1px solid var(--border)}
 .vhead:hover{background:transparent}
 .vhead span{font-weight:400}
@@ -398,7 +414,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vrow .d{color:var(--muted)}
 .vrow .chk{font-family:var(--mono);font-size:11.5px}
 .vrow .zl{font-family:var(--mono);font-size:11px;text-align:right}
-.vrow.revoked{cursor:default;opacity:.6}
+.vrow.revoked{opacity:.6}
 .vrow.revoked .v{text-decoration:line-through}
 .vrow.revoked:hover{background:transparent}
 .vmore{border-top:1px solid var(--border)}
@@ -408,8 +424,13 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vmore summary::before{content:"▸ "}
 .vmore[open] summary::before{content:"▾ "}
 .vmore summary:hover{color:var(--ink)}
-@media(max-width:640px){.vrow{grid-template-columns:70px 1fr 44px}
-  .vrow .chk,.vrow .rng{display:none}}
+@media(max-width:640px){
+  .vsel{grid-template-columns:70px 1fr}
+  .vrow.revoked,.vhead{grid-template-columns:70px 1fr 44px}
+  .vrow .chk,.vrow .rng{display:none}
+  /* the hidden columns' information resurfaces inside the control (1.4.10) */
+  .vsel .vm,.vrow.revoked .vm{display:block;grid-column:1/-1;
+    font-family:var(--mono);font-size:11.5px;color:var(--muted)}}
 
 /* screenshots */
 .shots{margin-top:26px;max-width:620px}
@@ -908,10 +929,23 @@ BROWSE_JS = """
 COPY_JS = """
 document.addEventListener('DOMContentLoaded', function(){
   var b = document.getElementById('copy-install');
+  var copyStatus = document.getElementById('copy-status');
   if (b) b.addEventListener('click', function(){
-    if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.cmd);
-    b.textContent = 'Copied';
-    setTimeout(function(){ b.textContent = 'Copy'; }, 1600);
+    // Success is reported only when the clipboard write actually resolves;
+    // failure gets a manual-copy instruction. Focus stays on the button.
+    var done = function(ok){
+      if (copyStatus) copyStatus.textContent = ok
+        ? 'Install command copied to clipboard.'
+        : 'The command could not be copied. Select and copy it manually.';
+      if (ok){
+        b.textContent = 'Copied';
+        setTimeout(function(){ b.textContent = 'Copy'; }, 1600);
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(b.dataset.cmd)
+        .then(function(){ done(true); }, function(){ done(false); });
+    else done(false);
   });
 
   // Version picker: repoint the facts rail at the newest release that
@@ -939,6 +973,20 @@ document.addEventListener('DOMContentLoaded', function(){
     return best;
   }
   function set(id, text){ var e = document.getElementById(id); if (e) e.textContent = text; }
+  var verStatus = document.getElementById('ver-status');
+  var announceReady = false;   // initial render must not produce chatter
+  function fmtRange(r){
+    return r.lo === r.hi ? VORDER[r.lo] : VORDER[r.lo] + ' – ' + VORDER[r.hi];
+  }
+  // One path renders selection state, so the class and ARIA never diverge.
+  function selectRow(v){
+    document.querySelectorAll('.vsel[data-ver]').forEach(function(btn){
+      var on = btn.dataset.ver === v;
+      btn.setAttribute('aria-pressed', String(on));
+      var li = btn.closest('.vrow');
+      if (li) li.classList.toggle('sel', on);
+    });
+  }
   function render(r, noteText){
     var note = document.getElementById('pick-note');
     if (noteText){ note.textContent = noteText; note.style.display = ''; }
@@ -963,7 +1011,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (cc){
       if (r.check){
         cc.textContent = r.check.text;
-        cc.style.color = r.check.color;
+        cc.className = 'chk-' + r.check.status;
         var m = document.getElementById('cc-meta');
         if (m) m.textContent = r.check.tag;
         var box = document.getElementById('cc-chips');
@@ -999,16 +1047,19 @@ document.addEventListener('DOMContentLoaded', function(){
         }
       } else {
         cc.textContent = 'not yet checked';
-        cc.style.color = 'var(--faint)';
+        cc.className = 'chk-muted';
         var m2 = document.getElementById('cc-meta');
         if (m2) m2.textContent = r.tag;
         var box2 = document.getElementById('cc-chips');
         if (box2) box2.innerHTML = '';   // never show another version's chips
       }
     }
-    document.querySelectorAll('.rel-row').forEach(function(row){
-      row.classList.toggle('sel', row.dataset.ver === r.v);
-    });
+    selectRow(r.v);
+    if (announceReady && verStatus){
+      verStatus.textContent = noteText ||
+        ('Version ' + r.v + ' selected. Compatible with Moodle ' +
+         fmtRange(r) + '.');
+    }
   }
   function apply(branch){
     var r = bestFor(branch);
@@ -1035,9 +1086,9 @@ document.addEventListener('DOMContentLoaded', function(){
         '. Newest for Moodle ' + pick.value + ' is v' + best.v + '.'
       : null);
   }
-  document.querySelectorAll('.rel-row[data-ver]').forEach(function(row){
-    row.addEventListener('click', function(){
-      var r = releases.filter(function(x){ return x.v === row.dataset.ver; })[0];
+  document.querySelectorAll('.vsel[data-ver]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var r = releases.filter(function(x){ return x.v === btn.dataset.ver; })[0];
       if (r) applyVersion(r);
     });
   });
@@ -1048,6 +1099,7 @@ document.addEventListener('DOMContentLoaded', function(){
   var initial = (saved && options.indexOf(saved) !== -1) ? saved : options[0];
   pick.value = initial;
   apply(initial);
+  announceReady = true;
   pick.addEventListener('change', function(){
     try { localStorage.setItem('camp-moodle', pick.value); } catch(e){}
     apply(pick.value);
@@ -1733,8 +1785,9 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             }
             vcheck = checks_mod.for_version(check_doc, version.lstrip("v"))
             if vcheck:
-                text, color = checks_mod.chip(vcheck)
-                row["check"] = {"text": text, "color": color, "tag": vcheck["tag"],
+                text, status = checks_mod.chip(vcheck)
+                row["check"] = {"text": text, "status": status,
+                                "tag": vcheck["tag"],
                                 "phplint": vcheck.get("phplint", True),
                                 "files": vcheck.get("files", 0),
                                 "rules": vcheck.get("rules", {})}
@@ -1758,15 +1811,15 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                        '<a href="/how-it-works.html" class="qmark" '
                        'aria-label="What is the code check?">?</a>: ')
         if newest_check:
-            text, color = checks_mod.chip(newest_check)
+            text, status = checks_mod.chip(newest_check)
             check_line = (f'<div class="inst-meta">{check_label}'
-                          f'<b id="cc-text" style="color:{color}">{escape(text)}</b>'
+                          f'<b id="cc-text" class="chk-{status}">{escape(text)}</b>'
                           f' <span id="cc-meta"></span>'
                           f'<div class="cc-chips" id="cc-chips">'
                           f'{_check_chips(newest_check)}</div></div>')
         else:
             check_line = (f'<div class="inst-meta">{check_label}'
-                          '<b id="cc-text" style="color:var(--faint)">not yet '
+                          '<b id="cc-text" class="chk-muted">not yet '
                           'checked</b> <span id="cc-meta"></span>'
                           '<div class="cc-chips" id="cc-chips"></div></div>')
         rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
@@ -1802,6 +1855,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       <div class="pick-note" id="pick-note" style="display:none"></div>
       <div class="cmdline"><code id="cmd-text">{escape(cmd)}</code>
         <button id="copy-install" data-cmd="{escape(cmd)}">Copy</button></div>
+      <div id="copy-status" class="visually-hidden" role="status"></div>
+      <div id="ver-status" class="visually-hidden" role="status"></div>
     </div>
     <div class="right">
       <a class="btn act-secondary" id="zip-btn" href="{escape(_zip_url(artifacts_base, component, latest_v))}">Download ZIP</a>
@@ -1815,37 +1870,48 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             when = _fmt_date(r.get("released", r["published"]))
             rng = _moodle_range(r)
             if advisories.is_revoked(component, version):
-                return (f'<div class="vrow revoked"><span class="v">{escape(v)}</span>'
+                return (f'<li class="vrow revoked"><span class="v">{escape(v)}</span>'
                         f'<span class="d">{when}</span>'
                         f'<span class="d rng">Moodle {escape(rng)}</span>'
-                        f'<span class="chk" style="color:var(--red)">revoked</span>'
-                        f'<span class="zl"></span></div>')
+                        f'<span class="chk chk-bad">revoked</span>'
+                        f'<span class="zl"></span>'
+                        f'<span class="vm">Moodle {escape(rng)} · revoked</span></li>')
             vcheck = checks_mod.for_version(check_doc, v)
             if vcheck:
-                text, color = checks_mod.chip(vcheck)
-                chk = f'<span class="chk" style="color:{color}">{escape(text)}</span>'
+                text, status = checks_mod.chip(vcheck)
+                chk = f'<span class="chk chk-{status}">{escape(text)}</span>'
+                chk_vm = f" · {text}"
             else:
-                chk = ('<span class="chk" style="color:var(--faint)" '
+                chk = ('<span class="chk chk-muted" '
                        'title="not yet checked — the first code check runs at '
                        'the next publish">—</span>')
+                chk_vm = ""
             review = (reviews or {}).get(str(r.get("moodle-version", "")))
             rev = ""
             if review:
                 title = f'MDL Shield {review["grade"]} · {review["reviewed_at"]}'
                 # hover reveals the official badge (their suggestion) without
-                # disturbing the columns; the pill stays the compact anchor
+                # disturbing the columns; the pill is a span so it can live
+                # inside the select button (links never nest in buttons) —
+                # the Project row keeps the link to the full review
                 full_src = badge_src(review) if badge_src else None
                 full = (f'<img class="vrev-full" src="{escape(full_src)}" alt="">'
                         if full_src else "")
-                rev = (f'<a class="vrev" style="background:{review["color"]}" '
-                       f'href="{escape(review["review_url"] or MDLSHIELD_PLUGIN_URL + component)}" '
-                       f'title="{escape(title)}">{escape(review["grade"])}{full}</a>')
-            return (f'<div class="vrow rel-row" data-ver="{escape(v)}">'
+                rev = (f'<span class="vrev" style="background:{review["color"]}" '
+                       f'title="{escape(title)}">{escape(review["grade"])}{full}</span>')
+            # The whole row (minus the download link) is one native button:
+            # keyboard-operable release selection with programmatic state.
+            return (f'<li class="vrow rel-row">'
+                    f'<button type="button" class="vsel" data-ver="{escape(v)}" '
+                    f'aria-pressed="false">'
                     f'<span class="v">{escape(v)}{rev}</span>'
                     f'<span class="d">{when}</span>'
                     f'<span class="d rng">Moodle {escape(rng)}</span>'
                     f'{chk}'
-                    f'<a class="zl" href="{escape(_zip_url(artifacts_base, component, version))}">ZIP</a></div>')
+                    f'<span class="vm">Moodle {escape(rng)}{escape(chk_vm)}</span>'
+                    f'</button>'
+                    f'<a class="zl" href="{escape(_zip_url(artifacts_base, component, version))}" '
+                    f'aria-label="Download version {escape(v)} as ZIP">ZIP</a></li>')
         from .advisory import _version_key
         ordered = sorted(entry["releases"], reverse=True,
                          key=lambda r: _version_key(r["version"].split(" ")[0]))
@@ -1878,13 +1944,15 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                     label += f' ({revoked_n} revoked)'
                 label += ' · superseded by the releases above'
                 older_html = (f'<details class="vmore"><summary>{label}'
-                              f'</summary>{"".join(old_rows)}</details>')
+                              f'</summary><ul class="vrows">'
+                              f'{"".join(old_rows)}</ul></details>')
             vhead = ('<div class="vrow vhead"><span>Version</span>'
                      '<span>Released</span><span class="rng">Moodle</span>'
                      '<span class="chk">Code check</span><span></span></div>')
             versions_table = ('<h2 class="sect">All versions</h2>'
                               '<div class="vtable">' + vhead
-                              + "".join(cur_rows) + older_html + '</div>')
+                              + '<ul class="vrows">' + "".join(cur_rows)
+                              + '</ul>' + older_html + '</div>')
     else:
         install = """
   <div class="install-card">
@@ -2283,9 +2351,10 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
             summary = checks_mod.for_version(
                 doc, newest["version"].split(" ")[0].lstrip("v")) if newest else None
             if summary:
-                text, color = checks_mod.chip(summary)
+                text, status = checks_mod.chip(summary)
                 doc = {"schemaVersion": 1, "label": "CAMP check",
-                       "message": text, "color": color}
+                       "message": text,
+                       "color": checks_mod.STATUS_COLORS[status]}
                 (out / "badge").mkdir(parents=True, exist_ok=True)
                 (out / "badge" / f'{entry["component"]}-checks.json').write_text(
                     json.dumps(doc, sort_keys=True) + "\n")
