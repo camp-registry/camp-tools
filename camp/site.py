@@ -546,10 +546,13 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   place-items:center;flex:none}
 .step h3{font-size:1rem;font-weight:600;color:var(--ink)}
 .step p{margin-top:4px;font-size:0.875rem;color:var(--muted)}
-.tiergrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
-@media(max-width:860px){.tiergrid{grid-template-columns:1fr 1fr}}
-.tmini{border:1px solid var(--border);border-radius:5px;padding:14px 16px;background:var(--bg)}
-.tmini p{margin-top:8px;font-size:0.8125rem;color:var(--muted);line-height:1.5}
+.tiergrid{display:grid;grid-template-columns:1fr;gap:10px;margin-top:16px}
+.tmini{display:grid;grid-template-columns:200px 1fr;gap:6px 20px;align-items:start;
+  min-width:0;border:1px solid var(--border);border-radius:5px;padding:14px 16px;background:var(--bg)}
+@media(max-width:640px){.tmini{grid-template-columns:1fr}}
+.tb-art{display:inline-block;line-height:0;max-width:100%}
+.tb-art svg{max-width:100%;height:auto}
+.tmini p{margin:0;font-size:0.8125rem;color:var(--muted);line-height:1.5}
 .bigcard{border:1px solid var(--border);border-radius:6px;padding:26px 28px;
   background:var(--surface);margin-top:10px}
 .cta{margin-top:44px}
@@ -609,7 +612,6 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   .install-card .left,.install-card .right{min-width:0}
   .install-card .right{width:100%}
   .shot-grid{grid-template-columns:repeat(2,1fr)}
-  .tiergrid{grid-template-columns:1fr}
   .bigcard{padding:20px 18px}
   .how h1{font-size:1.6875rem}
   .narrow ul{padding-left:0}
@@ -1289,6 +1291,23 @@ def _check_chips(vcheck: dict) -> str:
 
 def _tier_badge(tier: int) -> str:
     return f'<span class="tb tb-{tier}">Tier {tier} · {TIER_NAMES[tier]}</span>'
+
+
+def _tier_artwork(tier: int) -> str:
+    """The literal tier shield (badge.py's own renderer) inlined, for the
+    how-it-works explainer — there the badge is the content being
+    explained, so artwork beats an HTML chip. Gradient/clip ids are
+    uniquified because three of these share the page."""
+    doc = badge_mod.endpoint_document(tier)
+    svg = badge_mod.render_svg(doc["label"], doc["message"], doc["color"])
+    for old in ("s", "r"):
+        svg = svg.replace(f'id="{old}"', f'id="{old}-t{tier}"').replace(
+            f"url(#{old})", f"url(#{old}-t{tier})")
+    # the standalone artifact carries no viewBox (fixed-size file); inlined
+    # in a grid it must be able to scale down, so derive one from its width
+    width = svg.split('width="', 1)[1].split('"', 1)[0]
+    svg = svg.replace('height="20"', f'height="20" viewBox="0 0 {width} 20"', 1)
+    return f'<span class="tb-art">{svg}</span>'
 
 
 def _rel_time(iso: str, today: datetime.date) -> str:
@@ -2332,13 +2351,13 @@ def _how_page() -> str:
       <div class="tmini">{_tier_badge(0)}<p>Found by the discovery scanner in
         the public ecosystem. Metadata only — no maintainer has claimed
         it yet, and nothing is hosted.</p></div>
-      <div class="tmini">{_tier_badge(1)}<p>A maintainer has claimed
+      <div class="tmini">{_tier_artwork(1)}<p>A maintainer has claimed
         ownership, declared a security contact and disclosure labels, and
         linked the canonical source repository.</p></div>
-      <div class="tmini">{_tier_badge(2)}<p>The archived package was
+      <div class="tmini">{_tier_artwork(2)}<p>The archived package was
         automatically confirmed to match the public source, byte for
         byte.</p></div>
-      <div class="tmini">{_tier_badge(3)}<p>Verified and additionally
+      <div class="tmini">{_tier_artwork(3)}<p>Verified and additionally
         reviewed by two independent members of the community review
         board.</p></div>
     </div>
