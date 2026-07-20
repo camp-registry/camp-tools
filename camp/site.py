@@ -404,18 +404,9 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vrow:hover{background:var(--surface)}
 .vrow.sel{background:var(--accent-soft)}
 .vrow .v{font-family:var(--mono);font-weight:600;color:var(--ink)}
-.vrow .vrev{display:inline-block;margin-left:7px;padding:1px 6px;border-radius:3px;
-  font:700 0.75rem var(--mono);color:#fff;vertical-align:1px;position:relative}
-.vrow .vrev:hover{opacity:.92}
-.vrow .vrev:not(:has(.vrev-full))::after{content:"MDL Shield security review";
-  display:none;position:absolute;left:0;bottom:calc(100% + 6px);z-index:5;
-  background:var(--ink);color:var(--bg);font:600 0.75rem var(--mono);
-  padding:4px 8px;border-radius:3px;white-space:nowrap}
-.vrow .vrev:not(:has(.vrev-full)):hover::after{display:block}
-.vrow .vrev-full{display:none;position:absolute;left:0;bottom:calc(100% + 6px);
-  z-index:5;height:20px;max-width:none;border-radius:3px;
-  box-shadow:0 2px 10px rgba(0,0,0,.45)}
-.vrow .vrev:hover .vrev-full{display:block}
+#rev-line .msbadge{height:18px;vertical-align:-5px}
+#rev-line .abadge{vertical-align:-3px}
+.rev-when{color:var(--muted)}
 .vhead{font-size:0.75rem;letter-spacing:.08em;text-transform:uppercase;
   color:var(--faint-label);font-family:var(--mono);
   grid-template-columns:86px 130px 1fr 1fr 44px;
@@ -1116,6 +1107,17 @@ document.addEventListener('DOMContentLoaded', function(){
         if (m2) m2.textContent = r.tag;
         var box2 = document.getElementById('cc-chips');
         if (box2) box2.innerHTML = '';   // never show another version's chips
+      }
+    }
+    var rl = document.getElementById('rev-line');
+    if (rl){
+      var rb = document.getElementById('rev-body');
+      if (r.review_html){
+        if (rb) rb.innerHTML = r.review_html;
+        rl.hidden = false;
+      } else {
+        if (rb) rb.innerHTML = '';
+        rl.hidden = true;
       }
     }
     selectRow(r.v);
@@ -1882,6 +1884,18 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                                 "phplint": vcheck.get("phplint", True),
                                 "files": vcheck.get("files", 0),
                                 "rules": vcheck.get("rules", {})}
+            # The security review follows the selected release inside the
+            # install card (prerendered so the server and the picker render
+            # identically); absence renders nothing, per the feed's model.
+            review = (reviews or {}).get(str(r.get("moodle-version", "")))
+            if review:
+                rev_href = escape(review["review_url"]
+                                  or MDLSHIELD_PLUGIN_URL + component)
+                row["review_html"] = (
+                    f'<a href="{rev_href}" class="msbadge-link">'
+                    f'{_review_badge(review, component, badge_src)}</a>'
+                    f' <span class="rev-when">reviewed '
+                    f'{escape(review["reviewed_at"])}</span>')
             releases_data.append(row)
         latest_v = latest["version"].split(" ")[0]
         if len(covered) > 1 or len(releases_data) > 1:
@@ -1913,6 +1927,17 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                           '<b id="cc-text" class="chk-muted">not yet '
                           'checked</b> <span id="cc-meta"></span>'
                           '<div class="cc-chips" id="cc-chips"></div></div>')
+        latest_row = next((row for row in releases_data
+                           if row["v"] == latest_v.lstrip("v")), None)
+        latest_review = (latest_row or {}).get("review_html", "")
+        # Absence means nothing, per the feed's privacy model: the line
+        # exists only when at least one release has a published review.
+        if any(row.get("review_html") for row in releases_data):
+            review_line = (f'<div class="inst-meta" id="rev-line"'
+                           f'{"" if latest_review else " hidden"}>'
+                           f'<span id="rev-body">{latest_review}</span></div>')
+        else:
+            review_line = ""
         rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
                                "package": package})
         install = f"""
@@ -1943,6 +1968,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       maintainer published. Verified
       <span id="vd-date">{_fmt_date(latest["published"])}</span>.</div></details>
       {check_line}
+      {review_line}
       <div class="pick-note" id="pick-note" style="display:none"></div>
       <div class="cmdline"><code id="cmd-text" tabindex="0" role="region"
         aria-label="Install command">{escape(cmd)}</code>
@@ -1978,27 +2004,14 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                        'title="not yet checked — the first code check runs at '
                        'the next publish">—</span>')
                 chk_vm = ""
-            review = (reviews or {}).get(str(r.get("moodle-version", "")))
-            rev = ""
-            if review:
-                title = f'MDL Shield {review["grade"]} · {review["reviewed_at"]}'
-                # hover reveals the official badge (their suggestion) without
-                # disturbing the columns; the pill is a span so it can live
-                # inside the select button (links never nest in buttons) —
-                # the Project row keeps the link to the full review
-                full_src = badge_src(review) if badge_src else None
-                full = (f'<img class="vrev-full" src="{escape(full_src)}" alt="">'
-                        if full_src else "")
-                rev = (f'<span class="vrev" '
-                       f'style="background:{review["color"]};'
-                       f'color:{_fg_for(review["color"])}" '
-                       f'title="{escape(title)}">{escape(review["grade"])}{full}</span>')
             # The whole row (minus the download link) is one native button:
             # keyboard-operable release selection with programmatic state.
+            # The MDL Shield grade lives in the install card, following the
+            # selection — a link cannot nest inside this button.
             return (f'<li class="vrow rel-row">'
                     f'<button type="button" class="vsel" data-ver="{escape(v)}" '
                     f'aria-pressed="false">'
-                    f'<span class="v">{escape(v)}{rev}</span>'
+                    f'<span class="v">{escape(v)}</span>'
                     f'<span class="d">{when}</span>'
                     f'<span class="d rng">Moodle {escape(rng)}</span>'
                     f'{chk}'
