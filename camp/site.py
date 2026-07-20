@@ -110,13 +110,15 @@ CSS = FONT_CSS + """
   --ink:oklch(0.24 0.012 65); --ink-soft:oklch(0.29 0.012 65); --text:oklch(0.34 0.012 68);
   --muted:oklch(0.44 0.012 70); --faint-label:oklch(0.52 0.012 70);
   --faint:oklch(0.57 0.012 72); --faint-2:oklch(0.72 0.01 80);
-  --border:oklch(0.88 0.01 80); --border-strong:oklch(0.8 0.012 80);
+  --border:oklch(0.88 0.01 80); --border-strong:oklch(0.64 0.012 80);
   --accent:oklch(0.52 0.12 264); --accent-hover:oklch(0.42 0.13 264); --accent-soft:oklch(0.93 0.02 264);
   --green:oklch(0.53 0.11 150); --green-text:oklch(0.47 0.09 150);
   --green-border:oklch(0.85 0.03 150); --green-bg:oklch(0.97 0.02 150);
   --green-head:oklch(0.4 0.09 150); --green-body:oklch(0.38 0.04 150);
   --amber:oklch(0.62 0.12 65); --red:oklch(0.55 0.15 30);
-  --ok-text:#23854f; --warn-text:#fe7d37; --bad-text:#e05d44;
+  --text-secondary:var(--muted); --text-subtle:oklch(0.5 0.012 72);
+  --ok-text:oklch(0.48 0.1 150); --warn-text:oklch(0.47 0.1 65); --bad-text:oklch(0.47 0.16 30);
+  --ok-fill:oklch(0.53 0.11 150); --warn-fill:oklch(0.48 0.12 65); --bad-fill:oklch(0.55 0.15 30);
   --scrim:oklch(0.24 0.012 65 / 0.42); --shadow:oklch(0.24 0.012 65 / 0.14);
   --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
   --serif:'Playfair Display',Georgia,serif;
@@ -127,13 +129,15 @@ CSS = FONT_CSS + """
   --ink:oklch(0.93 0.008 85); --ink-soft:oklch(0.86 0.008 85); --text:oklch(0.8 0.008 82);
   --muted:oklch(0.68 0.008 80); --faint-label:oklch(0.63 0.008 78);
   --faint:oklch(0.58 0.008 78); --faint-2:oklch(0.5 0.008 78);
-  --border:oklch(0.32 0.008 75); --border-strong:oklch(0.42 0.008 75);
+  --border:oklch(0.32 0.008 75); --border-strong:oklch(0.56 0.008 75);
   --accent:oklch(0.74 0.12 264); --accent-hover:oklch(0.82 0.12 264); --accent-soft:oklch(0.3 0.045 264);
   --green:oklch(0.62 0.13 150); --green-text:oklch(0.74 0.11 150);
   --green-border:oklch(0.42 0.06 150); --green-bg:oklch(0.27 0.05 150);
   --green-head:oklch(0.78 0.1 150); --green-body:oklch(0.74 0.06 150);
   --amber:oklch(0.74 0.12 65); --red:oklch(0.7 0.15 30);
-  --ok-text:#23854f; --warn-text:#fe7d37; --bad-text:#e05d44;
+  --text-secondary:var(--muted); --text-subtle:oklch(0.66 0.008 78);
+  --ok-text:oklch(0.72 0.11 150); --warn-text:oklch(0.74 0.12 65); --bad-text:oklch(0.72 0.14 30);
+  --ok-fill:oklch(0.5 0.11 150); --warn-fill:oklch(0.48 0.12 65); --bad-fill:oklch(0.52 0.15 30);
   --scrim:oklch(0.1 0.006 75 / 0.62); --shadow:oklch(0 0 0 / 0.55);
 }
 *{box-sizing:border-box;margin:0}
@@ -217,7 +221,7 @@ legend.facet-label{padding:0}
 .facet{display:flex;justify-content:space-between;align-items:center;width:100%;
   padding:7px 10px;border:0;border-radius:2px;background:transparent;cursor:pointer;
   font:13.5px var(--sans);color:var(--ink);text-align:left;gap:8px}
-.facet .n{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.facet .n{font-family:var(--mono);font-size:11px;color:var(--text-subtle)}
 .facet.active{background:var(--accent-soft);color:var(--accent);font-weight:500;
   box-shadow:inset 3px 0 0 0 currentColor}
 .facet.active .n{color:var(--accent)}
@@ -242,8 +246,8 @@ legend.facet-label{padding:0}
 .chip{display:inline-flex;align-items:center;gap:7px;padding:5px 10px 5px 12px;
   background:var(--surface);border:1px solid var(--border-strong);border-radius:2px;
   font:12px var(--mono);color:var(--ink);cursor:pointer}
-.chip .f{color:var(--faint)}
-.chip .x{color:var(--faint)}
+.chip .f{color:var(--text-subtle)}
+.chip .x{color:var(--text-subtle)}
 .chip:hover .x{color:var(--red)}
 .clear-all{background:none;border:0;cursor:pointer;font:12px var(--mono);color:var(--accent)}
 .rows{margin-top:6px}
@@ -256,7 +260,7 @@ legend.facet-label{padding:0}
 .row-name{font-family:var(--mono);font-weight:500;font-size:15px;color:var(--ink)}
 .vpill{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);
   font-size:11px;color:var(--green-text)}
-.vpill .c{width:14px;height:14px;border-radius:50%;background:var(--green);color:#fff;
+.vpill .c{width:14px;height:14px;border-radius:50%;background:var(--ok-fill);color:#fff;
   font-size:9px;line-height:14px;text-align:center;flex:none}
 .row-summary{margin-top:5px;font-size:13.5px;line-height:1.5;color:var(--muted);
   max-width:620px;text-wrap:pretty}
@@ -266,7 +270,7 @@ legend.facet-label{padding:0}
   vertical-align:1px}
 .row-rail{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none;
   padding-top:2px}
-.row-cost{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.row-cost{font-family:var(--mono);font-size:11px;color:var(--text-subtle)}
 .row-arrow{font-size:16px;color:var(--faint-2)}
 .empty{text-align:center;padding:70px 0;font-family:var(--mono);font-size:14px;
   color:var(--muted)}
@@ -275,14 +279,14 @@ legend.facet-label{padding:0}
 /* ---- tier badges ---- */
 .tb{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 8px;
   border-radius:2px;white-space:nowrap}
-.tb-0{background:transparent;color:var(--faint);border:1px solid var(--border)}
+.tb-0{background:transparent;color:var(--text-subtle);border:1px solid var(--border)}
 .tb-1{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
 .tb-2{background:transparent;color:var(--green-text);border:1px solid var(--green)}
-.tb-3{background:var(--green);color:#fff;font-weight:500;border:1px solid var(--green)}
+.tb-3{background:var(--ok-fill);color:#fff;font-weight:500;border:1px solid var(--ok-fill)}
 
 /* ---- footer ---- */
 footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
-  font-family:var(--mono);font-size:11.5px;color:var(--faint);
+  font-family:var(--mono);font-size:11.5px;color:var(--text-subtle);
   display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
 
 /* ---- plugin detail page ---- */
@@ -295,7 +299,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   font-family:var(--mono);font-size:11.5px;color:var(--faint-label)}
 .dsummary{margin-top:14px;font-size:15.5px;line-height:1.6;color:var(--text);
   max-width:660px}
-.attrib{font-size:12.5px;color:var(--faint-label);margin-top:8px;max-width:660px}
+.attrib{font-size:12.5px;color:var(--text-subtle);margin-top:8px;max-width:660px}
 .sect{font-family:var(--mono);font-size:11px;font-weight:400;text-transform:uppercase;
   letter-spacing:.16em;color:var(--faint-label);margin:36px 0 10px}
 
@@ -313,10 +317,10 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   border-radius:2px;cursor:pointer}
 .vline{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13.5px;
   margin-top:12px;color:var(--green-text)}
-.vline .c{width:16px;height:16px;border-radius:50%;background:var(--green);
+.vline .c{width:16px;height:16px;border-radius:50%;background:var(--ok-fill);
   color:#fff;font-size:10px;line-height:16px;text-align:center;flex:none}
 .vline.warn{color:var(--muted)}
-.vline.warn .c{background:var(--border-strong)}
+.vline.warn .c{background:var(--muted);color:var(--bg)}
 .vdetail{margin-top:7px;font-size:12px;line-height:1.5;color:var(--muted);
   max-width:520px}
 .vdetail summary{cursor:pointer;font-family:var(--mono);font-size:11px;
@@ -326,7 +330,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .inst-meta{margin-top:10px;font-family:var(--mono);font-size:11.5px;
   color:var(--faint-label)}
 .inst-meta b{color:var(--text);font-weight:600}
-.pick-note{margin-top:10px;font-size:12.5px;line-height:1.5;color:var(--amber);
+.pick-note{margin-top:10px;font-size:12.5px;line-height:1.5;color:var(--warn-text);
   max-width:520px}
 .cmdline{display:flex;align-items:center;gap:10px;margin-top:16px;
   background:var(--ink);color:var(--bg);border-radius:3px;padding:9px 12px;
@@ -339,12 +343,12 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   width:1px;background:var(--border)}
 .lstep{position:relative;padding:7px 0}
 .lstep::before{content:"✓";position:absolute;left:-26px;top:9px;width:17px;
-  height:17px;border-radius:50%;background:var(--green);color:#fff;font-size:10px;
+  height:17px;border-radius:50%;background:var(--ok-fill);color:#fff;font-size:10px;
   line-height:17px;text-align:center;font-weight:700}
 .lstep.planned::before{content:"○";background:var(--bg);color:var(--faint);
   border:1px solid var(--border-strong);line-height:15px}
 .lstep h3{font-size:12.5px;font-weight:600;color:var(--text)}
-.lstep.planned h3,.lstep.planned p{color:var(--faint-label)}
+.lstep.planned h3,.lstep.planned p{color:var(--text-subtle)}
 .lstep p{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:2px;
   word-break:break-all}
 .lnote{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);
@@ -353,15 +357,15 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .chk-ok{color:var(--ok-text)}
 .chk-warn{color:var(--warn-text)}
 .chk-bad{color:var(--bad-text)}
-.chk-muted{color:var(--faint)}
+.chk-muted{color:var(--text-subtle)}
 .cchip{display:inline-flex;font-family:var(--mono);font-size:10.5px;
   border-radius:2px;overflow:hidden;border:1px solid var(--border-strong)}
 .cchip .l{background:var(--surface);color:var(--muted);padding:2px 7px}
 .cchip .r{padding:2px 7px;font-weight:600;color:#fff}
-.cchip .r.ok{background:var(--green)}
-.cchip .r.bad{background:var(--red)}
-.cchip .r.warn{background:var(--amber)}
-.cchip .r.dim{background:var(--border-strong);color:var(--bg)}
+.cchip .r.ok{background:var(--ok-fill)}
+.cchip .r.bad{background:var(--bad-fill)}
+.cchip .r.warn{background:var(--warn-fill)}
+.cchip .r.dim{background:var(--bg);color:var(--text-secondary);font-weight:500}
 .kvrow .fv .mt-name{font-size:15px;font-weight:700;color:var(--ink)}
 .kvrow .fv .mt-sub{font-size:12.5px;color:var(--muted);margin-top:2px}
 .btn{display:block;text-align:center;padding:11px 16px;border-radius:2px;
@@ -390,7 +394,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vrow .v{font-family:var(--mono);font-weight:600;color:var(--ink)}
 .vrow .vrev{display:inline-block;margin-left:7px;padding:1px 6px;border-radius:3px;
   font:700 10px var(--mono);color:#fff;vertical-align:1px;position:relative}
-.vrow .vrev:hover{color:#fff;opacity:.92}
+.vrow .vrev:hover{opacity:.92}
 .vrow .vrev:not(:has(.vrev-full))::after{content:"MDL Shield security review";
   display:none;position:absolute;left:0;bottom:calc(100% + 6px);z-index:5;
   background:var(--ink);color:var(--bg);font:600 10.5px var(--mono);
@@ -481,19 +485,23 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .adv .id{font-family:var(--mono);font-size:11px;color:var(--faint-label);display:block;
   margin-top:4px}
 
+.attrib a,.banner a,.detail p a,.pick-note a,footer a,noscript a,
+.results-count a{text-decoration:underline;text-decoration-thickness:.1em;
+  text-underline-offset:.15em}
+
 /* project facts: one full-width row per field */
 .kv{margin-top:8px}
 .kvrow{display:flex;gap:26px;padding:13px 0;border-bottom:1px solid var(--border);
   align-items:baseline}
 .kvrow:last-child{border-bottom:0}
 .kvrow .fk{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;
-  letter-spacing:.1em;color:var(--faint);flex:none;width:170px}
+  letter-spacing:.1em;color:var(--text-subtle);flex:none;width:170px}
 .kvrow .fv{font-size:13.5px;color:var(--text);flex:1}
 .abadges{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .abadge{display:inline-flex;font-family:var(--mono);font-size:11px;border-radius:2px;
   overflow:hidden;border:1px solid var(--border-strong);color:inherit}
 .abadge .l{background:var(--ink);color:var(--bg);padding:3px 8px}
-.abadge .m{color:#fff;padding:3px 8px;font-weight:600}
+.abadge .m{padding:3px 8px;font-weight:600}
 .health-line{margin-top:12px;font-family:var(--mono);font-size:13px;
   color:var(--muted)}
 .labels{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
@@ -507,10 +515,10 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   vertical-align:1px}
 .tb{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;padding:2px 8px;
   border-radius:2px;white-space:nowrap}
-.tb-0{background:transparent;color:var(--faint);border:1px solid var(--border)}
+.tb-0{background:transparent;color:var(--text-subtle);border:1px solid var(--border)}
 .tb-1{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
 .tb-2{background:transparent;color:var(--green-text);border:1px solid var(--green)}
-.tb-3{background:var(--green);color:#fff;font-weight:500;border:1px solid var(--green)}
+.tb-3{background:var(--ok-fill);color:#fff;font-weight:500;border:1px solid var(--ok-fill)}
 
 /* ---- how page ---- */
 .how h1{font-family:var(--serif);font-weight:600;font-size:40px;line-height:1.1;
@@ -633,7 +641,7 @@ BROWSE_JS = """
 (function(){
   var VORDER = %(vorder)s;
   var CHUNK = 200;
-  var HEALTH = {0:['Archived upstream','var(--faint)'],
+  var HEALTH = {0:['Archived upstream','var(--text-subtle)'],
     1:['Actively maintained','var(--green)'], 2:['Maintained','var(--green)'],
     3:['Slowing down','var(--amber)'], 4:['Dormant','var(--red)']};
   var COST = {'paid-service':'Paid service', 'freemium':'Freemium',
@@ -1241,7 +1249,7 @@ def _health(entry: dict, today: datetime.date) -> tuple[str, str] | None:
     """(css color, label) from upstream activity, or None if unknown."""
     metrics = entry.get("metrics") or {}
     if metrics.get("archived"):
-        return ("var(--faint)", "Archived upstream")
+        return ("var(--text-subtle)", "Archived upstream")
     updated = metrics.get("updated")
     if not updated:
         return None
@@ -1394,7 +1402,7 @@ def _footer(wrap: bool = True) -> str:
   <span>CAMP is a community-governed archive of plugins for Moodle™.
   Open data, mirrorable by anyone.</span>
   <span>Not affiliated with or endorsed by Moodle Pty Ltd.
-  <span style="opacity:.75">· camp-tools v{TOOLS_VERSION} · built {built}</span></span>
+  <span>· camp-tools v{TOOLS_VERSION} · built {built}</span></span>
 </footer>""")
     return f'<div class="wrap">{inner}</div>' if wrap else inner
 
@@ -1656,6 +1664,24 @@ def _advisory_cards(component: str, advisories: AdvisorySet) -> str:
     return "\n".join(cards)
 
 
+def _fg_for(color: str) -> str:
+    """Black-or-white foreground for an externally supplied badge colour —
+    whichever contrasts more (item 18); non-hex input falls back to white."""
+    try:
+        hx = color.lstrip("#")
+        if len(hx) == 3:
+            hx = "".join(c * 2 for c in hx)
+        r, g, b = (int(hx[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except (ValueError, IndexError):
+        return "#fff"
+    def lin(u):
+        return u / 12.92 if u <= 0.04045 else ((u + 0.055) / 1.055) ** 2.4
+    lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    white = 1.05 / (lum + 0.05)
+    black = (lum + 0.05) / 0.05
+    return "#fff" if white >= black else "#111"
+
+
 def _review_badge(review: dict, component: str, badge_src) -> str:
     """MDL Shield's own badge (publish-fetched, sanitized, self-hosted) —
     or camp's HTML chip whenever the official artwork isn't available."""
@@ -1664,7 +1690,8 @@ def _review_badge(review: dict, component: str, badge_src) -> str:
         return (f'<img class="msbadge" src="{escape(src)}" '
                 f'alt="MDL Shield {escape(review["grade"])}">')
     return (f'<span class="abadge"><span class="l">MDL Shield</span>'
-            f'<span class="m" style="background:{review["color"]}">'
+            f'<span class="m" style="background:{review["color"]};'
+            f'color:{_fg_for(review["color"])}">'
             f'{escape(review["grade"])}</span></span>')
 
 
@@ -1897,7 +1924,9 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                 full_src = badge_src(review) if badge_src else None
                 full = (f'<img class="vrev-full" src="{escape(full_src)}" alt="">'
                         if full_src else "")
-                rev = (f'<span class="vrev" style="background:{review["color"]}" '
+                rev = (f'<span class="vrev" '
+                       f'style="background:{review["color"]};'
+                       f'color:{_fg_for(review["color"])}" '
                        f'title="{escape(title)}">{escape(review["grade"])}{full}</span>')
             # The whole row (minus the download link) is one native button:
             # keyboard-operable release selection with programmatic state.
@@ -2029,7 +2058,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         if doc is None:
             continue  # unfetchable or off-allowlist: omitted, never guessed
         chip = (f'<span class="abadge"><span class="l">{escape(doc["label"])}</span>'
-                f'<span class="m" style="background:{doc["color"]}">'
+                f'<span class="m" style="background:{doc["color"]};'
+                f'color:{_fg_for(doc["color"])}">'
                 f'{escape(doc["message"])}</span></span>')
         link = b.get("link", "")
         if link.startswith("https://"):
