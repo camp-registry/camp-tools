@@ -140,6 +140,13 @@ body{background:var(--bg);color:var(--text);font:15px/1.5 var(--sans);
 a{color:var(--accent);text-decoration:none}
 a:hover{color:var(--accent-hover)}
 .mono{font-family:var(--mono)}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.skip-link{position:absolute;left:-9999px;top:0;z-index:70;
+  background:var(--surface);color:var(--ink);padding:10px 16px;
+  border:1px solid var(--border-strong);border-radius:2px;font:13px var(--mono)}
+.skip-link:focus{left:12px;top:12px}
+.skip-inline:focus{position:static;display:inline-block;margin-bottom:10px}
 
 /* ---- header / nav ---- */
 .wrap{max-width:1180px;margin:0 auto;padding:0 32px}
@@ -197,6 +204,9 @@ nav a:hover{color:var(--ink)}
 /* ---- sidebar facets ---- */
 .sidebar{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow-y:auto}
 .facet-group{margin-bottom:26px}
+.facet-h{font-family:var(--mono);font-size:12px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.16em;color:var(--muted);
+  margin:0 0 16px}
 .facet-label{font-family:var(--mono);font-size:11px;text-transform:uppercase;
   letter-spacing:.16em;color:var(--faint-label);margin-bottom:8px}
 .facet-list{display:flex;flex-direction:column;gap:1px}
@@ -559,7 +569,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   .tiergrid{grid-template-columns:1fr}
   .bigcard{padding:20px 18px}
   .how h1{font-size:27px}
-  .narrow>ul{padding-left:0}
+  .narrow ul{padding-left:0}
 }
 """
 
@@ -1268,6 +1278,7 @@ def _page(title: str, body: str, *, description: str = "", extra_js: str = "") -
 <script>{THEME_JS}</script>
 </head>
 <body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
 {body}
 <script>{extra_js}</script>
 </body>
@@ -1278,7 +1289,7 @@ def _header() -> str:
     inner = f"""
   <a class="wordmark" href="/"><b>CAMP</b>
     <small>Community Archive of Plugins for Moodle</small></a>
-  <nav>
+  <nav aria-label="Primary">
     <a href="/">Browse</a>
     <a href="/how-it-works.html">How it works</a>
     <a href="https://github.com/camp-registry/camp-docs">Docs</a>
@@ -1291,7 +1302,7 @@ def _header() -> str:
     # One header everywhere: same container, same border. The prototype used
     # two treatments, but its plugin detail was a slide-over — page-to-page
     # navigation makes shifting header chrome visibly inconsistent.
-    return f'<div class="wrap"><div class="topbar">{inner}</div></div>'
+    return f'<header><div class="wrap"><div class="topbar">{inner}</div></div></header>'
 
 
 _BUILT = datetime.datetime.now(datetime.timezone.utc)
@@ -1462,6 +1473,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     body = f"""
 {_header()}
 <div class="wrap">
+<main id="main-content" tabindex="-1">
   <div class="hero">
     <h1>Every Moodle plugin, checked against its own source.</h1>
     <p>CAMP is an independent, community-governed archive of {total:,} Moodle
@@ -1481,7 +1493,8 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
   </div>
 
   <div class="searchbox">
-    <span class="glyph">⌕</span>
+    <label class="visually-hidden" for="q">Search plugins</label>
+    <span class="glyph" aria-hidden="true">⌕</span>
     <input id="q" type="search" autocomplete="off"
       placeholder="Search {total:,} plugins by name, purpose, or keyword…">
   </div>
@@ -1489,7 +1502,9 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
   <button class="filters-toggle" id="filters-toggle" aria-expanded="false">Filters</button>
 
   <div class="body-grid">
-    <aside class="sidebar">
+    <aside class="sidebar" aria-labelledby="filter-heading">
+      <a class="skip-link skip-inline" href="#results">Skip filters to results</a>
+      <h2 class="facet-h" id="filter-heading">Filter plugins</h2>
       <div class="facet-group"><div class="facet-label">Type</div>
         <div class="facet-list">{type_facets}{more_html}</div></div>
       <div class="facet-group"><div class="facet-label">Moodle version</div>
@@ -1499,7 +1514,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
       <div class="facet-group"><div class="facet-label">Cost model</div>
         <div class="facet-list">{cost_facets}</div></div>
     </aside>
-    <div>
+    <div id="results" tabindex="-1">
       <div class="results-head">
         <span class="results-count" id="count"></span>
         <div class="sorts"><span class="lbl">Sort</span>
@@ -1522,6 +1537,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
       </div>
     </div>
   </div>
+</main>
 {_footer(wrap=False)}
 </div>
 """
@@ -1693,8 +1709,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             options = "".join(
                 f'<option value="{v}">{v}</option>'
                 for v in VORDER[::-1] if v in covered)
-            for_moodle = (f'<span class="inst-for">for Moodle</span> '
-                          f'<select id="vpick" aria-label="Your Moodle version">'
+            for_moodle = (f'<label class="inst-for" for="vpick">for Moodle</label> '
+                          f'<select id="vpick">'
                           f'{options}</select>')
         else:
             for_moodle = (f'<span class="inst-for">for Moodle '
@@ -2011,6 +2027,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     body = f"""
 {_header()}
 <div class="detail">
+<main id="main-content" tabindex="-1">
   <a class="backlink" href="/">← Back to archive</a>
   <div class="crumb">{escape(_type_label(plugintype))}</div>
   <h1>{escape(name)}</h1>
@@ -2027,6 +2044,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
   {about}
   {advisory_html}
   {project}
+</main>
 {_footer(wrap=False)}
 </div>
 """
@@ -2042,6 +2060,7 @@ def _how_page() -> str:
     body = f"""
 {_header()}
 <div class="narrow how">
+<main id="main-content" tabindex="-1">
   <a class="backlink" href="/">← Back to archive</a>
   <h1>How CAMP keeps the archive trustworthy</h1>
   <p class="lead">CAMP exists to answer one question with confidence: is the
@@ -2107,6 +2126,7 @@ def _how_page() -> str:
     trust tier, and see every check before you install.</p>
     <a href="/">Browse the archive</a>
   </div>
+</main>
 {_footer(wrap=False)}
 </div>
 """
@@ -2210,10 +2230,11 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
         for e, _ in sorted(entries, key=lambda p: p[0]["component"]))
     (out / "all.html").write_text(_page(
         "All plugins — CAMP",
-        f'{_header()}<div class="narrow"><h1 style="font-family:var(--serif);'
+        f'{_header()}<div class="narrow"><main id="main-content" tabindex="-1">'
+        f'<h1 style="font-family:var(--serif);'
         f'color:var(--ink)">All {len(entries):,} plugins</h1>'
         f'<ul style="margin-top:18px;line-height:2;list-style:none">{all_rows}</ul>'
-        f'{_footer(wrap=False)}</div>'))
+        f'</main>{_footer(wrap=False)}</div>'))
 
     (out / "how-it-works.html").write_text(_how_page())
 
