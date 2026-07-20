@@ -283,7 +283,6 @@ legend.facet-label{padding:0}
   padding-top:2px}
 .row-cost{font-family:var(--mono);font-size:0.75rem;color:var(--text-secondary);
   border:1px solid var(--border-strong);border-radius:999px;padding:2px 10px}
-.row-arrow{font-size:1rem;color:var(--faint-2)}
 .empty{text-align:center;padding:70px 0;font-family:var(--mono);font-size:0.875rem;
   color:var(--muted)}
 .empty button{display:block;margin:16px auto 0}
@@ -798,13 +797,12 @@ BROWSE_JS = """
     }
     main.appendChild(meta);
     a.appendChild(main);
-    var rail = el('div', 'row-rail');
     var cost = (o.l || []).map(function(k){ return COST[k]; }).filter(Boolean)[0];
-    if (cost) rail.appendChild(el('span', 'row-cost', cost));
-    var arrow = el('span', 'row-arrow', '\u2192');
-    arrow.setAttribute('aria-hidden', 'true');
-    rail.appendChild(arrow);
-    a.appendChild(rail);
+    if (cost){
+      var rail = el('div', 'row-rail');
+      rail.appendChild(el('span', 'row-cost', cost));
+      a.appendChild(rail);
+    }
     return a;
   }
 
@@ -1663,10 +1661,8 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     {f'<div class="row-summary">{escape(summary)}</div>' if summary else ''}
     <div class="row-meta">{' '.join(f'<span>{b}</span>' for b in meta_bits)}</div>
   </div>
-  <div class="row-rail">
-    {f'<span class="row-cost">{escape(cost)}</span>' if cost else ''}
-    <span class="row-arrow" aria-hidden="true">→</span>
-  </div>
+  {f'<div class="row-rail"><span class="row-cost">{escape(cost)}</span></div>'
+   if cost else ''}
 </a>""")
 
     browse_js = BROWSE_JS % {"vorder": json.dumps(VORDER)}
