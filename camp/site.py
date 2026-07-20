@@ -621,6 +621,18 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   .how h1{font-size:1.6875rem}
   .narrow ul{padding-left:0}
 }
+
+/* ---- user display preferences ---- */
+@media (forced-colors: active){
+  .facet.active,.sortbtn.active[data-sort]{border:2px solid Highlight}
+  .vrow.sel{outline:2px solid Highlight;outline-offset:-2px}
+  .vsel[aria-pressed="true"]{text-decoration:underline}
+  /* the dot is informative colour paired with text; keep its colour */
+  .hdot{forced-color-adjust:none}
+}
+@media (prefers-reduced-motion: reduce){
+  body,.row-item{transition:none}
+}
 """
 
 # ---------------------------------------------------------------- js -------
