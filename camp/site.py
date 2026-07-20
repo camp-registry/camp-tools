@@ -516,7 +516,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   border:1px solid var(--border-strong);background:var(--surface);
   color:var(--text)}
 .msbadge{height:20px;display:inline-block;vertical-align:middle}
-.msbadge-link{line-height:0}
+.msbadge-link{line-height:0;display:inline-flex;gap:4px;align-items:center}
 .rev-item{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
 .rev-item:first-child{margin-top:0}
 .hdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;
@@ -1763,6 +1763,23 @@ def _review_badge(review: dict, component: str, badge_src) -> str:
             f'{escape(review["grade"])}</span></span>')
 
 
+MDLSHIELD_REVIEWED_BADGE = "https://img.shields.io/badge/MDL%20Shield-Reviewed-0f766e"
+
+
+def _reviewed_badge(badge_src) -> str:
+    """The strip's generic review signal: grades are per-release claims,
+    so the strip says only that published reviews exist. Same shields
+    renderer and fetch/sanitize/self-host pipeline as the grade pills;
+    camp's HTML chip when the artwork isn't available."""
+    src = badge_src({"badge_url": MDLSHIELD_REVIEWED_BADGE}) if badge_src else None
+    if src:
+        return (f'<img class="msbadge" src="{escape(src)}" '
+                f'alt="MDL Shield reviewed">')
+    return (f'<span class="abadge"><span class="l">MDL Shield</span>'
+            f'<span class="m" style="background:#0f766e;'
+            f'color:{_fg_for("#0f766e")}">Reviewed</span></span>')
+
+
 def _detail_page(entry: dict, listing: dict, base_url: str,
                  advisories: AdvisorySet, today: datetime.date,
                  checks_dir=None, shots=None, reviews=None,
@@ -1793,16 +1810,15 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             f'alt="camp {escape(badge_mod.TIER_BADGE_STYLE[tier][0])}"></a>']
     else:
         meta_bits = [_tier_badge(tier)]
-    # The strip carries the security review only when it covers the release
-    # the install card offers — an unqualified signal or none. Reviews of
-    # other versions render below, in Project, with their caveats.
-    strip_review = ((reviews or {}).get(str(latest.get("moodle-version", "")))
-                    if latest else None)
-    if strip_review:
+    # The strip's review signal is deliberately generic: a grade is a
+    # per-release claim, so the strip only says reviews exist and links
+    # to MDL Shield's plugin page. The graded pills render where a
+    # version is on screen — the install card and the Project history.
+    if reviews:
         meta_bits.append(
-            f'<a href="{escape(strip_review["review_url"] or MDLSHIELD_PLUGIN_URL + component)}" '
+            f'<a href="{MDLSHIELD_PLUGIN_URL}{escape(component)}" '
             f'class="msbadge-link">'
-            f'{_review_badge(strip_review, component, badge_src)}</a>')
+            f'{_reviewed_badge(badge_src)}</a>')
     # Health is a conclusion derived from update recency — it renders as
     # one phrase with its evidence, on its own line. Stars are popularity,
     # not trust: they live with the other repo metrics in Development.

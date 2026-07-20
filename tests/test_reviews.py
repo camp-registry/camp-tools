@@ -170,8 +170,11 @@ def test_official_badge_selfhosted_with_fallback(index_dir, tmp_path, monkeypatc
     site_generate(index_dir, "https://repo.test", out, reviews_source=feed)
     html = (out / "plugin" / "mod_example.html").read_text()
     assert '<img class="msbadge" src="/mdlshield/' in html
+    # the grade pill plus the strip's generic Reviewed badge, both self-hosted
+    assert 'alt="MDL Shield reviewed"' in html
     svgs = list((out / "mdlshield").glob("*.svg"))
-    assert len(svgs) == 1 and svgs[0].read_bytes() == SHIELDS_SAMPLE
+    assert len(svgs) == 2
+    assert all(p.read_bytes() == SHIELDS_SAMPLE for p in svgs)
 
     # failure path: no artwork -> camp's chip, never a broken image
     monkeypatch.setattr(reviews_mod, "fetch_badge_svg", lambda url: None)
