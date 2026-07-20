@@ -550,6 +550,11 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .tmini{display:grid;grid-template-columns:200px 1fr;gap:6px 20px;align-items:start;
   min-width:0;border:1px solid var(--border);border-radius:5px;padding:14px 16px;background:var(--bg)}
 @media(max-width:640px){.tmini{grid-template-columns:1fr}}
+.facet-help{display:inline-block;margin-top:8px;font-size:0.75rem;
+  color:var(--muted);text-decoration:underline;text-decoration-thickness:.1em;
+  text-underline-offset:.15em}
+.hterm{font-family:var(--mono);font-size:0.8125rem;font-weight:600;
+  white-space:nowrap}
 .tb-art{display:inline-block;line-height:0;max-width:100%}
 .tb-art svg{max-width:100%;height:auto}
 .tmini p{margin:0;font-size:0.8125rem;color:var(--muted);line-height:1.5}
@@ -676,7 +681,7 @@ BROWSE_JS = """
     'fully-free':'Fully free'};
   var TIERS = ['Discovered','Claimed','Verified','Reviewed'];
 
-  var state = {q:'', group:'', ver:'', tier:'', cost:'', sort:'relevance'};
+  var state = {q:'', group:'', ver:'', tier:'', cost:'', health:'', sort:'relevance'};
   var shown = CHUNK;
   var data = null;
   var list = document.getElementById('rows');
@@ -705,14 +710,14 @@ BROWSE_JS = """
       try { qs = sessionStorage.getItem('camp-browse') || ''; } catch(e){}
     }
     var p = new URLSearchParams(qs);
-    ['q','group','ver','tier','cost','sort'].forEach(function(k){
+    ['q','group','ver','tier','cost','health','sort'].forEach(function(k){
       if (p.get(k)) state[k] = p.get(k);
     });
     q.value = state.q;
   }
   function persist(){
     var p = new URLSearchParams();
-    ['q','group','ver','tier','cost'].forEach(function(k){
+    ['q','group','ver','tier','cost','health'].forEach(function(k){
       if (state[k]) p.set(k, state[k]);
     });
     if (state.sort !== 'relevance') p.set('sort', state.sort);
@@ -729,10 +734,13 @@ BROWSE_JS = """
       ver: !state.ver || (o.a >= 0 && (function(){
         var i = VORDER.indexOf(state.ver); return i >= o.a && i <= o.b; })()),
       tier: state.tier === '' || o.t === +state.tier,
-      cost: !state.cost || o.l.indexOf(state.cost) !== -1
+      cost: !state.cost || o.l.indexOf(state.cost) !== -1,
+      health: state.health === '' || o.h === +state.health
     };
   }
-  function allPass(f){ return f.q && f.group && f.ver && f.tier && f.cost; }
+  function allPass(f){
+    return f.q && f.group && f.ver && f.tier && f.cost && f.health;
+  }
 
   function cmp(a, b){ return a < b ? -1 : a > b ? 1 : 0; }
   var SORTS = {
@@ -825,7 +833,8 @@ BROWSE_JS = """
           && (f.g === 'group' ? true : fl.group)
           && (f.g === 'ver' ? true : fl.ver)
           && (f.g === 'tier' ? true : fl.tier)
-          && (f.g === 'cost' ? true : fl.cost);
+          && (f.g === 'cost' ? true : fl.cost)
+          && (f.g === 'health' ? true : fl.health);
         if (!others) continue;
         var hit;
         if (!f.v) hit = true;
@@ -835,6 +844,7 @@ BROWSE_JS = """
           hit = o.a >= 0 && i >= o.a && i <= o.b;
         }
         else if (f.g === 'tier') hit = o.t === +f.v;
+        else if (f.g === 'health') hit = o.h === +f.v;
         else hit = o.l.indexOf(f.v) !== -1;
         if (hit) counts[f.g + '|' + f.v]++;
       }
@@ -871,7 +881,8 @@ BROWSE_JS = """
     persist();
   }
 
-  var CHIP_FIELDS = {q:'search', group:'type', ver:'moodle', tier:'tier', cost:'cost'};
+  var CHIP_FIELDS = {q:'search', group:'type', ver:'moodle', tier:'tier',
+    cost:'cost', health:'health'};
   function chipLabel(k){
     if (k === 'q') return '\u201c' + state.q + '\u201d';
     var f = document.querySelector(
@@ -879,10 +890,12 @@ BROWSE_JS = """
     return f ? f.textContent : state[k];
   }
   function renderChips(){
-    var any = state.q || state.group || state.ver || state.tier || state.cost;
+    var any = state.q || state.group || state.ver || state.tier ||
+      state.cost || state.health;
     var ftBtn = document.getElementById('filters-toggle');
     if (ftBtn){
-      var n = ['group','ver','tier','cost'].filter(function(k){ return state[k]; }).length;
+      var n = ['group','ver','tier','cost','health']
+        .filter(function(k){ return state[k]; }).length;
       ftBtn.textContent = n ? 'Filters · ' + n + ' active' : 'Filters';
     }
     chipsEl.innerHTML = '';
@@ -916,6 +929,7 @@ BROWSE_JS = """
   }
   function clearAll(){
     state.q = state.group = state.ver = state.tier = state.cost = '';
+    state.health = '';
     q.value = ''; shown = CHUNK; apply();
   }
   var filtersToggle = document.getElementById('filters-toggle');
@@ -1548,6 +1562,15 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
         + _facet("cost", "donation-supported", "Donation-supported")
         + _facet("cost", "commercial-support-available", "Commercial support"))
 
+    # values are the same health codes the row records carry in "h"
+    health_facets = (
+        _facet("health", "", "Any health")
+        + _facet("health", "1", "Actively maintained", dot="var(--ok-text)")
+        + _facet("health", "2", "Maintained", dot="var(--ok-text)")
+        + _facet("health", "3", "Slowing down", dot="var(--warn-text)")
+        + _facet("health", "4", "Dormant", dot="var(--bad-text)")
+        + _facet("health", "0", "Archived upstream", dot="var(--text-subtle)"))
+
     HEALTH_CODE = {"Archived upstream": 0, "Actively maintained": 1,
                    "Maintained": 2, "Slowing down": 3, "Dormant": 4}
     records = []
@@ -1690,6 +1713,10 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
         <div class="facet-list">{ver_facets}{ver_more}</div></fieldset>
       <fieldset class="facet-group"><legend class="facet-label">Trust tier</legend>
         <div class="facet-list">{tier_facets}</div></fieldset>
+      <fieldset class="facet-group"><legend class="facet-label">Project health</legend>
+        <div class="facet-list">{health_facets}</div>
+        <a class="facet-help" href="/how-it-works.html#health">What do these
+        mean?</a></fieldset>
       <fieldset class="facet-group"><legend class="facet-label">Cost model</legend>
         <div class="facet-list">{cost_facets}</div></fieldset>
     </aside>
@@ -2361,6 +2388,25 @@ def _how_page() -> str:
         reviewed by two independent members of the community review
         board.</p></div>
     </div>
+  </div>
+
+
+  <div class="bigcard">
+    <h2 style="margin-top:0" id="health">Project health</h2>
+    <p style="color:var(--muted);font-size:0.90625rem">One phrase computed
+    from how recently the source repository changed, refreshed by the
+    registry's daily metrics sync. It measures momentum, not quality — a
+    stable plugin can be quiet and excellent.</p>
+    <div class="tiergrid">
+      <div class="tmini"><span class="hterm" style="color:var(--ok-text)"><span class="hdot" aria-hidden="true" style="background:var(--ok-text)"></span>Actively maintained</span><p>The source repository saw activity within the last 6 months.</p></div>
+      <div class="tmini"><span class="hterm" style="color:var(--ok-text)"><span class="hdot" aria-hidden="true" style="background:var(--ok-text)"></span>Maintained</span><p>Activity within the last 18 months.</p></div>
+      <div class="tmini"><span class="hterm" style="color:var(--warn-text)"><span class="hdot" aria-hidden="true" style="background:var(--warn-text)"></span>Slowing down</span><p>No activity for 18 months to 3 years.</p></div>
+      <div class="tmini"><span class="hterm" style="color:var(--bad-text)"><span class="hdot" aria-hidden="true" style="background:var(--bad-text)"></span>Dormant</span><p>No activity for more than 3 years.</p></div>
+      <div class="tmini"><span class="hterm" style="color:var(--text-subtle)"><span class="hdot" aria-hidden="true" style="background:var(--text-subtle)"></span>Archived upstream</span><p>The maintainer archived the repository — it is read-only and no longer developed, whatever its age.</p></div>
+    </div>
+    <p style="color:var(--muted);font-size:0.8125rem;margin-bottom:0">Plugins
+    the registry has no activity data for show no phrase at all — unknown is
+    not the same as dormant.</p>
   </div>
 
   <div class="cta">
