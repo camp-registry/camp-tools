@@ -290,7 +290,7 @@ legend.facet-label{padding:0}
 /* ---- tier badges ---- */
 .tb{font-family:var(--mono);font-size:0.75rem;letter-spacing:.06em;padding:2px 8px;
   border-radius:2px;white-space:nowrap}
-.tb-0{background:transparent;color:var(--text-subtle);border:1px solid var(--border)}
+.tb-0{background:transparent;color:var(--text-subtle);border:1px dashed var(--border-strong)}
 .tb-1{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
 .tb-2{background:transparent;color:var(--green-text);border:1px solid var(--green)}
 .tb-3{background:var(--ok-fill);color:#fff;font-weight:500;border:1px solid var(--ok-fill)}
@@ -525,7 +525,7 @@ footer .build{display:block;margin-top:4px}
   vertical-align:1px}
 .tb{font-family:var(--mono);font-size:0.75rem;letter-spacing:.06em;padding:2px 8px;
   border-radius:2px;white-space:nowrap}
-.tb-0{background:transparent;color:var(--text-subtle);border:1px solid var(--border)}
+.tb-0{background:transparent;color:var(--text-subtle);border:1px dashed var(--border-strong)}
 .tb-1{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
 .tb-2{background:transparent;color:var(--green-text);border:1px solid var(--green)}
 .tb-3{background:var(--ok-fill);color:#fff;font-weight:500;border:1px solid var(--ok-fill)}
