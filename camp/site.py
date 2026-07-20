@@ -675,8 +675,8 @@ BROWSE_JS = """
   var VORDER = %(vorder)s;
   var CHUNK = 200;
   var HEALTH = {0:['Archived upstream','var(--text-subtle)'],
-    1:['Actively maintained','var(--green)'], 2:['Maintained','var(--green)'],
-    3:['Slowing down','var(--amber)'], 4:['Dormant','var(--red)']};
+    1:['Actively maintained','var(--ok-text)'], 2:['Maintained','var(--ok-text)'],
+    3:['Slowing down','var(--warn-text)'], 4:['Dormant','var(--bad-text)']};
   var COST = {'paid-service':'Paid service', 'freemium':'Freemium',
     'fully-free':'Fully free'};
   var TIERS = ['Discovered','Claimed','Verified','Reviewed'];
@@ -1318,12 +1318,12 @@ def _health(entry: dict, today: datetime.date) -> tuple[str, str] | None:
         return None
     days = (today - then).days
     if days < 180:
-        return ("var(--green)", "Actively maintained")
+        return ("var(--ok-text)", "Actively maintained")
     if days < 540:
-        return ("var(--green)", "Maintained")
+        return ("var(--ok-text)", "Maintained")
     if days < 1095:
-        return ("var(--amber)", "Slowing down")
-    return ("var(--red)", "Dormant")
+        return ("var(--warn-text)", "Slowing down")
+    return ("var(--bad-text)", "Dormant")
 
 
 LABEL_NAMES = {
@@ -1944,7 +1944,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       <span id="vd-date">{_fmt_date(latest["published"])}</span>.</div></details>
       {check_line}
       <div class="pick-note" id="pick-note" style="display:none"></div>
-      <div class="cmdline"><code id="cmd-text">{escape(cmd)}</code>
+      <div class="cmdline"><code id="cmd-text" tabindex="0" role="region"
+        aria-label="Install command">{escape(cmd)}</code>
         <button id="copy-install" data-cmd="{escape(cmd)}">Copy</button></div>
       <div id="copy-status" class="visually-hidden" role="status"></div>
       <div id="ver-status" class="visually-hidden" role="status"></div>
