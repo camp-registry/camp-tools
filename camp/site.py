@@ -354,10 +354,10 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .ledger::before{content:"";position:absolute;left:8px;top:10px;bottom:10px;
   width:1px;background:var(--border)}
 .lstep{position:relative;padding:7px 0}
-.lstep::before{content:"✓";position:absolute;left:-26px;top:9px;width:17px;
+.lstep::before{content:"✓" / "";position:absolute;left:-26px;top:9px;width:17px;
   height:17px;border-radius:50%;background:var(--ok-fill);color:#fff;font-size:0.75rem;
   display:inline-grid;place-items:center;font-weight:700}
-.lstep.planned::before{content:"○";background:var(--bg);color:var(--faint);
+.lstep.planned::before{content:"○" / "";background:var(--bg);color:var(--faint);
   border:1px solid var(--border-strong)}
 .lstep h3{font-size:0.78125rem;font-weight:600;color:var(--text)}
 .lstep.planned h3,.lstep.planned p{color:var(--text-subtle)}
@@ -440,8 +440,8 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .vmore summary{cursor:pointer;padding:11px 10px;font-family:var(--mono);
   font-size:0.8125rem;color:var(--muted);list-style:none;user-select:none}
 .vmore summary::-webkit-details-marker{display:none}
-.vmore summary::before{content:"▸ "}
-.vmore[open] summary::before{content:"▾ "}
+.vmore summary::before{content:"▸ " / ""}
+.vmore[open] summary::before{content:"▾ " / ""}
 .vmore summary:hover{color:var(--ink)}
 @media(max-width:640px){
   .vsel{grid-template-columns:70px 1fr}
@@ -590,8 +590,8 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
     background:none;border:1px solid var(--border);border-radius:4px;
     padding:12px 14px;margin-top:14px;cursor:pointer;
     font:600 0.8125rem var(--mono);color:var(--muted)}
-  .filters-toggle::before{content:"▸ "}
-  .filters-toggle.open::before{content:"▾ "}
+  .filters-toggle::before{content:"▸ " / ""}
+  .filters-toggle.open::before{content:"▾ " / ""}
   .filters-toggle:hover{color:var(--ink)}
   .sidebar{display:none}
   .body-grid.filters-open .sidebar{display:block}
@@ -751,7 +751,9 @@ BROWSE_JS = """
     l1.appendChild(tb);
     if (o.t >= 2 && o.p){
       var vp = el('span', 'vpill');
-      vp.appendChild(el('span', 'c', '\u2713'));
+      var vc = el('span', 'c', '\u2713');
+      vc.setAttribute('aria-hidden', 'true');
+      vp.appendChild(vc);
       vp.appendChild(document.createTextNode('verified ' + relTime(o.p)));
       l1.appendChild(vp);
     }
@@ -762,19 +764,31 @@ BROWSE_JS = """
       var hspan = el('span', null);
       hspan.style.color = HEALTH[o.h][1];
       var dot = el('span', 'hdot'); dot.style.background = HEALTH[o.h][1];
+      dot.setAttribute('aria-hidden', 'true');
       hspan.appendChild(dot);
       hspan.appendChild(document.createTextNode(HEALTH[o.h][0]));
       meta.appendChild(hspan);
     }
     if (o.u) meta.appendChild(el('span', null, 'updated ' + relTime(o.u)));
-    if (o.h !== -1) meta.appendChild(el('span', null,
-      '\u2605 ' + o.s + ' \u00b7 ' + o.f + ' forks \u00b7 ' + o.o + ' open issues & PRs'));
+    if (o.h !== -1){
+      var stars = el('span', null);
+      stars.setAttribute('aria-label', o.s + ' GitHub stars, ' + o.f +
+        ' forks, ' + o.o + ' open issues and pull requests');
+      var glyph = el('span', null, '\u2605');
+      glyph.setAttribute('aria-hidden', 'true');
+      stars.appendChild(glyph);
+      stars.appendChild(document.createTextNode(' ' + o.s + ' \u00b7 ' + o.f +
+        ' forks \u00b7 ' + o.o + ' open issues & PRs'));
+      meta.appendChild(stars);
+    }
     main.appendChild(meta);
     a.appendChild(main);
     var rail = el('div', 'row-rail');
     var cost = (o.l || []).map(function(k){ return COST[k]; }).filter(Boolean)[0];
     if (cost) rail.appendChild(el('span', 'row-cost', cost));
-    rail.appendChild(el('span', 'row-arrow', '\u2192'));
+    var arrow = el('span', 'row-arrow', '\u2192');
+    arrow.setAttribute('aria-hidden', 'true');
+    rail.appendChild(arrow);
     a.appendChild(rail);
     return a;
   }
@@ -1046,16 +1060,25 @@ document.addEventListener('DOMContentLoaded', function(){
         var box = document.getElementById('cc-chips');
         if (box){
           box.innerHTML = '';
-          function chip(label, value, cls){
+          function chip(label, value, cls, name){
             var c = document.createElement('span'); c.className = 'cchip';
             var l = document.createElement('span'); l.className = 'l';
             l.textContent = label;
             var v = document.createElement('span'); v.className = 'r ' + cls;
-            v.textContent = value;
+            if (name){
+              v.setAttribute('aria-label', name);
+              var g = document.createElement('span');
+              g.setAttribute('aria-hidden', 'true');
+              g.textContent = value;
+              v.appendChild(g);
+            } else {
+              v.textContent = value;
+            }
             c.appendChild(l); c.appendChild(v); box.appendChild(c);
           }
           chip('phplint', r.check.phplint ? '\u2713' : '\u2717',
-               r.check.phplint ? 'ok' : 'bad');
+               r.check.phplint ? 'ok' : 'bad',
+               r.check.phplint ? 'PHP lint passed' : 'PHP lint failed');
           chip('phpcs',
                (r.check.text.indexOf('errors') !== -1 ? r.check.text
                  .replace(' errors \u00b7 ', ' | ').replace(' warnings', '')
@@ -1230,12 +1253,15 @@ def _check_chips(vcheck: dict) -> str:
     chips = []
     ok = vcheck.get("phplint", True)
     chips.append(f'<span class="cchip"><span class="l">phplint</span>'
-                 f'<span class="r {"ok" if ok else "bad"}">'
-                 f'{"✓" if ok else "✗"}</span></span>')
+                 f'<span class="r {"ok" if ok else "bad"}" '
+                 f'aria-label="PHP lint {"passed" if ok else "failed"}">'
+                 f'<span aria-hidden="true">{"✓" if ok else "✗"}</span>'
+                 f'</span></span>')
     errors, warnings = vcheck.get("errors", 0), vcheck.get("warnings", 0)
     cls = "ok" if errors == 0 else "bad"
     chips.append(f'<span class="cchip"><span class="l">phpcs</span>'
-                 f'<span class="r {cls}">{errors} | {warnings}</span></span>')
+                 f'<span class="r {cls}" aria-label="{errors} errors, '
+                 f'{warnings} warnings">{errors} | {warnings}</span></span>')
     if vcheck.get("files"):
         chips.append(f'<span class="cchip"><span class="l">files</span>'
                      f'<span class="r dim">{vcheck["files"]}</span></span>')
@@ -1432,7 +1458,8 @@ def _footer(wrap: bool = True) -> str:
 
 
 def _facet(group: str, value: str, text: str, *, dot: str = "") -> str:
-    dothtml = f'<span class="dot" style="background:{dot}"></span>' if dot else ""
+    dothtml = (f'<span class="dot" aria-hidden="true" style="background:{dot}"></span>'
+               if dot else "")
     return (f'<button class="facet" data-facet="{group}" data-value="{escape(value)}" '
             f'aria-pressed="false">'
             f'<span>{dothtml}<span class="t">{escape(text)}</span></span>'
@@ -1540,18 +1567,22 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
 
         vpill = ""
         if tier >= 2 and latest:
-            vpill = (f'<span class="vpill"><span class="c">✓</span>'
+            vpill = (f'<span class="vpill"><span class="c" aria-hidden="true">✓</span>'
                      f'verified {_rel_time(latest["published"], today)}</span>')
         meta_bits = []
         if health:
             color, label = health
             meta_bits.append(f'<span style="color:{color}">'
-                             f'<span class="hdot" style="background:{color}"></span>'
+                             f'<span class="hdot" aria-hidden="true" style="background:{color}"></span>'
                              f'{label}</span>')
         if updated:
             meta_bits.append(f'updated {_rel_time(updated, today)}')
         if metrics:
-            meta_bits.append(f'★ {stars} · {forks} forks · {openi} open issues & PRs')
+            meta_bits.append(
+                f'<span aria-label="{stars} GitHub stars, {forks} forks, '
+                f'{openi} open issues and pull requests">'
+                f'<span aria-hidden="true">★</span> {stars} · {forks} forks '
+                f'· {openi} open issues &amp; PRs</span>')
 
         # Search blob: component, display name (when a manifest provides
         # one), summary, and maintainer names/handles.
@@ -1576,7 +1607,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
   </div>
   <div class="row-rail">
     {f'<span class="row-cost">{escape(cost)}</span>' if cost else ''}
-    <span class="row-arrow">→</span>
+    <span class="row-arrow" aria-hidden="true">→</span>
   </div>
 </a>""")
 
@@ -1765,7 +1796,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         when = (f' · updated {_rel_time(metrics["updated"], today)}'
                 if metrics.get("updated") else "")
         health_line = (f'<div class="health-line"><span style="color:{color}">'
-                       f'<span class="hdot" style="background:{color}"></span>'
+                       f'<span class="hdot" aria-hidden="true" style="background:{color}"></span>'
                        f'{label}</span>{when}</div>')
     # Every declared disclosure label shows — not just the cost model —
     # on their own row beneath the strip.
@@ -1879,7 +1910,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       <div class="inst-head"><span class="inst-ver" id="zip-ver">{escape(latest_v.lstrip("v"))}</span>
         {for_moodle}
         <span class="inst-for">Moodle <span id="compat">{escape(_moodle_range(latest))}</span></span></div>
-      <div class="vline"><span class="c">✓</span> Verified against source</div>
+      <div class="vline"><span class="c" aria-hidden="true">✓</span> Verified against source</div>
       <details class="vdetail"><summary>verification ledger</summary>
       <div class="ledger">
         <div class="lstep"><h3>Source tagged by maintainer</h3>
@@ -2007,7 +2038,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         install = """
   <div class="install-card">
     <div class="left">
-      <div class="vline warn" style="margin-top:0"><span class="c">○</span>
+      <div class="vline warn" style="margin-top:0"><span class="c" aria-hidden="true">○</span>
         Not yet verified</div>
       <div class="vdetail">No package has been byte-matched to a public source
       release yet. Install from the author’s repository with additional
@@ -2058,7 +2089,9 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     # ---- project facts: one full-width row per field -----------------------
     dev_bits = []
     if metrics:
-        dev_bits.append(f'★ {metrics.get("stars", 0)} · '
+        dev_bits.append(f'<span aria-label="{metrics.get("stars", 0)} GitHub stars">'
+                        f'<span aria-hidden="true">★</span> '
+                        f'{metrics.get("stars", 0)}</span> · '
                         f'{metrics.get("forks", 0)} forks · '
                         f'{metrics.get("open-issues", 0)} open issues & PRs')
     if upstream.get("tag"):
@@ -2224,7 +2257,7 @@ def _how_page() -> str:
 
   <h2 class="visually-hidden">Why CAMP is trustworthy</h2>
   <div class="cards3">
-    <div class="tcard"><h3 class="kicker">✓ Verified against source</h3>
+    <div class="tcard"><h3 class="kicker"><span aria-hidden="true">✓ </span>Verified against source</h3>
       <p>Every published package is rebuilt deterministically from the
       maintainer’s tagged source and byte-compared. The hash match is
       public and anyone can reproduce it.</p></div>
