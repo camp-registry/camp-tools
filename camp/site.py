@@ -289,7 +289,7 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
 .dsummary{margin-top:14px;font-size:15.5px;line-height:1.6;color:var(--text);
   max-width:660px}
 .attrib{font-size:12.5px;color:var(--faint-label);margin-top:8px;max-width:660px}
-.sect{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+.sect{font-family:var(--mono);font-size:11px;font-weight:400;text-transform:uppercase;
   letter-spacing:.16em;color:var(--faint-label);margin:36px 0 10px}
 
 /* install card */
@@ -336,8 +336,8 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   line-height:17px;text-align:center;font-weight:700}
 .lstep.planned::before{content:"○";background:var(--bg);color:var(--faint);
   border:1px solid var(--border-strong);line-height:15px}
-.lstep h4{font-size:12.5px;font-weight:600;color:var(--text)}
-.lstep.planned h4,.lstep.planned p{color:var(--faint-label)}
+.lstep h3{font-size:12.5px;font-weight:600;color:var(--text)}
+.lstep.planned h3,.lstep.planned p{color:var(--faint-label)}
 .lstep p{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:2px;
   word-break:break-all}
 .lnote{margin-top:10px;padding-top:9px;border-top:1px dashed var(--border);
@@ -1480,14 +1480,15 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     plugins. Nothing earns a verified tier until it’s been checked against
     the maintainer’s own published source, and every check is public.</p>
   </div>
+  <h2 class="visually-hidden">Why use CAMP</h2>
   <div class="trust-band">
-    <div><span class="kicker">Verified against source</span>
+    <div><h3 class="kicker">Verified against source</h3>
       <p>Packages are rebuilt from the maintainer’s tagged release and
       hash-compared. A match is the only way to earn the badge.</p></div>
-    <div><span class="kicker">No accounts, no tracking</span>
+    <div><h3 class="kicker">No accounts, no tracking</h3>
       <p>Browsing and installing need no registration. The archive keeps no
       per-site data and mirrors see only anonymous downloads.</p></div>
-    <div><span class="kicker">Mirrorable by anyone</span>
+    <div><h3 class="kicker">Mirrorable by anyone</h3>
       <p>The whole archive is a static file tree plus a public git index.
       One rsync job makes a full mirror.</p></div>
   </div>
@@ -1515,6 +1516,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
         <div class="facet-list">{cost_facets}</div></div>
     </aside>
     <div id="results" tabindex="-1">
+      <h2 class="visually-hidden">Plugins</h2>
       <div class="results-head">
         <span class="results-count" id="count"></span>
         <div class="sorts"><span class="lbl">Sort</span>
@@ -1737,6 +1739,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
                                "package": package})
         install = f"""
+  <h2 class="visually-hidden">Download and compatibility</h2>
   <div class="install-card">
     <div class="left">
       <div class="inst-head"><span class="inst-ver" id="zip-ver">{escape(latest_v.lstrip("v"))}</span>
@@ -1745,17 +1748,17 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       <div class="vline"><span class="c">✓</span> Verified against source</div>
       <details class="vdetail"><summary>verification ledger</summary>
       <div class="ledger">
-        <div class="lstep"><h4>Source tagged by maintainer</h4>
+        <div class="lstep"><h3>Source tagged by maintainer</h3>
           <p>{escape(entry["source"].removeprefix("https://"))} @
           <span id="vd-tag">{escape(latest["tag"])}</span> · commit
           <span id="vd-commit">{latest["commit"][:12]}</span></p></div>
-        <div class="lstep"><h4>Rebuilt deterministically from that tag</h4>
+        <div class="lstep"><h3>Rebuilt deterministically from that tag</h3>
           <p>canonical ZIP, byte-identical on every rebuild</p></div>
-        <div class="lstep"><h4>Artifact hash recorded in the public index</h4>
+        <div class="lstep"><h3>Artifact hash recorded in the public index</h3>
           <p>sha256 <span id="vd-sha">{latest["zip-sha256"]}</span></p></div>
-        <div class="lstep planned"><h4>Release signed · trusted publishing</h4>
+        <div class="lstep planned"><h3>Release signed · trusted publishing</h3>
           <p>planned — TUF signing (RFC §4.3)</p></div>
-        <div class="lstep planned"><h4>Recorded in public transparency log</h4>
+        <div class="lstep planned"><h3>Recorded in public transparency log</h3>
           <p>planned — Sigstore/Rekor (RFC §4.3)</p></div>
       </div>
       <div class="lnote">Every step is independently verifiable. CAMP never
@@ -1846,7 +1849,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             vhead = ('<div class="vrow vhead"><span>Version</span>'
                      '<span>Released</span><span class="rng">Moodle</span>'
                      '<span class="chk">Code check</span><span></span></div>')
-            versions_table = ('<div class="sect">All versions</div>'
+            versions_table = ('<h2 class="sect">All versions</h2>'
                               '<div class="vtable">' + vhead
                               + "".join(cur_rows) + older_html + '</div>')
     else:
@@ -1884,7 +1887,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     about = ""
     attrib = ""
     if description:
-        about = (f'<div class="sect">About</div>'
+        about = (f'<h2 class="sect">About</h2>'
                  f'<div class="prose">{_render_description(description)}</div>')
     elif summary:
         attrib = (f'<div class="attrib">Summary from the source repository’s '
@@ -1898,7 +1901,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     advisory_html = ""
     advisory_items = advisories.for_component(component)
     if advisory_items:
-        advisory_html = (f'<div class="sect">Security advisories</div>'
+        advisory_html = (f'<h2 class="sect">Security advisories</h2>'
                          f'{_advisory_cards(component, advisories)}')
 
     # ---- project facts: one full-width row per field -----------------------
@@ -2021,7 +2024,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                        f'</span><div class="attrib" style="margin-top:6px">declared by '
                        f'the maintainer · fetched {escape(today.isoformat())}</div>'
                        f'</span></div>')
-    project = ('<div class="sect">Project</div><div class="kv">'
+    project = ('<h2 class="sect">Project</h2><div class="kv">'
                + "".join(kv_rows) + '</div>')
 
     body = f"""
@@ -2067,16 +2070,17 @@ def _how_page() -> str:
   plugin you are about to install the same code its maintainer actually
   published? Here is how that guarantee is built.</p>
 
+  <h2 class="visually-hidden">Why CAMP is trustworthy</h2>
   <div class="cards3">
-    <div class="tcard"><span class="kicker">✓ Verified against source</span>
+    <div class="tcard"><h3 class="kicker">✓ Verified against source</h3>
       <p>Every published package is rebuilt deterministically from the
       maintainer’s tagged source and byte-compared. The hash match is
       public and anyone can reproduce it.</p></div>
-    <div class="tcard"><span class="kicker">No accounts, no tracking</span>
+    <div class="tcard"><h3 class="kicker">No accounts, no tracking</h3>
       <p>No registration to browse or install. Security warnings work by
       downloading the full advisory feed and matching locally — the
       archive never learns what your site runs.</p></div>
-    <div class="tcard"><span class="kicker">Mirrorable by anyone</span>
+    <div class="tcard"><h3 class="kicker">Mirrorable by anyone</h3>
       <p>The archive is a static file tree plus a public git index. A full
       mirror is one rsync job, and mirrors need no trust: clients verify
       content, not servers.</p></div>
