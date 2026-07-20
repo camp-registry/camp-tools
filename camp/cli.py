@@ -499,7 +499,8 @@ def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
 
 def _cmd_enrich(args: argparse.Namespace) -> int:
     from .scan import enrich
-    enrich(args.index_dir, limit=args.limit, force=args.force, readme=not args.no_readme)
+    enrich(args.index_dir, limit=args.limit, force=args.force,
+           readme=not args.no_readme, stale_days=args.stale_days)
     return 0
 
 
@@ -723,6 +724,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="refresh entries even if they already have metrics/summary")
     p.add_argument("--no-readme", action="store_true",
                    help="skip the README summary fallback (metrics only)")
+    p.add_argument("--stale-days", type=int, default=None,
+                   help="also refresh entries whose metrics are older than "
+                   "this many days (rolling refresh; combine with --limit)")
     p.set_defaults(func=_cmd_enrich)
 
     p = sub.add_parser("recheck-licenses",

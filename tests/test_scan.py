@@ -305,3 +305,92 @@ def test_request_survives_timeout(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(TimeoutError()))
     status, body, headers = scan._request("https://api.github.com/x", token=None)
     assert status == 0 and body == b""
+
+
+def test_enrich_detects_renamed_repos(tmp_path, monkeypatch):
+    """GitHub 301s renamed repos forever, so metrics keep flowing under the
+    stale name — only comparing full_name catches a migration. Tier 0 gets
+    auto-canonicalized; claimed entries are flagged, never rewritten."""
+    import json as _json
+
+    import yaml as _yaml
+
+    import camp.scan as scan_mod
+
+    index = tmp_path / "index"
+    for name, tier in (("mod_zero", 0), ("mod_claimed", 2)):
+        d = index / "plugins" / "mod"
+        d.mkdir(parents=True, exist_ok=True)
+        entry = {"component": name, "source": f"https://github.com/olduser/{name}",
+                 "maintainers": [{"github": "olduser"}], "tier": tier,
+                 "status": "active", "releases": [], "license": "GPL-3.0"}
+        if tier >= 1:
+            entry["labels"] = ["fully-free"]
+            entry["security-contact"] = "https://example.org/sec"
+            entry["releases"] = []
+        (d / f"{name}.yml").write_text(_yaml.safe_dump(entry, sort_keys=False))
+
+    def fake_request(url, token, log=print):
+        # the API answers the old path with the repo's NEW identity
+        name = url.rsplit("/", 1)[1]
+        body = _json.dumps({
+            "full_name": f"newuser/{name}", "pushed_at": "2026-07-01T00:00:00Z",
+            "stargazers_count": 1, "forks_count": 0, "open_issues_count": 0,
+            "archived": False}).encode()
+        if "releases/latest" in url:
+            return 404, b"{}", {}
+        return 200, body, {}
+
+    monkeypatch.setattr(scan_mod, "_request", fake_request)
+    stats = scan_mod.enrich(index, token="x", readme=False, log=lambda *a: None)
+
+    assert stats["renamed"] == 1 and stats["flagged-renames"] == 1
+    zero = _yaml.safe_load((index / "plugins" / "mod" / "mod_zero.yml").read_text())
+    assert zero["source"] == "https://github.com/newuser/mod_zero"
+    assert "renamed-to" not in (zero.get("metrics") or {})
+    claimed = _yaml.safe_load((index / "plugins" / "mod" / "mod_claimed.yml").read_text())
+    assert claimed["source"] == "https://github.com/olduser/mod_claimed"
+    assert claimed["metrics"]["renamed-to"] == "https://github.com/newuser/mod_claimed"
+
+
+def test_enrich_stale_days_rolling_refresh(tmp_path, monkeypatch):
+    import datetime as _dt
+    import json as _json
+
+    import yaml as _yaml
+
+    import camp.scan as scan_mod
+
+    index = tmp_path / "index"
+    d = index / "plugins" / "mod"
+    d.mkdir(parents=True)
+    fresh = (_dt.date.today() - _dt.timedelta(days=2)).isoformat()
+    stale = (_dt.date.today() - _dt.timedelta(days=40)).isoformat()
+    for name, checked in (("mod_fresh", fresh), ("mod_stale", stale)):
+        (d / f"{name}.yml").write_text(_yaml.safe_dump({
+            "component": name, "source": f"https://github.com/u/{name}",
+            "maintainers": [{"github": "u"}], "tier": 0, "status": "active",
+            "releases": [], "license": "GPL-3.0",
+            "metrics": {"updated": "2026-01-01T00:00:00Z", "stars": 0,
+                        "forks": 0, "open-issues": 0, "archived": False,
+                        "checked": checked}}, sort_keys=False))
+
+    calls = []
+
+    def fake_request(url, token, log=print):
+        calls.append(url)
+        if "releases/latest" in url:
+            return 404, b"{}", {}
+        name = url.rsplit("/", 1)[1]
+        return 200, _json.dumps({
+            "full_name": f"u/{name}", "pushed_at": "2026-07-01T00:00:00Z",
+            "stargazers_count": 5, "forks_count": 0, "open_issues_count": 0,
+            "archived": False}).encode(), {}
+
+    monkeypatch.setattr(scan_mod, "_request", fake_request)
+    stats = scan_mod.enrich(index, token="x", readme=False, stale_days=14,
+                            log=lambda *a: None)
+    assert stats["metrics"] == 1                       # only the stale one
+    assert all("mod_stale" in u for u in calls)
+    doc = _yaml.safe_load((d / "mod_stale.yml").read_text())
+    assert doc["metrics"]["stars"] == 5

@@ -447,10 +447,14 @@ def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
 # unenriched rather than failing the run.
 
 def _fetch_metrics(source: str, token: str | None, checked: str,
-                   log) -> tuple[str, dict | None]:
-    """Fetch upstream metrics for one source repo. Returns (status, metrics)
-    where status is 'ok' (metrics populated), 'gone' (404 — repo removed or
-    renamed), or 'error' (transient/unsupported host — retry later)."""
+                   log) -> tuple[str, dict | None, str | None]:
+    """Fetch upstream metrics for one source repo. Returns
+    (status, metrics, canonical) where status is 'ok' (metrics populated),
+    'gone' (404 — repo removed), or 'error' (transient/unsupported host —
+    retry later). `canonical` is the repo's canonical URL when it differs
+    from `source` — GitHub 301s renamed repos forever, so without this
+    check a migration is invisible (it hid logstore_xapi's move for
+    months)."""
     parsed = urllib.parse.urlparse(source)
     host = parsed.netloc
     path = parsed.path.strip("/")
@@ -466,37 +470,41 @@ def _fetch_metrics(source: str, token: str | None, checked: str,
             time.sleep(wait)
             status, body, headers = _request(url, token)
         if status == 404:
-            return "gone", None
+            return "gone", None, None
         if status != 200:
             log(f"  {path}: GitHub HTTP {status}")
-            return "error", None
+            return "error", None, None
         repo = json.loads(body)
+        canonical = None
+        full_name = repo.get("full_name") or ""
+        if full_name and full_name.lower() != path.lower():
+            canonical = f"https://github.com/{full_name}"
         return "ok", _metrics_dict(
             updated=repo.get("pushed_at"), stars=repo.get("stargazers_count", 0),
             forks=repo.get("forks_count", 0), open_issues=repo.get("open_issues_count", 0),
             archived=repo.get("archived", False), checked=checked,
             latest_release=_fetch_latest_release("github.com", path, token),
-        )
+        ), canonical
 
     if "gitlab" in host:
         api = (f"{parsed.scheme}://{host}/api/v4/projects/"
                f"{urllib.parse.quote(path, safe='')}")
         status, body, _ = _request(api, None)
         if status == 404:
-            return "gone", None
+            return "gone", None, None
         if status != 200:
             log(f"  {path}: GitLab HTTP {status}")
-            return "error", None
+            return "error", None, None
         proj = json.loads(body)
         return "ok", _metrics_dict(
             updated=proj.get("last_activity_at"), stars=proj.get("star_count", 0),
             forks=proj.get("forks_count", 0), open_issues=proj.get("open_issues_count", 0),
             archived=proj.get("archived", False), checked=checked,
             latest_release=_fetch_latest_release(host, path, None),
-        )
+        ), None
 
     log(f"  {source}: unsupported host, skipped")
-    return "error", None
+    return "error", None, None
 
 
 _BADGE_LINE = re.compile(r"^\[?!\[")          # image or linked-image (badge) line
@@ -558,7 +566,8 @@ def _fetch_readme_summary(source: str, token: str | None, log) -> str | None:
 
 
 def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = None,
-           force: bool = False, readme: bool = True, log=print) -> dict:
+           force: bool = False, readme: bool = True,
+           stale_days: int | None = None, log=print) -> dict:
     """Backfill/refresh entries with upstream `metrics` and, for discovered
     (Tier 0) entries whose source repo set no description, a one-line
     `summary` derived from its README.
@@ -576,7 +585,8 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
     token = token or os.environ.get("GITHUB_TOKEN")
     today = datetime.date.today().isoformat()
     paths = sorted((Path(index_dir) / "plugins").glob("*/*.yml"))
-    stats = {"metrics": 0, "summary": 0, "skipped": 0, "gone": 0, "error": 0}
+    stats = {"metrics": 0, "summary": 0, "skipped": 0, "gone": 0, "error": 0,
+             "renamed": 0, "flagged-renames": 0}
     fetched = 0
 
     for path in paths:
@@ -587,7 +597,12 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
         if entry.get("status", "active") == "delisted":
             continue
 
-        needs_metrics = force or not entry.get("metrics")
+        metrics_checked = (entry.get("metrics") or {}).get("checked", "")
+        is_stale = (stale_days is not None and
+                    (not metrics_checked or metrics_checked <
+                     (datetime.date.today()
+                      - datetime.timedelta(days=stale_days)).isoformat()))
+        needs_metrics = force or is_stale or not entry.get("metrics")
         # README summary is a fallback only when the repo gave no description,
         # only for GitHub sources (see _fetch_readme_summary), and only at
         # Tier 0 — never overwrite a claimed entry's summary.
@@ -602,11 +617,28 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
         changed = False
 
         if needs_metrics:
-            status, metrics = _fetch_metrics(entry["source"], token, today, log)
+            status, metrics, canonical = _fetch_metrics(
+                entry["source"], token, today, log)
             if status == "ok":
                 entry["metrics"] = metrics
                 stats["metrics"] += 1
                 changed = True
+                if canonical:
+                    # The repo moved; GitHub redirects the old name forever,
+                    # so only this check ever notices. Scanner-owned entries
+                    # are auto-canonicalized; claimed entries belong to their
+                    # maintainer — record and flag, never rewrite.
+                    if entry.get("tier", 0) == 0:
+                        log(f"  renamed: {entry['source']} -> {canonical} "
+                            "(tier 0, source updated)")
+                        entry["source"] = canonical
+                        stats["renamed"] += 1
+                    else:
+                        log(f"  RENAMED (tier {entry.get('tier')}): "
+                            f"{entry['source']} -> {canonical} — flagged in "
+                            "metrics; maintainer/registry should update source")
+                        entry["metrics"]["renamed-to"] = canonical
+                        stats["flagged-renames"] += 1
             elif status == "gone":
                 stats["gone"] += 1
                 log(f"  gone: {entry['source']}")
@@ -629,7 +661,8 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
                 log(f"  … {stats['metrics']} metrics, {stats['summary']} summaries")
 
     log(f"enriched: {stats['metrics']} metrics, {stats['summary']} summaries; "
-        f"skipped {stats['skipped']}, gone {stats['gone']}, errors {stats['error']}")
+        f"skipped {stats['skipped']}, gone {stats['gone']}, errors {stats['error']}; "
+        f"{stats['renamed']} renames fixed, {stats['flagged-renames']} flagged")
     return stats
 
 
