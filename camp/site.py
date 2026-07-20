@@ -117,6 +117,7 @@ CSS = FONT_CSS + """
   --green-head:oklch(0.4 0.09 150); --green-body:oklch(0.38 0.04 150);
   --amber:oklch(0.62 0.12 65); --red:oklch(0.55 0.15 30);
   --text-secondary:var(--muted); --text-subtle:oklch(0.5 0.012 72);
+  --focus:oklch(0.52 0.12 264);
   --ok-text:oklch(0.48 0.1 150); --warn-text:oklch(0.47 0.1 65); --bad-text:oklch(0.47 0.16 30);
   --ok-fill:oklch(0.53 0.11 150); --warn-fill:oklch(0.48 0.12 65); --bad-fill:oklch(0.55 0.15 30);
   --scrim:oklch(0.24 0.012 65 / 0.42); --shadow:oklch(0.24 0.012 65 / 0.14);
@@ -136,6 +137,7 @@ CSS = FONT_CSS + """
   --green-head:oklch(0.78 0.1 150); --green-body:oklch(0.74 0.06 150);
   --amber:oklch(0.74 0.12 65); --red:oklch(0.7 0.15 30);
   --text-secondary:var(--muted); --text-subtle:oklch(0.66 0.008 78);
+  --focus:oklch(0.74 0.12 264);
   --ok-text:oklch(0.72 0.11 150); --warn-text:oklch(0.74 0.12 65); --bad-text:oklch(0.72 0.14 30);
   --ok-fill:oklch(0.5 0.11 150); --warn-fill:oklch(0.48 0.12 65); --bad-fill:oklch(0.52 0.15 30);
   --scrim:oklch(0.1 0.006 75 / 0.62); --shadow:oklch(0 0 0 / 0.55);
@@ -152,6 +154,10 @@ a:hover{color:var(--accent-hover)}
   background:var(--surface);color:var(--ink);padding:10px 16px;
   border:1px solid var(--border-strong);border-radius:2px;font:13px var(--mono)}
 .skip-link:focus{left:12px;top:12px}
+:where(a,button,input,select,summary,[tabindex]):focus-visible{
+  outline:3px solid var(--focus);outline-offset:3px}
+.cmdline :focus-visible{outline-color:var(--bg)}
+.facet:focus-visible,.facet-more:focus-visible{outline-offset:-3px}
 .skip-inline:focus{position:static;display:inline-block;margin-bottom:10px}
 
 /* ---- header / nav ---- */
@@ -170,7 +176,8 @@ nav{display:flex;align-items:center;flex-wrap:wrap;gap:2px 22px;
 nav a{color:var(--muted)}
 nav a:hover{color:var(--ink)}
 .theme-toggle{background:none;border:0;cursor:pointer;line-height:0;
-  color:var(--muted);padding:0}
+  color:var(--muted);display:inline-flex;align-items:center;justify-content:center;
+  min-width:44px;min-height:44px;padding:8px;margin:-13px -8px}
 .theme-toggle:hover{color:var(--ink)}
 .theme-toggle svg{width:18px;height:18px;display:none;stroke:currentColor;fill:none;
   stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -208,7 +215,8 @@ nav a:hover{color:var(--ink)}
   .trust-band{display:none}}
 
 /* ---- sidebar facets ---- */
-.sidebar{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow-y:auto}
+.sidebar{position:sticky;top:18px;max-height:calc(100vh - 36px);overflow-y:auto;
+  padding:4px;margin:-4px}
 .facet-group{margin-bottom:26px}
 fieldset.facet-group{border:0;padding:0;min-width:0}
 legend.facet-label{padding:0}
@@ -238,18 +246,21 @@ legend.facet-label{padding:0}
 .sorts .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.16em;
   text-transform:uppercase;color:var(--faint-label);margin-right:4px}
 .sortbtn{background:transparent;border:1px solid transparent;border-radius:2px;
-  cursor:pointer;font:12px var(--mono);color:var(--muted);padding:5px 10px}
+  cursor:pointer;font:12px var(--mono);color:var(--muted);padding:5px 10px;
+  min-height:24px}
 .sortbtn.active{border-color:var(--border-strong);background:var(--surface);color:var(--ink);
   box-shadow:inset 0 -2px 0 0 currentColor}
 .sortbtn.outline{border-color:var(--border-strong);background:var(--surface);color:var(--ink)}
 .chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
-.chip{display:inline-flex;align-items:center;gap:7px;padding:5px 10px 5px 12px;
+.chip{display:inline-flex;align-items:center;gap:7px;min-height:24px;
+  padding:5px 10px 5px 12px;
   background:var(--surface);border:1px solid var(--border-strong);border-radius:2px;
   font:12px var(--mono);color:var(--ink);cursor:pointer}
 .chip .f{color:var(--text-subtle)}
 .chip .x{color:var(--text-subtle)}
 .chip:hover .x{color:var(--red)}
-.clear-all{background:none;border:0;cursor:pointer;font:12px var(--mono);color:var(--accent)}
+.clear-all{background:none;border:0;cursor:pointer;font:12px var(--mono);
+  color:var(--accent);padding:6px 8px;margin:-6px -8px}
 .rows{margin-top:6px}
 .row-item{display:flex;gap:16px;padding:20px 6px;border-bottom:1px solid var(--border);
   cursor:pointer;color:inherit;transition:background .12s;align-items:flex-start;
@@ -337,7 +348,8 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   font:12px var(--mono);max-width:520px}
 .cmdline code{flex:1;overflow-x:auto;white-space:nowrap}
 .cmdline button{flex:none;background:var(--bg);color:var(--ink);border:0;
-  border-radius:2px;padding:4px 10px;font:600 11px var(--mono);cursor:pointer}
+  border-radius:2px;padding:6px 10px;font:600 11px var(--mono);cursor:pointer;
+  min-height:24px}
 .ledger{position:relative;padding-left:26px;margin-top:10px}
 .ledger::before{content:"";position:absolute;left:8px;top:10px;bottom:10px;
   width:1px;background:var(--border)}
@@ -414,10 +426,13 @@ footer{border-top:1px solid var(--border);margin-top:40px;padding:18px 0 40px;
   text-align:center;border:1px solid var(--border-strong);border-radius:50%;
   font:600 10px var(--mono);color:var(--muted);vertical-align:1px}
 .qmark:hover{color:var(--ink);border-color:var(--muted)}
+.qmark{position:relative}
+.qmark::after{content:"";position:absolute;inset:-5px}
 .vrow.sel .v{color:var(--accent)}
 .vrow .d{color:var(--muted)}
 .vrow .chk{font-family:var(--mono);font-size:11.5px}
-.vrow .zl{font-family:var(--mono);font-size:11px;text-align:right}
+.vrow .zl{font-family:var(--mono);font-size:11px;text-align:right;
+  padding:7px 8px;margin:-7px -8px}
 .vrow.revoked{opacity:.6}
 .vrow.revoked .v{text-decoration:line-through}
 .vrow.revoked:hover{background:transparent}
@@ -617,6 +632,10 @@ THEME_JS = """
     : window.matchMedia('(prefers-color-scheme: dark)').matches;
   function apply(){
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    // The control names the action it performs, in every path that can
+    // change the theme — including the OS-preference listener below.
+    var b = document.getElementById('theme-toggle');
+    if (b) b.setAttribute('aria-label', dark ? 'Use light theme' : 'Use dark theme');
   }
   apply();
   // Follow live OS theme changes — but only until the user has expressed
@@ -626,6 +645,7 @@ THEME_JS = """
       if (!saved){ dark = e.matches; apply(); }
     });
   document.addEventListener('DOMContentLoaded', function(){
+    apply();   // the button exists now; set its initial action name
     var b = document.getElementById('theme-toggle');
     if (b) b.addEventListener('click', function(){
       dark = !dark;
@@ -1382,7 +1402,7 @@ def _header() -> str:
     <a href="/how-it-works.html">How it works</a>
     <a href="https://github.com/camp-registry/camp-docs">Docs</a>
     <a href="{MIRROR_URL}">Mirror<span class="nav-xtra"> this archive</span></a>
-    <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme">
+    <button class="theme-toggle" id="theme-toggle" aria-label="Switch theme">
       <svg class="ic-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
       <svg class="ic-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
     </button>
