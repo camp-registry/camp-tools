@@ -1698,7 +1698,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
     <label class="visually-hidden" for="q">Search plugins</label>
     <span class="glyph" aria-hidden="true">⌕</span>
     <input id="q" type="search" autocomplete="off"
-      placeholder="Search {total:,} plugins by name, purpose, or keyword…">
+      placeholder="Search {total:,} plugins by name, purpose, or maintainer…">
   </div>
 
   <button class="filters-toggle" id="filters-toggle" aria-expanded="false">Filters</button>
