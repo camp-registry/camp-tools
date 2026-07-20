@@ -37,3 +37,31 @@ def test_release_derives_supported_from_fixture(plugin_repo, entry_path, tmp_pat
     assert main(["release", str(entry_path), "v1.1.0", "--source", str(plugin_repo)]) == 0
     entry = yaml.safe_load(entry_path.read_text())
     assert entry["releases"][-1]["supported-moodle"] == ["4.5"]
+
+
+def test_vorder_derives_from_branches():
+    from camp.moodleversions import branch_names
+    from camp.site import VORDER
+    assert VORDER == branch_names()
+    assert "3.10" in VORDER            # the hand-copied list had dropped it
+
+
+def test_check_upstream_flags_unknown_branch():
+    from camp.moodleversions import check_upstream
+    ls = "\n".join([
+        "abc\trefs/heads/MOODLE_38_STABLE",     # below floor: ignored
+        "abc\trefs/heads/MOODLE_405_STABLE",    # known
+        "abc\trefs/heads/MOODLE_502_STABLE",    # known
+        "abc\trefs/heads/MOODLE_503_STABLE",    # NEW
+    ])
+    findings = check_upstream(ls_remote=ls, fetch_first_code=lambda c: 2026102000)
+    assert len(findings) == 1
+    f = findings[0]
+    assert (f["code"], f["name"], f["first"]) == (503, "5.3", 2026102000)
+    assert '(503, "5.3", 2026102000),' in f["row"]
+
+
+def test_check_upstream_current_table_is_quiet():
+    from camp.moodleversions import check_upstream
+    ls = "abc\trefs/heads/MOODLE_405_STABLE\nabc\trefs/heads/MOODLE_502_STABLE\n"
+    assert check_upstream(ls_remote=ls) == []

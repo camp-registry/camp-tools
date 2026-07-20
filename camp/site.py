@@ -74,9 +74,11 @@ LABEL_TEXT = {
     "commercial-support-available": "Commercial support",
 }
 
-# Ordered Moodle branches for range filtering (oldest → newest).
-VORDER = ["3.9", "3.11", "4.0", "4.1", "4.2", "4.3", "4.4", "4.5",
-          "5.0", "5.1", "5.2"]
+# Ordered Moodle branches for range filtering (oldest → newest) — derived
+# from the one source of truth. (The old hand-copied list had silently
+# dropped 3.10.)
+from .moodleversions import branch_names as _branch_names
+VORDER = _branch_names()
 
 MIRROR_URL = "https://github.com/camp-registry/camp-docs/blob/main/MIRRORING.md"
 INDEX_REPO_URL = "https://github.com/camp-registry/camp-index"

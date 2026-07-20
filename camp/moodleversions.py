@@ -55,3 +55,63 @@ def branch_from_requires(requires: int) -> str | None:
         if requires >= first:
             match = name
     return match
+
+
+def branch_names() -> list[str]:
+    """All known branch strings, oldest first — the single source of truth
+    for anything that orders or filters by Moodle branch."""
+    return [name for _, name, _ in BRANCHES]
+
+
+def check_upstream(ls_remote: str | None = None,
+                   fetch_first_code=None) -> list[dict]:
+    """Compare BRANCHES against Moodle's actual stable branches upstream.
+
+    Returns a finding per unknown branch (newer than our floor), each with
+    a ready-made table row when the branching date is fetchable. Run
+    weekly by CI; a finding means a human adds one BRANCHES row and ships.
+    """
+    import re
+    import subprocess
+    import urllib.request
+
+    if ls_remote is None:
+        result = subprocess.run(
+            ["git", "ls-remote", "--heads", "https://github.com/moodle/moodle"],
+            capture_output=True, text=True, timeout=60)
+        result.check_returncode()
+        ls_remote = result.stdout
+
+    known = {code for code, _, _ in BRANCHES}
+    floor = min(known)
+    findings = []
+    for match in re.finditer(r"refs/heads/MOODLE_(\d+)_STABLE", ls_remote):
+        code = int(match.group(1))
+        if code in known or code < floor:
+            continue
+        major, minor = divmod(code, 100) if code >= 100 else divmod(code, 10)
+        name = f"{major}.{minor}"
+        first = None
+        if fetch_first_code is None:
+            # core version.php moved to public/ in 5.1 — try both
+            for path in ("public/version.php", "version.php"):
+                try:
+                    with urllib.request.urlopen(
+                            "https://raw.githubusercontent.com/moodle/moodle/"
+                            f"MOODLE_{match.group(1)}_STABLE/{path}",
+                            timeout=20) as resp:
+                        text = resp.read(65536).decode(errors="replace")
+                except Exception:
+                    continue
+                m = re.search(r"^\$version\s*=\s*(\d{8})", text, re.M)
+                if m:
+                    first = int(m.group(1)) * 100
+                    break
+        else:
+            first = fetch_first_code(code)
+        findings.append({
+            "code": code, "name": name, "first": first,
+            "row": (f"    ({code}, \"{name}\", {first})," if first
+                    else f"    ({code}, \"{name}\", <branching-date>00),"),
+        })
+    return sorted(findings, key=lambda f: f["code"])

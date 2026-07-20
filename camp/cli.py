@@ -497,6 +497,20 @@ def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_check_moodle_branches(args: argparse.Namespace) -> int:
+    from .moodleversions import check_upstream
+    findings = check_upstream()
+    if not findings:
+        print("moodle branches: table is current with upstream")
+        return 0
+    print("UNKNOWN Moodle branches upstream — extend BRANCHES in "
+          "camp/moodleversions.py:", file=sys.stderr)
+    for f in findings:
+        print(f"  {f['name']} (code {f['code']}) — suggested row:\n{f['row']}",
+              file=sys.stderr)
+    return 1
+
+
 def _cmd_enrich(args: argparse.Namespace) -> int:
     from .scan import enrich
     enrich(args.index_dir, limit=args.limit, force=args.force,
@@ -714,6 +728,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--recheck-days", type=int, default=30,
                    help="re-evaluate ledger-rejected repos older than this (0 = always recheck)")
     p.set_defaults(func=_cmd_scan_gitlab)
+
+    p = sub.add_parser("check-moodle-branches",
+                       help="fail if Moodle has stable branches our table lacks")
+    p.set_defaults(func=_cmd_check_moodle_branches)
 
     p = sub.add_parser("enrich",
                        help="backfill/refresh Tier 0 metrics + README-derived summaries")
