@@ -263,6 +263,75 @@ def test_token_contrast_both_themes(site):
         assert r >= 4.5, (theme, "white on ok-fill", round(r, 2))
 
 
+def test_advisory_token_contrast_both_themes(site):
+    """Tokens added for the advisory surfaces (v0.2.21): severity text
+    flags in the install card, severity card borders, the critical-card
+    tint, and the green reassurance card's text."""
+    css = styles(site["index.html"])
+    base = _tokens(css, False)
+    for dark in (False, True):
+        tokens = {**base, **_tokens(css, True)} if dark else base
+        theme = "dark" if dark else "light"
+        surface = _parse_color(tokens["surface"])
+        # .adv-flag text colours on the install card (sev-medium/-high use
+        # warn-text/bad-text, covered above; sev-low has its own token)
+        r = _ratio(_parse_color(tokens["sev-low"]), surface)
+        assert r >= 4.5, (theme, "sev-low text on surface", round(r, 2))
+        # severity card borders and the version-row marker: non-text, 3:1
+        for token in ("amber", "red", "sev-low"):
+            r = _ratio(_parse_color(tokens[token]), surface)
+            assert r >= 3.0, (theme, f"{token} border on surface", round(r, 2))
+        # body text on the critical-advisory tinted card
+        r = _ratio(_parse_color(tokens["text"]), _parse_color(tokens["crit-bg"]))
+        assert r >= 4.5, (theme, "text on crit-bg", round(r, 2))
+        # the green reassurance card ("current release is not affected")
+        for token in ("green-body", "green-head"):
+            r = _ratio(_parse_color(tokens[token]),
+                       _parse_color(tokens["green-bg"]))
+            assert r >= 4.5, (theme, f"{token} on green-bg", round(r, 2))
+        # .adv .id metadata line on open (surface-backed) advisory cards
+        r = _ratio(_parse_color(tokens["faint-label"]), surface)
+        assert r >= 4.5, (theme, "faint-label on surface", round(r, 2))
+
+
+def test_advisory_pages_structure(index_dir, tmp_path):
+    """The advisory permalink pages and index (v0.2.21) carry the same
+    structural guarantees as the original four page types."""
+    import yaml
+    adv = index_dir / "advisories" / "CAMP-2026-0001.yml"
+    adv.parent.mkdir(exist_ok=True)
+    adv.write_text(yaml.safe_dump({
+        "id": "CAMP-2026-0001", "component": "mod_example",
+        "title": "Test issue", "severity": "high",
+        "affected-versions": "<=1.0.0", "fixed-in": "1.1.0",
+        "revoke": False, "published": "2026-07-11T00:00:00Z",
+        "description": "x"}, sort_keys=False))
+    out = tmp_path / "adv-site"
+    site_generate(index_dir, "https://repo.test", out)
+
+    for page in ("advisories/index.html", "advisories/CAMP-2026-0001.html",
+                 "plugin/mod_example.html"):
+        html = (out / page).read_text()
+        elems = scan(html)
+        mains = [a for t, a in elems if t == "main"]
+        assert len(mains) == 1 and mains[0].get("id") == "main-content", page
+        assert any(t == "a" and a.get("href") == "#main-content"
+                   for t, a in elems), page
+        levels = [int(t[1]) for t, _ in elems if re.fullmatch(r"h[1-6]", t)]
+        assert levels and levels[0] == 1, page
+        for prev, cur in zip(levels, levels[1:]):
+            assert cur <= prev + 1, (page, levels)
+
+    # the advisory card on the plugin page is a real link with the
+    # severity class, and the section anchor exists for deep links
+    plugin_html = (out / "plugin" / "mod_example.html").read_text()
+    cards = [a for t, a in scan(plugin_html)
+             if t == "a" and "adv" in a.get("class", "").split()]
+    assert cards, "advisory card is not a link"
+    assert all("sev-high" in a.get("class", "") for a in cards)
+    assert 'id="advisories"' in plugin_html
+
+
 def test_inline_hex_pairs_pass(site):
     # every inline style that sets a text colour must carry its own
     # background in the same attribute, and the pair must clear AA
