@@ -31,7 +31,7 @@ from pathlib import Path
 import yaml
 
 from . import __version__ as TOOLS_VERSION
-from .advisory import AdvisorySet
+from .advisory import AdvisorySet, version_matches
 from . import badge as badge_mod
 from . import checks as checks_mod
 from . import reviews as reviews_mod
@@ -116,6 +116,7 @@ CSS = FONT_CSS + """
   --green-border:oklch(0.85 0.03 150); --green-bg:oklch(0.97 0.02 150);
   --green-head:oklch(0.4 0.09 150); --green-body:oklch(0.38 0.04 150);
   --amber:oklch(0.62 0.12 65); --red:oklch(0.55 0.15 30);
+  --sev-low:oklch(0.55 0.045 250); --crit-bg:oklch(0.97 0.02 25);
   --text-secondary:var(--muted); --text-subtle:oklch(0.5 0.012 72);
   --focus:oklch(0.52 0.12 264);
   --ok-text:oklch(0.48 0.1 150); --warn-text:oklch(0.47 0.1 65); --bad-text:oklch(0.47 0.16 30);
@@ -136,6 +137,7 @@ CSS = FONT_CSS + """
   --green-border:oklch(0.42 0.06 150); --green-bg:oklch(0.27 0.05 150);
   --green-head:oklch(0.78 0.1 150); --green-body:oklch(0.74 0.06 150);
   --amber:oklch(0.74 0.12 65); --red:oklch(0.7 0.15 30);
+  --sev-low:oklch(0.72 0.05 250); --crit-bg:oklch(0.26 0.05 25);
   --text-secondary:var(--muted); --text-subtle:oklch(0.66 0.008 78);
   --focus:oklch(0.74 0.12 264);
   --ok-text:oklch(0.72 0.11 150); --warn-text:oklch(0.74 0.12 65); --bad-text:oklch(0.72 0.14 30);
@@ -489,9 +491,24 @@ footer .build{display:block;margin-top:4px}
   line-height:1.55;color:var(--text)}
 .adv{border:1px solid var(--green-border);background:var(--green-bg);border-radius:3px;
   padding:12px 16px;font-size:0.84375rem;color:var(--green-body);margin-bottom:8px}
-.adv.open{border-color:var(--amber);background:var(--surface);color:var(--text)}
+.adv.open{border-color:var(--border-strong);background:var(--surface);color:var(--text);
+  border-left-width:4px;border-radius:0 3px 3px 0}
+.adv.sev-low{border-left-color:var(--sev-low)}
+.adv.sev-medium{border-left-color:var(--amber)}
+.adv.sev-high{border-left-color:var(--red)}
+.adv.sev-critical{border-left-color:var(--red);background:var(--crit-bg)}
+a.adv{display:block;text-decoration:none;cursor:pointer}
+a.adv:hover b,a.adv:focus-visible b{text-decoration:underline}
 .adv .id{font-family:var(--mono);font-size:0.75rem;color:var(--faint-label);display:block;
   margin-top:4px}
+.adv-pastline{font-size:0.8125rem;color:var(--faint-label);margin-top:6px}
+.adv-flag{font-weight:600}
+.adv-flag.sev-low{color:var(--sev-low)}
+.adv-flag.sev-medium{color:var(--warn-text)}
+.adv-flag.sev-high,.adv-flag.sev-critical{color:var(--bad-text)}
+.vrow-adv{box-shadow:inset 3px 0 0 var(--red)}
+.advtag{color:var(--bad-text);font-family:var(--mono);font-size:0.75rem;
+  font-weight:600;white-space:nowrap}
 
 .attrib a,.banner a,.detail p a,.pick-note a,footer a,noscript a,
 .results-count a{text-decoration:underline;text-decoration-thickness:.1em;
@@ -1138,6 +1155,17 @@ document.addEventListener('DOMContentLoaded', function(){
         rl.hidden = true;
       }
     }
+    var al = document.getElementById('adv-line');
+    if (al){
+      var ab = document.getElementById('adv-body');
+      if (r.advisory_html){
+        if (ab) ab.innerHTML = r.advisory_html;
+        al.hidden = false;
+      } else {
+        if (ab) ab.innerHTML = '';
+        al.hidden = true;
+      }
+    }
     selectRow(r.v);
     if (announceReady && verStatus){
       verStatus.textContent = noteText ||
@@ -1758,8 +1786,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
 # ------------------------------------------------------------- detail ------
 
 
-def _advisory_cards(component: str, advisories: AdvisorySet) -> str:
-    items = advisories.for_component(component)
+def _advisory_cards(items: list[dict]) -> str:
     if not items:
         return '<div class="adv"><b>No published advisories</b></div>'
     cards = []
@@ -1769,11 +1796,83 @@ def _advisory_cards(component: str, advisories: AdvisorySet) -> str:
         if advisory.get("revoke"):
             status += " · affected versions revoked from installation"
         cards.append(
-            f'<div class="adv open"><b>{escape(advisory["severity"].upper())}: '
+            f'<a class="adv open sev-{escape(advisory["severity"])}" '
+            f'href="/advisories/{escape(advisory["id"])}.html">'
+            f'<b>{escape(advisory["severity"].upper())}: '
             f'{escape(advisory["title"])}</b>'
             f'<span class="id">{escape(advisory["id"])} · affects '
-            f'{escape(advisory["affected-versions"])} · {status}</span></div>')
+            f'{escape(advisory["affected-versions"])} · {status}</span></a>')
     return "\n".join(cards)
+
+
+def _advisory_page(advisory: dict) -> str:
+    """Standalone permalink page for one advisory — the target of the link
+    `camp composer` publishes in security-advisories.json."""
+    component = advisory["component"]
+    fixed = advisory.get("fixed-in")
+    rows = [
+        ("Component", f'<a class="mono" href="/plugin/{escape(component)}.html">'
+                      f'{escape(component)}</a>'),
+        ("Severity", escape(advisory["severity"].upper())),
+        ("Affected versions", f'<span class="mono">'
+                              f'{escape(advisory["affected-versions"])}</span>'),
+        ("Fixed in", f'<span class="mono">{escape(fixed)}</span>' if fixed
+                     else "no fixed version"),
+        ("Published", escape(str(advisory["published"]))),
+    ]
+    if advisory.get("cve"):
+        rows.append(("CVE", escape(advisory["cve"])))
+    if advisory.get("revoke"):
+        rows.append(("Revocation", "affected versions are removed from "
+                                   "installation channels; archived artifacts "
+                                   "are preserved"))
+    timeline = advisory.get("timeline") or {}
+    for label, key in (("Reported", "reported"),
+                       ("Maintainer notified", "maintainer-notified"),
+                       ("Fix released", "fix-released"),
+                       ("Disclosed", "disclosed")):
+        if timeline.get(key):
+            rows.append((label, escape(str(timeline[key]))))
+    facts = '<div class="kv">' + "".join(
+        f'<div class="kvrow"><span class="fk">{name}</span>'
+        f'<span>{value}</span></div>' for name, value in rows) + '</div>'
+    return _page(
+        f'{advisory["id"]} — CAMP',
+        f'{_header()}<div class="narrow"><main id="main-content" tabindex="-1">'
+        f'<p class="mono" style="margin-top:24px">{escape(advisory["id"])}</p>'
+        f'<h1 style="font-family:var(--serif);color:var(--ink)">'
+        f'{escape(advisory["title"])}</h1>'
+        f'{facts}'
+        f'<h2 class="sect">Details</h2>'
+        f'<p style="max-width:70ch;line-height:1.6">'
+        f'{escape(advisory["description"])}</p>'
+        f'</main>{_footer(wrap=False)}</div>',
+        description=f'CAMP security advisory for {component}: '
+                    f'{advisory["title"]}')
+
+
+def _advisories_index_page(advisories: AdvisorySet) -> str:
+    """The /advisories/ index: every published advisory, newest first."""
+    items = [a for lst in advisories.by_component.values() for a in lst]
+    items.sort(key=lambda a: a["id"], reverse=True)
+    if items:
+        rows = "".join(
+            f'<li><a class="mono" href="/advisories/{escape(a["id"])}.html">'
+            f'{escape(a["id"])}</a> — {escape(a["severity"].upper())}: '
+            f'{escape(a["title"])} '
+            f'(<a class="mono" href="/plugin/{escape(a["component"])}.html">'
+            f'{escape(a["component"])}</a>)</li>' for a in items)
+        body = f'<ul style="margin-top:18px;line-height:2;list-style:none">{rows}</ul>'
+    else:
+        body = '<p style="margin-top:18px">No advisories have been published.</p>'
+    return _page(
+        "Security advisories — CAMP",
+        f'{_header()}<div class="narrow"><main id="main-content" tabindex="-1">'
+        f'<h1 style="font-family:var(--serif);color:var(--ink)">'
+        f'Security advisories</h1>{body}'
+        f'</main>{_footer(wrap=False)}</div>',
+        description="Published security advisories for plugins in the CAMP "
+                    "registry.")
 
 
 def _fg_for(color: str) -> str:
@@ -1958,6 +2057,19 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                     f'{_review_badge(review, component, badge_src)}</a>'
                     f' <span class="rev-when">reviewed '
                     f'{escape(review["reviewed_at"])}</span>')
+            # Advisories are per-release claims, like the security review:
+            # the warning follows the selected release in the install card.
+            affecting = advisories.affecting(component, version.lstrip("v"))
+            if affecting:
+                row["advisory_html"] = " · ".join(
+                    f'<a class="adv-flag sev-{escape(a["severity"])}" '
+                    f'href="/advisories/{escape(a["id"])}.html">'
+                    f'{escape(a["severity"].upper())}: {escape(a["id"])}</a>'
+                    + (f' <span class="rev-when">fixed in '
+                       f'{escape(a["fixed-in"])}</span>'
+                       if a.get("fixed-in") else "")
+                    for a in sorted(affecting, key=lambda a: a["id"],
+                                    reverse=True))
             releases_data.append(row)
         latest_v = latest["version"].split(" ")[0]
         if len(covered) > 1 or len(releases_data) > 1:
@@ -2000,6 +2112,14 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                            f'<span id="rev-body">{latest_review}</span></div>')
         else:
             review_line = ""
+        latest_adv = (latest_row or {}).get("advisory_html", "")
+        if any(row.get("advisory_html") for row in releases_data):
+            adv_line = (f'<div class="inst-meta" id="adv-line"'
+                        f'{"" if latest_adv else " hidden"}>'
+                        f'Security advisory: '
+                        f'<span id="adv-body">{latest_adv}</span></div>')
+        else:
+            adv_line = ""
         rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
                                "package": package})
         install = f"""
@@ -2030,6 +2150,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       maintainer published. Verified
       <span id="vd-date">{_fmt_date(latest["published"])}</span>.</div></details>
       {check_line}
+      {adv_line}
       {review_line}
       <div class="pick-note" id="pick-note" style="display:none"></div>
       <div class="cmdline"><code id="cmd-text" tabindex="0" role="region"
@@ -2069,15 +2190,23 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             # The whole row (minus the download link) is one native button:
             # keyboard-operable release selection with programmatic state.
             # The MDL Shield grade lives in the install card, following the
-            # selection — a link cannot nest inside this button.
-            return (f'<li class="vrow rel-row">'
+            # selection — a link cannot nest inside this button. Advisory
+            # detail follows the same rule: affected rows carry a marker,
+            # selecting the row surfaces the advisory link in the card.
+            affected = bool(advisories.affecting(component, v))
+            advclass = " vrow-adv" if affected else ""
+            adv_vm = " · security advisory" if affected else ""
+            advtag = (' <span class="advtag">· advisory</span>'
+                      if affected else "")
+            return (f'<li class="vrow rel-row{advclass}">'
                     f'<button type="button" class="vsel" data-ver="{escape(v)}" '
                     f'aria-pressed="false">'
                     f'<span class="v">{escape(v)}</span>'
                     f'<span class="d">{when}</span>'
-                    f'<span class="d rng">Moodle {escape(rng)}</span>'
+                    f'<span class="d rng">Moodle {escape(rng)}{advtag}</span>'
                     f'{chk}'
-                    f'<span class="vm">Moodle {escape(rng)}{escape(chk_vm)}</span>'
+                    f'<span class="vm">Moodle {escape(rng)}{escape(chk_vm)}'
+                    f'{escape(adv_vm)}</span>'
                     f'</button>'
                     f'<a class="zl" href="{escape(_zip_url(artifacts_base, component, version))}" '
                     f'aria-label="Download version {escape(v)} as ZIP">ZIP</a></li>')
@@ -2171,8 +2300,34 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     advisory_html = ""
     advisory_items = advisories.for_component(component)
     if advisory_items:
-        advisory_html = (f'<h2 class="sect">Security advisories</h2>'
-                         f'{_advisory_cards(component, advisories)}')
+        # Full cards only for advisories affecting the current (newest)
+        # release — an active warning. Advisories resolved by the current
+        # release collapse to a reassurance card with permalinks; their
+        # detail lives with the affected versions (row markers + the
+        # install-card line that follows the selection). Without a
+        # verified release to anchor "current", every advisory shows.
+        latest_v_plain = (latest["version"].split(" ")[0].lstrip("v")
+                          if tier >= 2 and latest else None)
+        active = ([a for a in advisory_items
+                   if version_matches(latest_v_plain, a["affected-versions"])]
+                  if latest_v_plain else advisory_items)
+        past = [a for a in advisory_items if a not in active]
+        past_links = ", ".join(
+            f'<a href="/advisories/{escape(a["id"])}.html">'
+            f'{escape(a["id"])}</a>'
+            for a in sorted(past, key=lambda a: a["id"], reverse=True))
+        if active:
+            body = _advisory_cards(active)
+            if past:
+                body += (f'<div class="adv-pastline">Past advisories, '
+                         f'resolved in the current release: {past_links}</div>')
+        else:
+            body = (f'<div class="adv"><b>The current release '
+                    f'({escape(latest_v_plain)}) is not affected by any '
+                    f'published advisory.</b>'
+                    f'<span class="id">Past advisories: {past_links}</span></div>')
+        advisory_html = (f'<h2 class="sect" id="advisories">Security advisories</h2>'
+                         f'{body}')
 
     # ---- project facts: one full-width row per field -----------------------
     dev_bits = []
@@ -2524,6 +2679,14 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
         f'</main>{_footer(wrap=False)}</div>'))
 
     (out / "how-it-works.html").write_text(_how_page())
+
+    (out / "advisories").mkdir(exist_ok=True)
+    (out / "advisories" / "index.html").write_text(
+        _advisories_index_page(advisories))
+    for component_advisories in advisories.by_component.values():
+        for advisory in component_advisories:
+            (out / "advisories" / f'{advisory["id"]}.html').write_text(
+                _advisory_page(advisory))
 
     badge_mod.write_badges(index_dir, out / "badge")
     if checks_dir:

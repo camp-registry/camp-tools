@@ -446,8 +446,7 @@ def _cmd_advisory_new(args: argparse.Namespace) -> int:
     from .advisory import ADVISORIES_RELPATH, next_id
     year = int(args.year) if args.year else datetime.datetime.now(datetime.UTC).year
     advisory_id = next_id(args.index_dir, year)
-    out_path = (Path(args.index_dir) / ADVISORIES_RELPATH / args.component
-                / f"{advisory_id}.yml")
+    out_path = Path(args.index_dir) / ADVISORIES_RELPATH / f"{advisory_id}.yml"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     scaffold = {

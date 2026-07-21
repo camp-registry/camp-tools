@@ -156,7 +156,7 @@ def generate_advisories(index_dir: str | Path, base_url: str) -> dict:
             "title": advisory["title"],
             "severity": advisory["severity"],
             "affectedVersions": advisory["affected-versions"],
-            "link": f"{base_url}/advisories/{advisory['id']}",
+            "link": f"{base_url}/advisories/{advisory['id']}.html",
             "cve": advisory.get("cve"),
             "reportedAt": advisory["published"],
             "sources": [{"name": "camp", "remoteId": advisory["id"]}],

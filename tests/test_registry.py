@@ -225,8 +225,8 @@ def test_release_history_multiple_versions_and_revocation(index_dir, entry_path,
         "version": "2.0.0", "tag": "v2.0.0",
         "published": "2026-03-01T00:00:00Z"}))
 
-    adv_dir = index_dir / "advisories" / "mod_example"
-    adv_dir.mkdir(parents=True)
+    adv_dir = index_dir / "advisories"
+    adv_dir.mkdir(parents=True, exist_ok=True)
     (adv_dir / "CAMP-2026-0001.yml").write_text(yaml.safe_dump({
         "id": "CAMP-2026-0001", "component": "mod_example",
         "title": "RCE in old version", "severity": "critical",

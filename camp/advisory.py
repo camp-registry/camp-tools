@@ -1,7 +1,11 @@
 """Security advisories (RFC §5.3): validation, version matching, revocation.
 
-Advisories live at index/advisories/<component>/<CAMP-YYYY-NNNN>.yml and are
-authoritative index content. Downstream effects, all mechanical:
+Advisories live flat at index/advisories/<CAMP-YYYY-NNNN>.yml and are
+authoritative index content. The id is registry-global (it is the public
+permalink and the Packagist remoteId), so the filename IS the id: a flat
+directory makes two concurrently assigned ids collide as a git add/add
+conflict instead of silently coexisting in per-component subdirectories.
+Downstream effects, all mechanical:
 
   - `camp composer` drops revoked versions from packages.json and emits
     every advisory in a Packagist-compatible security-advisories document,
@@ -67,7 +71,7 @@ class AdvisorySet:
     def load(cls, index_dir: str | Path) -> "AdvisorySet":
         advisories = cls()
         root = Path(index_dir) / ADVISORIES_RELPATH
-        for path in sorted(root.glob("*/*.yml")) if root.exists() else []:
+        for path in sorted(root.glob("*.yml")) if root.exists() else []:
             with open(path) as f:
                 advisory = yaml.safe_load(f)
             advisories.by_component.setdefault(advisory["component"], []).append(advisory)
@@ -110,8 +114,8 @@ def validate_advisory(path: str | Path, index_dir: str | Path | None = None) -> 
     if problems:
         return problems
 
-    expected = Path(ADVISORIES_RELPATH) / advisory["component"] / f"{advisory['id']}.yml"
-    if Path(path).parts[-3:] != expected.parts:
+    expected = Path(ADVISORIES_RELPATH) / f"{advisory['id']}.yml"
+    if Path(path).parts[-2:] != expected.parts:
         problems.append(f"file belongs at index/{expected}")
 
     try:
@@ -133,7 +137,7 @@ def next_id(index_dir: str | Path, year: int) -> str:
     root = Path(index_dir) / ADVISORIES_RELPATH
     prefix = f"CAMP-{year}-"
     highest = 0
-    for path in root.glob(f"*/{prefix}*.yml") if root.exists() else []:
+    for path in root.glob(f"{prefix}*.yml") if root.exists() else []:
         try:
             highest = max(highest, int(path.stem.rsplit("-", 1)[1]))
         except ValueError:
