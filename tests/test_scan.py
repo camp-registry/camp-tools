@@ -298,6 +298,31 @@ def test_fetch_component_survives_timeout(monkeypatch):
     assert calls["n"] == 3  # retried, then gave up — did not raise
 
 
+def test_fetch_component_encodes_non_ascii_branch(monkeypatch):
+    """A non-ASCII default branch must be percent-encoded, not sent raw —
+    urllib's putrequest crashes with UnicodeEncodeError otherwise (killed
+    the first scheduled discovery scan)."""
+    import io
+    import urllib.parse
+
+    import camp.scan as scan
+    seen = {}
+
+    def fake_urlopen(request, timeout=None):
+        seen["url"] = request.full_url
+        request.full_url.encode("ascii")  # what putrequest requires
+        response = io.BytesIO(b"$plugin->component = 'mod_x';")
+        response.status = 200
+        return response
+
+    monkeypatch.setattr(scan.urllib.request, "urlopen", fake_urlopen)
+    for token in ("fake", None):  # contents API and raw-host paths
+        status, component, _ = scan._fetch_component(
+            _candidate(default_branch="принят-über"), token=token)
+        assert status == "ok" and component == "mod_x"
+        assert urllib.parse.quote("принят-über", safe="") in seen["url"]
+
+
 def test_request_survives_timeout(monkeypatch):
     import camp.scan as scan
     monkeypatch.setattr(scan.time, "sleep", lambda *_: None)

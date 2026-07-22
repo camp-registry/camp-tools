@@ -277,13 +277,17 @@ def _fetch_component(candidate: Candidate, token: str | None,
     case). With a token, uses the authenticated contents API (5000/hr core
     quota); the anonymous raw host throttles hard.
     """
+    # Branch names may contain characters urllib refuses to send raw (a
+    # non-ASCII default branch crashes putrequest with UnicodeEncodeError),
+    # so the ref is always percent-encoded.
+    ref = urllib.parse.quote(candidate.default_branch, safe="")
     if token:
         url = (f"https://api.github.com/repos/{candidate.full_name}/contents/"
-               f"version.php?ref={candidate.default_branch}")
+               f"version.php?ref={ref}")
         req_token = token
     else:
         url = (f"https://raw.githubusercontent.com/{candidate.full_name}/"
-               f"{candidate.default_branch}/version.php")
+               f"{ref}/version.php")
         req_token = None
     headers_accept = {"Accept": "application/vnd.github.raw+json"} if token else {}
     request = urllib.request.Request(url, headers={
@@ -1044,7 +1048,9 @@ def _gitlab_fetch_file(project_path: str, path: str, ref: str,
                        token: str | None) -> tuple[str, bytes | None]:
     encoded_project = urllib.parse.quote(project_path, safe="")
     encoded_path = urllib.parse.quote(path, safe="")
-    url = f"{GITLAB_API}/projects/{encoded_project}/repository/files/{encoded_path}/raw?ref={ref}"
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    url = (f"{GITLAB_API}/projects/{encoded_project}/repository/files/"
+           f"{encoded_path}/raw?ref={encoded_ref}")
     status, body, _ = _gitlab_request(url, token)
     if status == 200:
         return "ok", body
