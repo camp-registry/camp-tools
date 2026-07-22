@@ -92,7 +92,7 @@ class Candidate:
 @dataclass
 class ScanResult:
     candidate: Candidate
-    outcome: str  # written | exists | no-version-php | bad-license | skipped-known | fetch-error
+    outcome: str  # written | exists | copy | name-collision | no-version-php | bad-license | skipped-known | fetch-error
     component: str | None = None
 
 
@@ -143,14 +143,20 @@ def should_skip(ledger: dict, full_name: str, today: str,
 
 
 def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
-                   detail: str, today: str) -> None:
+                   detail: str, today: str, component: str | None = None) -> None:
     previous = ledger.get(candidate.full_name, {})
-    ledger[candidate.full_name] = {
+    entry = {
         "outcome": outcome,
         "detail": detail,
         "first-seen": previous.get("first-seen", today),
         "last-checked": today,
     }
+    # Collision-class outcomes carry the component explicitly so the
+    # claim-time check in index CI can grep the ledger without parsing
+    # detail strings.
+    if component and outcome in ("copy", "name-collision"):
+        entry["component"] = component
+    ledger[candidate.full_name] = entry
 
 
 def _request(url: str, token: str | None, retries: int = 3) -> tuple[int, bytes, dict]:
@@ -362,6 +368,123 @@ def _name_matches_component(full_name: str, component: str) -> bool:
     short_name = re.sub(r"[-_.]", "", component.partition("_")[2])
     full = re.sub(r"[-_.]", "", component)
     return short_name in repo_name or full in repo_name
+
+
+# --- component-name collisions -----------------------------------------------
+# A candidate whose component is already listed is one of three things: the
+# listed repository itself seen again ("exists"), a detached copy that shares
+# git history with it ("copy"; GitHub-flagged forks never get here because
+# the search queries exclude them), or a genuinely independent plugin that
+# picked the same name ("name-collision", handled case by case at claim time
+# per NAMESPACE.md in camp-docs). A copy whose history was squashed or
+# re-initialized classifies as name-collision; that errs toward human
+# attention, which is the safe direction.
+
+
+def _normalize_repo_url(url: str) -> str:
+    tail = url.strip().lower().split("://")[-1]
+    return tail.rstrip("/").removesuffix(".git")
+
+
+def _repo_host_path(url: str) -> tuple[str, str] | None:
+    host, _, path = _normalize_repo_url(url).partition("/")
+    if not path or "." not in host:
+        return None
+    return host, path
+
+
+def _listing_source(index_dir: str | Path, component: str) -> str | None:
+    path = (Path(index_dir) / "plugins" / component.partition("_")[0]
+            / f"{component}.yml")
+    if not path.exists():
+        return None
+    with open(path) as f:
+        entry = yaml.safe_load(f) or {}
+    return entry.get("source")
+
+
+def _root_commit(host: str, path: str, token: str | None) -> str | None:
+    """The oldest commit SHA reachable from the default branch, via the
+    commits API's last page. None when it can't be determined."""
+    if host == "github.com":
+        url = f"https://api.github.com/repos/{path}/commits?per_page=1"
+        status, body, headers = _request(url, token)
+        if status != 200:
+            return None
+        link = headers.get("Link") or headers.get("link") or ""
+        last = re.search(r'<([^>]+)>;\s*rel="last"', link)
+        if last:
+            status, body, _ = _request(last.group(1), token)
+            if status != 200:
+                return None
+        commits = json.loads(body)
+        return commits[0].get("sha") if commits else None
+    if "gitlab" in host:
+        encoded = urllib.parse.quote(path, safe="")
+        url = f"https://{host}/api/v4/projects/{encoded}/repository/commits?per_page=1"
+        status, body, headers = _gitlab_request(url, None)
+        if status != 200:
+            return None
+        pages = headers.get("x-total-pages") or headers.get("X-Total-Pages")
+        if pages and pages != "1":
+            status, body, _ = _gitlab_request(f"{url}&page={pages}", None)
+            if status != 200:
+                return None
+        commits = json.loads(body)
+        return commits[0].get("id") if commits else None
+    return None
+
+
+def _has_commit(host: str, path: str, sha: str, token: str | None) -> bool | None:
+    """Whether the repository contains the commit. None = undetermined."""
+    if host == "github.com":
+        status, _, _ = _request(
+            f"https://api.github.com/repos/{path}/commits/{sha}", token)
+    elif "gitlab" in host:
+        encoded = urllib.parse.quote(path, safe="")
+        status, _, _ = _gitlab_request(
+            f"https://{host}/api/v4/projects/{encoded}/repository/commits/{sha}",
+            None)
+    else:
+        return None
+    if status == 200:
+        return True
+    if status in (404, 422):
+        return False
+    return None
+
+
+def _shares_history(candidate_url: str, listed_url: str,
+                    token: str | None) -> bool | None:
+    """Whether the candidate's root commit is reachable in the listed
+    repository. The root is the right commit to probe: a copy diverges at
+    the tip but keeps its origin, whichever repository came first."""
+    cand = _repo_host_path(candidate_url)
+    listed = _repo_host_path(listed_url)
+    if not cand or not listed:
+        return None
+    sha = _root_commit(*cand, token)
+    if not sha:
+        return None
+    return _has_commit(listed[0], listed[1], sha, token)
+
+
+def classify_existing(index_dir: str | Path, candidate_url: str,
+                      component: str, gh_token: str | None) -> tuple[str, str]:
+    """(outcome, detail) for a candidate whose component is already listed.
+    gh_token is a GitHub token; GitLab endpoints are probed unauthenticated."""
+    source = _listing_source(index_dir, component)
+    if not source or _normalize_repo_url(source) == _normalize_repo_url(candidate_url):
+        return ("exists",
+                f"component {component} already registered (first-come, RFC §8)")
+    shared = _shares_history(candidate_url, source, gh_token)
+    if shared:
+        return ("copy",
+                f"shares git history with {source}, which holds component {component}")
+    probe = "" if shared is False else "; history probe inconclusive"
+    return ("name-collision",
+            f"independent repository declaring {component}, held by "
+            f"{source}{probe}; see NAMESPACE.md")
 
 
 def _metrics_dict(*, updated: str | None, stars: int, forks: int,
@@ -737,9 +860,11 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
         plugintype = component.partition("_")[0]
         out_path = index / "plugins" / plugintype / f"{component}.yml"
         if out_path.exists():
-            record_outcome(ledger, candidate, "exists",
-                           f"component {component} already registered (first-come, RFC §8)", today)
-            results.append(ScanResult(candidate, "exists", component))
+            outcome, detail = classify_existing(index, candidate.html_url,
+                                                component, token)
+            record_outcome(ledger, candidate, outcome, detail, today,
+                           component=component)
+            results.append(ScanResult(candidate, outcome, component))
             continue
 
         if not dry_run:
@@ -755,6 +880,80 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
     if not dry_run:
         save_ledger(index, ledger)
     return results
+
+
+def check_collisions(index_dir: str | Path, token: str | None = None,
+                     component: str | None = None, reclassify: bool = False,
+                     include_copies: bool = False, dry_run: bool = False,
+                     log=print) -> dict:
+    """Report same-component ledger entries; with reclassify=True, also
+    backfill legacy 'exists' entries that point at a repository other than
+    the listing's source, splitting them into copy / name-collision via the
+    shared-history probe. Entries whose probe is inconclusive on both hosts
+    are left as 'exists' for a later run rather than guessed at."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    index = Path(index_dir)
+    ledger = load_ledger(index)
+    today = datetime.date.today().isoformat()
+    stats = {"collisions": [], "copies": [], "reclassified": 0, "inconclusive": 0}
+    legacy = re.compile(r"component (\S+) already registered")
+
+    for full_name, entry in sorted(ledger.items()):
+        outcome = entry.get("outcome")
+        if reclassify and outcome == "exists":
+            match = legacy.search(entry.get("detail", ""))
+            if not match:
+                continue
+            comp = match.group(1)
+            source = _listing_source(index, comp)
+            if not source:
+                continue
+            listed = _repo_host_path(source)
+            if listed and listed[1] == full_name.lower():
+                continue  # the listed repository itself, re-seen
+            # Ledger keys carry no host; nearly all are GitHub, so probe
+            # there first and fall back to GitLab.com.
+            shared = None
+            for url in (f"https://github.com/{full_name}",
+                        f"https://gitlab.com/{full_name}"):
+                shared = _shares_history(url, source, token)
+                if shared is not None:
+                    break
+            if shared is None:
+                stats["inconclusive"] += 1
+                log(f"  ? {full_name}: probe inconclusive, left as exists")
+                continue
+            if shared:
+                outcome, detail = ("copy", f"shares git history with {source}, "
+                                           f"which holds component {comp}")
+            else:
+                outcome, detail = ("name-collision",
+                                   f"independent repository declaring {comp}, "
+                                   f"held by {source}; see NAMESPACE.md")
+            entry.update({"outcome": outcome, "detail": detail,
+                          "component": comp, "last-checked": today})
+            stats["reclassified"] += 1
+        if component and entry.get("component") != component:
+            continue
+        if outcome == "name-collision":
+            stats["collisions"].append((full_name, entry))
+        elif outcome == "copy":
+            stats["copies"].append((full_name, entry))
+
+    for full_name, entry in stats["collisions"]:
+        log(f"name-collision: {full_name}  [{entry.get('component', '?')}]  "
+            f"{entry.get('detail', '')}")
+    if include_copies:
+        for full_name, entry in stats["copies"]:
+            log(f"copy: {full_name}  [{entry.get('component', '?')}]  "
+                f"{entry.get('detail', '')}")
+    log(f"{len(stats['collisions'])} name-collision(s), "
+        f"{len(stats['copies'])} cop(ies)"
+        + (f"; {stats['reclassified']} reclassified, "
+           f"{stats['inconclusive']} inconclusive" if reclassify else ""))
+    if reclassify and stats["reclassified"] and not dry_run:
+        save_ledger(index, ledger)
+    return stats
 
 
 # --- GitLab discovery --------------------------------------------------------
@@ -927,10 +1126,14 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
             plugintype = component.partition("_")[0]
             out_path = index / "plugins" / plugintype / f"{component}.yml"
             if out_path.exists():
-                record_outcome(ledger, candidate, "exists",
-                               f"component {component} already registered "
-                               f"(first-come, RFC §8)", today)
-                results.append(ScanResult(candidate, "exists", component))
+                # The history probe talks to the GitHub API when the listed
+                # holder lives there; the GitLab token would be rejected.
+                outcome, detail = classify_existing(
+                    index, candidate.html_url, component,
+                    os.environ.get("GITHUB_TOKEN"))
+                record_outcome(ledger, candidate, outcome, detail, today,
+                               component=component)
+                results.append(ScanResult(candidate, outcome, component))
                 seen_components.add(component)
                 continue
             if not _name_matches_component(candidate.full_name, component):
@@ -1039,10 +1242,11 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
             plugintype = component.partition("_")[0]
             out_path = index / "plugins" / plugintype / f"{component}.yml"
             if out_path.exists():
-                record_outcome(ledger, candidate, "exists",
-                               f"component {component} already registered "
-                               f"(first-come, RFC §8)", today)
-                results.append(ScanResult(candidate, "exists", component))
+                outcome, detail = classify_existing(index, candidate.html_url,
+                                                    component, token)
+                record_outcome(ledger, candidate, outcome, detail, today,
+                               component=component)
+                results.append(ScanResult(candidate, outcome, component))
                 seen_components.add(component)
                 continue
 

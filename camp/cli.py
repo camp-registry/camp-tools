@@ -541,6 +541,16 @@ def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_check_collisions(args: argparse.Namespace) -> int:
+    from .scan import check_collisions
+    check_collisions(args.index_dir, component=args.component,
+                     reclassify=args.reclassify, include_copies=args.copies,
+                     dry_run=args.dry_run)
+    # Warn-only by design (NAMESPACE.md): collisions are surfaced for
+    # humans, never a gate.
+    return 0
+
+
 def _cmd_scan_report(args: argparse.Namespace) -> int:
     from .scan import load_ledger
     ledger = load_ledger(args.index_dir)
@@ -763,6 +773,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_recheck_licenses)
+
+    p = sub.add_parser("check-collisions",
+                       help="report component-name collisions recorded in the scan ledger")
+    p.add_argument("index_dir")
+    p.add_argument("--component", help="only report entries for this component")
+    p.add_argument("--copies", action="store_true",
+                   help="also list detached copies (shared-history repos)")
+    p.add_argument("--reclassify", action="store_true",
+                   help="backfill legacy 'exists' entries whose repo differs "
+                        "from the listing source (writes the ledger)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=_cmd_check_collisions)
 
     p = sub.add_parser("scan-report", help="summarize the scan ledger (rejections and why)")
     p.add_argument("index_dir")
