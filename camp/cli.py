@@ -137,8 +137,19 @@ def _cmd_release(args: argparse.Namespace) -> int:
         listing_hash = build_mod.file_sha256_at_commit(repo, artifact.commit, ".camp/listing.yml")
         released_ts = build_mod.commit_timestamp(repo, artifact.commit)
 
-        supported = (args.supported_moodle.split(",") if args.supported_moodle
-                     else derive_supported_moodle(repo, artifact.commit))
+        derived = derive_supported_moodle(repo, artifact.commit)
+        if args.supported_moodle:
+            supported = [b.strip() for b in args.supported_moodle.split(",")]
+            if derived and supported != derived:
+                # Warn-only (D23): the author's explicit override wins, but
+                # disagreement usually means one of the two is stale.
+                print(f"warning: --supported-moodle ({','.join(supported)}) "
+                      f"disagrees with version.php at {args.tag}, which "
+                      f"declares {','.join(derived)}; the override wins — "
+                      f"update version.php if it is the stale one",
+                      file=sys.stderr)
+        else:
+            supported = derived
 
     if any(r["tag"] == args.tag for r in entry["releases"]):
         print(f"error: tag {args.tag} is already in the ledger; releases are immutable", file=sys.stderr)

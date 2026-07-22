@@ -73,6 +73,27 @@ def test_release_flips_claimed_to_verified(entry_path, plugin_repo):
     assert validate_entry(entry_path) == []
 
 
+def test_release_warns_when_override_disagrees_with_version_php(
+        entry_path, plugin_repo, capsys):
+    # fixture version.php has requires→4.5 and no $plugin->supported, so
+    # the derivation says ["4.5"]; the explicit "4.5,5.0" disagrees
+    _mutate(entry_path, lambda e: e.update(releases=[]))
+    assert main(["release", str(entry_path), "v1.0.0",
+                 "--source", str(plugin_repo), "--supported-moodle", "4.5,5.0"]) == 0
+    err = capsys.readouterr().err
+    assert "disagrees with version.php" in err
+    entry = yaml.safe_load(entry_path.read_text())
+    # warn-only: the override still wins
+    assert entry["releases"][0]["supported-moodle"] == ["4.5", "5.0"]
+
+
+def test_release_no_warning_when_override_matches(entry_path, plugin_repo, capsys):
+    _mutate(entry_path, lambda e: e.update(releases=[]))
+    assert main(["release", str(entry_path), "v1.0.0",
+                 "--source", str(plugin_repo), "--supported-moodle", "4.5"]) == 0
+    assert "disagrees" not in capsys.readouterr().err
+
+
 def test_artifacts_materialize_hash_gated_and_idempotent(index_dir, entry_path, plugin_repo, tmp_path):
     from camp.artifacts import materialize
 
