@@ -486,6 +486,12 @@ footer .build{display:block;margin-top:4px}
 .prose code{font-family:var(--mono);font-size:.9em;background:var(--surface);
   padding:1px 5px;border-radius:2px;border:1px solid var(--border)}
 .prose ul,.prose ol{padding-left:22px}
+.prose pre{background:var(--surface);border:1px solid var(--border);
+  border-radius:3px;padding:12px 14px;overflow-x:auto;margin:12px 0}
+.prose pre code{background:none;border:0;padding:0}
+.prose blockquote{border-left:3px solid var(--amber);background:var(--surface);
+  border-radius:0 3px 3px 0;margin:14px 0;padding:8px 16px;color:var(--text)}
+.prose img{max-width:100%}
 .banner{border-left:3px solid var(--amber);background:var(--surface);
   border-radius:0 3px 3px 0;padding:14px 18px;margin-top:22px;font-size:0.84375rem;
   line-height:1.55;color:var(--text)}
@@ -1504,7 +1510,7 @@ def _header() -> str:
   <nav aria-label="Primary">
     <a href="/">Browse</a>
     <a href="/how-it-works.html">How it works</a>
-    <a href="https://github.com/camp-registry/camp-docs">Docs</a>
+    <a href="/authors.html">Publish<span class="nav-xtra"> your plugin</span></a>
     <a href="{MIRROR_URL}">Mirror<span class="nav-xtra"> this archive</span></a>
     <button class="theme-toggle" id="theme-toggle" aria-label="Switch theme">
       <svg class="ic-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -2478,6 +2484,44 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
 # ---------------------------------------------------------------- how ------
 
 
+def _authors_page(md_text: str | None) -> str:
+    """The rendered claim→publish guide at /authors.html (camp-tools#5),
+    single-sourced from camp-docs AUTHORS.md — the publish workflow checks
+    that repo out and passes the file via --authors-md, so edits there
+    appear here at the next publish and nothing is vendored to drift.
+
+    Without the flag (local builds, tests) a stub page keeps the nav link
+    from 404ing and points at the canonical file on GitHub.
+
+    Unlike author-supplied listing descriptions, this content is
+    registry-authored, so images stay enabled (the badge example is
+    self-hosted); raw HTML stays off as belt-and-braces.
+    """
+    canonical = ("https://github.com/camp-registry/camp-docs/blob/main/"
+                 "AUTHORS.md")
+    if md_text:
+        from markdown_it import MarkdownIt
+        md = MarkdownIt("commonmark", {"html": False})
+        body = (f'<div class="prose">{md.render(md_text)}</div>'
+                f'<div class="attrib" style="margin-top:28px">This page is '
+                f'rendered from <a href="{canonical}">AUTHORS.md in '
+                f'camp-docs</a> — the canonical source. Edits there appear '
+                f'here at the next publish.</div>')
+    else:
+        body = (f'<h1 style="font-family:var(--serif);color:var(--ink)">'
+                f'Publish your plugin</h1>'
+                f'<div class="prose"><p>The claim-to-publish guide lives at '
+                f'<a href="{canonical}">AUTHORS.md in camp-docs</a>. (This '
+                f'build was generated without the rendered copy — the '
+                f'production site carries it inline.)</p></div>')
+    return _page(
+        "Publish your plugin — CAMP",
+        f'{_header()}<div class="narrow"><main id="main-content" '
+        f'tabindex="-1">{body}</main>{_footer(wrap=False)}</div>',
+        description="How to claim your plugin, publish verified releases, "
+                    "and maintain your listing on CAMP.")
+
+
 def _how_page() -> str:
     body = f"""
 {_header()}
@@ -2584,7 +2628,8 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
              listings_dir: str | Path | None = None,
              checks_dir: str | Path | None = None,
              reviews_source: str | None = None,
-             artifacts_base: str | None = None) -> int:
+             artifacts_base: str | None = None,
+             authors_md: str | Path | None = None) -> int:
     out = Path(out_dir)
     (out / "plugin").mkdir(parents=True, exist_ok=True)
     listings = Path(listings_dir) if listings_dir else None
@@ -2679,6 +2724,8 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
         f'</main>{_footer(wrap=False)}</div>'))
 
     (out / "how-it-works.html").write_text(_how_page())
+    (out / "authors.html").write_text(_authors_page(
+        Path(authors_md).read_text() if authors_md else None))
 
     (out / "advisories").mkdir(exist_ok=True)
     (out / "advisories" / "index.html").write_text(

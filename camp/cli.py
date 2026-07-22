@@ -565,7 +565,8 @@ def _cmd_site(args: argparse.Namespace) -> int:
     count = site_mod.generate(args.index_dir, args.base_url.rstrip("/"), args.out_dir,
                               listings_dir=args.listings, checks_dir=args.checks,
                               reviews_source=args.reviews,
-                              artifacts_base=(args.artifacts_base or "").rstrip("/") or None)
+                              artifacts_base=(args.artifacts_base or "").rstrip("/") or None,
+                              authors_md=args.authors_md)
     print(f"generated site in {args.out_dir} ({count} plugins)")
     return 0
 
@@ -779,6 +780,8 @@ def main(argv: list[str] | None = None) -> int:
                    "(URL or local path; omit to render no review chips)")
     p.add_argument("--artifacts-base", help="artifact archive base URL "
                    "(default: <base_url>/artifacts)")
+    p.add_argument("--authors-md", help="path to camp-docs AUTHORS.md; "
+                   "rendered as /authors.html (omit for a stub linking GitHub)")
     p.set_defaults(func=_cmd_site)
 
     args = parser.parse_args(argv)

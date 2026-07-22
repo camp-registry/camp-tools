@@ -294,6 +294,41 @@ def test_advisory_token_contrast_both_themes(site):
         assert r >= 4.5, (theme, "faint-label on surface", round(r, 2))
 
 
+def test_authors_page(index_dir, tmp_path):
+    """/authors.html (camp-tools#5): rendered from AUTHORS.md when given,
+    stub linking the canonical file otherwise; sane structure either way,
+    raw HTML neutralized even in registry-authored content."""
+    md = ("# Publishing your plugin to camp\n\n"
+          "> Pre-launch note.\n\n"
+          "## Step 1\n\nRun this:\n\n```\ncamp scaffold repo\n```\n\n"
+          "<script>alert(1)</script>\n")
+    src = tmp_path / "AUTHORS.md"
+    src.write_text(md)
+
+    out = tmp_path / "site-rendered"
+    site_generate(index_dir, "https://repo.test", out, authors_md=src)
+    html = (out / "authors.html").read_text()
+    assert "Publishing your plugin to camp" in html
+    assert "camp scaffold repo" in html
+    assert "<script>alert(1)</script>" not in html          # html=False escapes it
+    assert "canonical source" in html
+    for elems in [scan(html)]:
+        mains = [a for t, a in elems if t == "main"]
+        assert len(mains) == 1 and mains[0].get("id") == "main-content"
+        levels = [int(t[1]) for t, _ in elems if re.fullmatch(r"h[1-6]", t)]
+        assert levels and levels[0] == 1
+        for prev, cur in zip(levels, levels[1:]):
+            assert cur <= prev + 1
+
+    out2 = tmp_path / "site-stub"
+    site_generate(index_dir, "https://repo.test", out2)
+    stub = (out2 / "authors.html").read_text()
+    assert "camp-docs/blob/main/AUTHORS.md" in stub
+
+    # the nav on every page points at the authors page
+    assert 'href="/authors.html"' in (out2 / "index.html").read_text()
+
+
 def test_advisory_pages_structure(index_dir, tmp_path):
     """The advisory permalink pages and index (v0.2.21) carry the same
     structural guarantees as the original four page types."""
