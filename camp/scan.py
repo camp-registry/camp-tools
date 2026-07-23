@@ -129,14 +129,24 @@ def save_ledger(index_dir: str | Path, repos: dict) -> None:
                        sort_keys=False, allow_unicode=True)
 
 
+# Outcomes the recheck window never reopens. 'opted-out' is a maintainer's
+# standing request (RFC §4.4): re-evaluating it would re-list a repository
+# whose owner asked to be removed. Keyed by repository, so a later rename
+# of the repo escapes the marker; the rename detector doesn't track
+# unlisted repos, and that residual risk is accepted.
+PERMANENT_OUTCOMES = frozenset({"opted-out"})
+
+
 def should_skip(ledger: dict, full_name: str, today: str,
                 recheck_days: int = DEFAULT_RECHECK_DAYS) -> bool:
     """Skip repos already evaluated within the recheck window. 'written'
     entries are never skipped by the ledger (the index itself is the
-    authority for those)."""
+    authority for those); PERMANENT_OUTCOMES are always skipped."""
     record = ledger.get(full_name)
     if record is None or record.get("outcome") == "written":
         return False
+    if record.get("outcome") in PERMANENT_OUTCOMES:
+        return True
     last = datetime.date.fromisoformat(record["last-checked"])
     age = (datetime.date.fromisoformat(today) - last).days
     return age < recheck_days
@@ -958,6 +968,64 @@ def check_collisions(index_dir: str | Path, token: str | None = None,
     if reclassify and stats["reclassified"] and not dry_run:
         save_ledger(index, ledger)
     return stats
+
+
+def opt_out(index_dir: str | Path, components: list[str], reason: str = "",
+            log=print) -> list[str]:
+    """Remove discovered listings at maintainer request (RFC §4.4) and
+    record a permanent 'opted-out' ledger entry per source repository so
+    discovery never re-lists it. Only unclaimed Tier 0 listings without
+    releases qualify: claimed listings are the maintainer's own file (they
+    edit or delist it by PR), and released listings are never deleted at
+    all (the archive keeps published history; delisting is a status
+    change). Returns the components that could NOT be removed."""
+    index = Path(index_dir)
+    today = datetime.date.today().isoformat()
+    ledger = load_ledger(index)
+    failed: list[str] = []
+
+    for component in components:
+        path = (index / "plugins" / component.partition("_")[0]
+                / f"{component}.yml")
+        if not path.exists():
+            log(f"  ! {component}: no listing file")
+            failed.append(component)
+            continue
+        with open(path) as f:
+            entry = yaml.safe_load(f) or {}
+        if entry.get("tier", 0) >= 1:
+            log(f"  ! {component}: claimed (tier {entry['tier']}); the "
+                f"maintainer edits or delists their own entry by PR")
+            failed.append(component)
+            continue
+        if entry.get("releases"):
+            log(f"  ! {component}: has released versions; published history "
+                f"is never deleted (use status: delisted)")
+            failed.append(component)
+            continue
+        source = entry.get("source", "")
+        listed = _repo_host_path(source)
+        if not listed:
+            log(f"  ! {component}: unparseable source {source!r}")
+            failed.append(component)
+            continue
+        repo_key = listed[1]
+        previous = ledger.get(repo_key, {})
+        detail = "listing removed at maintainer request"
+        if reason:
+            detail += f" ({reason})"
+        ledger[repo_key] = {
+            "outcome": "opted-out",
+            "detail": detail,
+            "component": component,
+            "first-seen": previous.get("first-seen", today),
+            "last-checked": today,
+        }
+        path.unlink()
+        log(f"  - {component}  ({repo_key}, opted out)")
+
+    save_ledger(index, ledger)
+    return failed
 
 
 # --- GitLab discovery --------------------------------------------------------

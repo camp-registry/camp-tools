@@ -541,6 +541,15 @@ def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_opt_out(args: argparse.Namespace) -> int:
+    from .scan import opt_out
+    failed = opt_out(args.index_dir, args.components, reason=args.reason)
+    done = len(args.components) - len(failed)
+    print(f"{done} listing(s) removed and opted out"
+          + (f"; {len(failed)} refused: {', '.join(failed)}" if failed else ""))
+    return 1 if failed else 0
+
+
 def _cmd_check_collisions(args: argparse.Namespace) -> int:
     from .scan import check_collisions
     check_collisions(args.index_dir, component=args.component,
@@ -773,6 +782,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_recheck_licenses)
+
+    p = sub.add_parser("opt-out",
+                       help="remove discovered Tier 0 listings at maintainer "
+                            "request; the repos are permanently opted out of "
+                            "discovery (RFC §4.4)")
+    p.add_argument("index_dir")
+    p.add_argument("components", nargs="+",
+                   help="frankenstyle component names to remove")
+    p.add_argument("--reason", default="",
+                   help="recorded in the ledger detail, e.g. 'camp-index#42'")
+    p.set_defaults(func=_cmd_opt_out)
 
     p = sub.add_parser("check-collisions",
                        help="report component-name collisions recorded in the scan ledger")
