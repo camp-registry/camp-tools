@@ -114,3 +114,29 @@ def test_refresh_metrics_reports_failures(tmp_path, monkeypatch):
     failed = refresh_metrics(tmp_path, ["mod_gone", "mod_ghost"],
                              log=lambda *a: None)
     assert sorted(failed) == ["mod_ghost", "mod_gone"]
+
+
+def test_opt_out_preserves_ledger_key_casing(tmp_path):
+    """Ledger keys carry GitHub's original casing and lookups are exact:
+    a lowercased opt-out key would never match the scanner's key, so the
+    repo would be re-listed after the recheck window (the FMCorz case)."""
+    _write_listing(tmp_path, "filter_x",
+                   source="https://github.com/FMCorz/moodle-filter_x")
+    ledger = {"FMCorz/moodle-filter_x": {
+        "outcome": "exists", "detail": "d",
+        "first-seen": "2026-07-10", "last-checked": "2026-07-11"}}
+    save_ledger(tmp_path, ledger)
+    opt_out(tmp_path, ["filter_x"], log=lambda *a: None)
+    reloaded = load_ledger(tmp_path)
+    assert "FMCorz/moodle-filter_x" in reloaded
+    assert "fmcorz/moodle-filter_x" not in reloaded
+    assert reloaded["FMCorz/moodle-filter_x"]["outcome"] == "opted-out"
+    assert reloaded["FMCorz/moodle-filter_x"]["first-seen"] == "2026-07-10"
+    assert should_skip(reloaded, "FMCorz/moodle-filter_x", "2036-01-01")
+
+
+def test_opt_out_case_preserved_without_prior_entry(tmp_path):
+    _write_listing(tmp_path, "mod_new",
+                   source="https://github.com/MixedCase/moodle-mod_new")
+    opt_out(tmp_path, ["mod_new"], log=lambda *a: None)
+    assert "MixedCase/moodle-mod_new" in load_ledger(tmp_path)

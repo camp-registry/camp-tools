@@ -1048,7 +1048,17 @@ def opt_out(index_dir: str | Path, components: list[str], reason: str = "",
             log(f"  ! {component}: unparseable source {source!r}")
             failed.append(component)
             continue
-        repo_key = listed[1]
+        # Ledger keys carry the platform's original casing and lookups are
+        # exact, so a lowercased key would never match the scanner's and
+        # the opt-out would silently fail to stick. Parse the path
+        # case-preserved and reuse an existing entry's key if one matches
+        # case-insensitively.
+        tail = source.strip().split("://")[-1].rstrip("/")
+        if tail.lower().endswith(".git"):
+            tail = tail[:-4]
+        repo_key = tail.partition("/")[2]
+        repo_key = next((k for k in ledger if k.lower() == repo_key.lower()),
+                        repo_key)
         previous = ledger.get(repo_key, {})
         detail = "listing removed at maintainer request"
         if reason:
