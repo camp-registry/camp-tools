@@ -68,3 +68,49 @@ def test_opt_out_gitlab_source_keys_by_project_path(tmp_path):
     failed = opt_out(tmp_path, ["mod_gl"], log=lambda *a: None)
     assert failed == []
     assert load_ledger(tmp_path)["group/sub/moodle-mod_gl"]["outcome"] == "opted-out"
+
+
+def test_refresh_metrics_updates_entry(tmp_path, monkeypatch):
+    import camp.scan as scan
+    from camp.scan import refresh_metrics
+    _write_listing(tmp_path, "local_x", tier=1)
+    fresh = {"updated": "2026-07-20T00:00:00Z", "stars": 40, "forks": 3,
+             "open-issues": 1, "archived": False, "checked": "2026-07-23"}
+    monkeypatch.setattr(scan, "_fetch_metrics",
+                        lambda source, token, checked, log: ("ok", dict(fresh), None))
+    failed = refresh_metrics(tmp_path, ["local_x"], log=lambda *a: None)
+    assert failed == []
+    entry = yaml.safe_load(
+        (tmp_path / "plugins" / "local" / "local_x.yml").read_text())
+    assert entry["metrics"]["stars"] == 40
+    assert entry["tier"] == 1  # everything else untouched
+
+
+def test_refresh_metrics_rename_semantics_match_enrich(tmp_path, monkeypatch):
+    import camp.scan as scan
+    from camp.scan import refresh_metrics
+    _write_listing(tmp_path, "mod_zero", tier=0)
+    _write_listing(tmp_path, "mod_one", tier=1)
+    monkeypatch.setattr(
+        scan, "_fetch_metrics",
+        lambda source, token, checked, log:
+            ("ok", {"checked": "2026-07-23"}, "https://github.com/new/home"))
+    refresh_metrics(tmp_path, ["mod_zero", "mod_one"], log=lambda *a: None)
+    zero = yaml.safe_load(
+        (tmp_path / "plugins" / "mod" / "mod_zero.yml").read_text())
+    one = yaml.safe_load(
+        (tmp_path / "plugins" / "mod" / "mod_one.yml").read_text())
+    assert zero["source"] == "https://github.com/new/home"          # tier 0
+    assert one["source"].endswith("o/moodle-mod_one")               # claimed
+    assert one["metrics"]["renamed-to"] == "https://github.com/new/home"
+
+
+def test_refresh_metrics_reports_failures(tmp_path, monkeypatch):
+    import camp.scan as scan
+    from camp.scan import refresh_metrics
+    _write_listing(tmp_path, "mod_gone")
+    monkeypatch.setattr(scan, "_fetch_metrics",
+                        lambda *a: ("gone", None, None))
+    failed = refresh_metrics(tmp_path, ["mod_gone", "mod_ghost"],
+                             log=lambda *a: None)
+    assert sorted(failed) == ["mod_ghost", "mod_gone"]

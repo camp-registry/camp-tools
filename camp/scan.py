@@ -970,6 +970,45 @@ def check_collisions(index_dir: str | Path, token: str | None = None,
     return stats
 
 
+def refresh_metrics(index_dir: str | Path, components: list[str],
+                    token: str | None = None, log=print) -> list[str]:
+    """Immediately re-fetch upstream metrics for the named entries, outside
+    enrich's staleness window. The use case is a source repoint (a claim PR
+    that changes `source`): until the rolling refresh reaches the entry, it
+    wears the previous repository's activity data and health phrase, up to
+    two weeks for the seeding cohort (camp-tools#9). Rename handling
+    matches enrich: tier 0 sources auto-canonicalize, claimed entries get
+    metrics.renamed-to flagged. Returns the components that failed."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    today = datetime.date.today().isoformat()
+    failed: list[str] = []
+    for component in components:
+        path = (Path(index_dir) / "plugins" / component.partition("_")[0]
+                / f"{component}.yml")
+        if not path.exists():
+            log(f"  ! {component}: no listing file")
+            failed.append(component)
+            continue
+        with open(path) as f:
+            entry = yaml.safe_load(f) or {}
+        status, metrics, canonical = _fetch_metrics(
+            entry["source"], token, today, log)
+        if status != "ok":
+            log(f"  ! {component}: metrics fetch failed ({status})")
+            failed.append(component)
+            continue
+        entry["metrics"] = metrics
+        if canonical:
+            if entry.get("tier", 0) == 0:
+                entry["source"] = canonical
+            else:
+                entry["metrics"]["renamed-to"] = canonical
+        with open(path, "w") as f:
+            yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
+        log(f"  refreshed {component} from {entry['source']}")
+    return failed
+
+
 def opt_out(index_dir: str | Path, components: list[str], reason: str = "",
             log=print) -> list[str]:
     """Remove discovered listings at maintainer request (RFC §4.4) and

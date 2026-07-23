@@ -541,6 +541,15 @@ def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_refresh_metrics(args: argparse.Namespace) -> int:
+    from .scan import refresh_metrics
+    failed = refresh_metrics(args.index_dir, args.components)
+    done = len(args.components) - len(failed)
+    print(f"{done} entr(ies) refreshed"
+          + (f"; {len(failed)} failed: {', '.join(failed)}" if failed else ""))
+    return 1 if failed else 0
+
+
 def _cmd_opt_out(args: argparse.Namespace) -> int:
     from .scan import opt_out
     failed = opt_out(args.index_dir, args.components, reason=args.reason)
@@ -782,6 +791,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_recheck_licenses)
+
+    p = sub.add_parser("refresh-metrics",
+                       help="immediately re-fetch upstream metrics for named "
+                            "entries (use after a source repoint; camp-tools#9)")
+    p.add_argument("index_dir")
+    p.add_argument("components", nargs="+",
+                   help="frankenstyle component names to refresh")
+    p.set_defaults(func=_cmd_refresh_metrics)
 
     p = sub.add_parser("opt-out",
                        help="remove discovered Tier 0 listings at maintainer "
