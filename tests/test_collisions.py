@@ -183,3 +183,19 @@ def test_gitlab_scan_probe_uses_github_token_not_gitlab(monkeypatch):
     import inspect
     src = inspect.getsource(scan.scan_gitlab)
     assert 'os.environ.get("GITHUB_TOKEN")' in src
+
+
+def test_reclassify_matches_same_run_duplicate_wording(tmp_path, monkeypatch):
+    """The seeding scan recorded same-run duplicates as 'already indexed
+    this run'; the first backfill's regex only matched 'already
+    registered' and left 727 entries unclassified (camp-tools#11)."""
+    _write_listing(tmp_path)
+    ledger = {RIVAL: {
+        "outcome": "exists",
+        "detail": "component local_x already indexed this run",
+        "first-seen": "2026-07-11", "last-checked": "2026-07-11"}}
+    save_ledger(tmp_path, ledger)
+    monkeypatch.setattr(scan, "_shares_history", lambda *a: False)
+    stats = check_collisions(tmp_path, reclassify=True, log=lambda *a: None)
+    assert stats["reclassified"] == 1
+    assert load_ledger(tmp_path)[RIVAL]["outcome"] == "name-collision"

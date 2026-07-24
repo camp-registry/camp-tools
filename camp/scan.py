@@ -910,7 +910,12 @@ def check_collisions(index_dir: str | Path, token: str | None = None,
     ledger = load_ledger(index)
     today = datetime.date.today().isoformat()
     stats = {"collisions": [], "copies": [], "reclassified": 0, "inconclusive": 0}
-    legacy = re.compile(r"component (\S+) already registered")
+    # Both legacy 'exists' wordings qualify: "already registered" (listing
+    # file existed at scan time) and "already indexed this run" (another
+    # repo claimed the component earlier in the same sweep). The first
+    # backfill matched only the former and left 727 of the latter
+    # unclassified (camp-tools#11).
+    legacy = re.compile(r"component (\S+) already (?:registered|indexed this run)")
 
     for full_name, entry in sorted(ledger.items()):
         outcome = entry.get("outcome")
