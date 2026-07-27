@@ -77,3 +77,22 @@ def test_write_reports_omits_match(tmp_path):
     assert not (tmp_path / "out" / "match.tsv").exists()
     assert (tmp_path / "out" / "independent.tsv").read_text() == "x\ty\tz\n"
     assert (tmp_path / "out" / "missing.tsv").read_text() == ""
+
+
+def test_crosscheck_uses_env_token(tmp_path, monkeypatch):
+    """The first real run probed unauthenticated (60 req/hr) because the
+    token never made it from the environment into the probes; 203 of 245
+    pairs landed in probe-failed. The env fallback is now load-bearing."""
+    _write_entry(tmp_path, "mod_x", "https://github.com/copy/moodle-mod_x")
+    seen = {}
+    monkeypatch.setenv("GITHUB_TOKEN", "tok-from-env")
+    monkeypatch.setattr(cc, "_repo_alive", lambda url: True)
+
+    def spy(a, b, token):
+        seen["token"] = token
+        return True
+
+    monkeypatch.setattr(cc, "_shares_history", spy)
+    crosscheck(tmp_path, {"mod_x": "https://github.com/auth/moodle-mod_x"},
+               log=lambda *a: None)
+    assert seen["token"] == "tok-from-env"

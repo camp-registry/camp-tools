@@ -106,6 +106,10 @@ def crosscheck(index_dir: str | Path, pluglist: dict[str, str],
     """Classify every directory component against the index. Returns
     {class: [(component, camp_source, directory_source), ...]} with
     'missing' rows carrying (component, "", directory_source)."""
+    # Unauthenticated GitHub API = 60 requests/hour; the history probes
+    # burn that in ~20 pairs and everything after lands in probe-failed
+    # (the first real run did exactly this).
+    token = token or os.environ.get("GITHUB_TOKEN")
     index = Path(index_dir)
     entries: dict[str, dict] = {}
     for path in (index / "plugins").glob("*/*.yml"):
