@@ -1530,7 +1530,9 @@ def _footer(wrap: bool = True) -> str:
     built = _BUILT.strftime("%Y-%m-%d %H:%M UTC")
     inner = (f"""<footer>
   <span>CAMP is a community-governed archive of plugins for Moodle™.
-  Open data, mirrorable by anyone.</span>
+  Open data, mirrorable by anyone: index
+  <a href="https://github.com/camp-registry/camp-index/blob/main/LICENSE-DATA.md">ODbL</a>,
+  advisories CC BY 4.0.</span>
   <span class="fine">Not affiliated with or endorsed by Moodle Pty Ltd.
   <span class="build">camp-tools v{TOOLS_VERSION} · built {built}</span></span>
 </footer>""")
