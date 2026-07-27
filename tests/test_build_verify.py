@@ -138,3 +138,45 @@ def test_verify_detects_malformed_thirdpartylibs(plugin_repo, entry_path):
     results = verify_entry(entry_path, source_override=str(plugin_repo))
     assert not results[0].ok
     assert any("not well-formed" in p for p in results[0].problems)
+
+
+def test_verify_skips_revoked_releases(plugin_repo, entry_path):
+    """A revoked release is recorded history, not a live claim: it is
+    withdrawn from installation and archived, so verify must not re-check
+    it (camp-tools#13: a defective record whose ref moved would otherwise
+    fail every future PR for the entry forever)."""
+    import yaml as _yaml
+
+    # Break the release the same way the real incident did: move the ref.
+    (plugin_repo / "lib.php").write_text("<?php // changed\n")
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "change")
+    git(plugin_repo, "tag", "-f", "v1.0.0")
+
+    entry = _yaml.safe_load(entry_path.read_text())
+    version = entry["releases"][0]["version"]
+    advisories = entry_path.parent.parent.parent / "advisories"
+    advisories.mkdir()
+    (advisories / "CAMP-2026-9999.yml").write_text(_yaml.safe_dump({
+        "id": "CAMP-2026-9999",
+        "component": "mod_example",
+        "title": "Defective publication record",
+        "severity": "low",
+        "affected-versions": f"={version}",
+        "revoke": True,
+        "published": "2026-07-27",
+        "description": "Record referenced a moveable ref.",
+    }))
+
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert results[0].ok
+    assert any("revoked" in check for check in results[0].checks)
+
+
+def test_verify_still_fails_moved_tag_without_revocation(plugin_repo, entry_path):
+    (plugin_repo / "lib.php").write_text("<?php // changed\n")
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "change")
+    git(plugin_repo, "tag", "-f", "v1.0.0")
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert not results[0].ok

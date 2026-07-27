@@ -451,3 +451,24 @@ def test_description_markdown_is_sanitized():
     # inert text — it must never become an href
     assert 'href="javascript:' not in html
     assert "<img" not in html
+
+
+def test_release_refuses_non_tag_refs(entry_path, plugin_repo, capsys):
+    """camp release must only build at immutable tags: a branch ref
+    verifies once and fails forever when it moves (camp-tools#13, the
+    tag-main incident)."""
+    rc = main(["release", str(entry_path), "master", "--source", str(plugin_repo)])
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "not a tag" in captured.err
+
+
+def test_release_accepts_real_tag(entry_path, plugin_repo, tmp_path, capsys):
+    import subprocess
+    subprocess.run(["git", "-C", str(plugin_repo), "tag", "v2.0.0"], check=True)
+    rc = main(["release", str(entry_path), "v2.0.0", "--source", str(plugin_repo)])
+    captured = capsys.readouterr()
+    # The guard must not be what fails a real tag; downstream validation
+    # failures (version collision with the fixture's existing release)
+    # are acceptable here.
+    assert "not a tag" not in captured.err

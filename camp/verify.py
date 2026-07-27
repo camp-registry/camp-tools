@@ -85,10 +85,23 @@ def thirdparty_problems(zip_data: bytes, component: str) -> list[str] | None:
 
 def verify_entry(entry_path: str | Path, source_override: str | None = None) -> list[ReleaseResult]:
     """Verify every release of one index entry. source_override uses a local
-    checkout instead of cloning (for development and for CI cache hits)."""
+    checkout instead of cloning (for development and for CI cache hits).
+
+    Advisory-revoked releases are recorded history, not live claims: they
+    are withdrawn from every installation channel and their artifacts are
+    archived for forensics, so re-verifying them against upstream forever
+    is meaningless (and impossible when the defect IS the recorded ref,
+    camp-tools#13). They are reported as skipped, never failed."""
+    entry_path = Path(entry_path)
     entry = load_entry(entry_path)
     component = entry["component"]
     results: list[ReleaseResult] = []
+
+    root = entry_path.resolve().parent.parent.parent
+    advisories = None
+    if (root / "advisories").is_dir():
+        from .advisory import AdvisorySet
+        advisories = AdvisorySet.load(root)
 
     with tempfile.TemporaryDirectory(prefix="camp-verify-") as tmp:
         if source_override:
@@ -100,6 +113,12 @@ def verify_entry(entry_path: str | Path, source_override: str | None = None) -> 
         for release in entry["releases"]:
             result = ReleaseResult(version=release["version"], ok=True)
             results.append(result)
+
+            if advisories and advisories.is_revoked(component, str(release["version"])):
+                result.checks.append(
+                    "revoked by advisory — withdrawn from installation; "
+                    "verification skipped")
+                continue
 
             try:
                 commit = resolve_tag(repo, release["tag"])

@@ -129,6 +129,25 @@ def _cmd_release(args: argparse.Namespace) -> int:
                 check=True,
             )
 
+        # The ref must be a real tag. rev-parse accepts branches and bare
+        # SHAs too, and a release recorded against a moveable ref verifies
+        # once and then fails forever when the ref moves (camp-tools#13:
+        # a workflow_dispatch left on the default branch published
+        # tag: main). Fail here, at record creation, with the fix.
+        is_tag = subprocess.run(
+            ["git", "-C", repo, "rev-parse", "--verify", "--quiet",
+             f"refs/tags/{args.tag}"],
+            capture_output=True)
+        if is_tag.returncode != 0:
+            print(f"error: '{args.tag}' is not a tag in the source repository. "
+                  f"Releases must be built at immutable tags; a branch or "
+                  f"commit ref would verify once and then fail forever. If "
+                  f"this ran from workflow_dispatch, pick the tag in the ref "
+                  f"dropdown (or: gh workflow run camp-release.yml --ref "
+                  f"{args.tag if args.tag.startswith('v') else 'v1.2.3'})",
+                  file=sys.stderr)
+            return 1
+
         artifact = build_mod.build_zip(repo, args.tag, component)
         release_field = _version_php_field(repo, artifact.commit, "release") or args.tag.lstrip("v")
         version = release_field.split(" ")[0]
