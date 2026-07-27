@@ -96,3 +96,19 @@ def test_crosscheck_uses_env_token(tmp_path, monkeypatch):
     crosscheck(tmp_path, {"mod_x": "https://github.com/auth/moodle-mod_x"},
                log=lambda *a: None)
     assert seen["token"] == "tok-from-env"
+
+
+def test_missing_splits_out_removed_by_request(tmp_path, monkeypatch):
+    """A directory row whose repo carries an opted-out ledger marker is
+    the author's standing removal request, never a seeding candidate."""
+    from camp.scan import save_ledger
+    (tmp_path / "plugins").mkdir()
+    save_ledger(tmp_path, {"FMCorz/moodle-filter_gone": {
+        "outcome": "opted-out", "detail": "removed at maintainer request",
+        "first-seen": "2026-07-23", "last-checked": "2026-07-23"}})
+    classes = crosscheck(tmp_path, {
+        "filter_gone": "https://github.com/FMCorz/moodle-filter_gone",
+        "filter_new": "https://github.com/other/moodle-filter_new",
+    }, log=lambda *a: None)
+    assert [r[0] for r in classes["removed-by-request"]] == ["filter_gone"]
+    assert [r[0] for r in classes["missing"]] == ["filter_new"]

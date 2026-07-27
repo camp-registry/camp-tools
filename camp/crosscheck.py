@@ -19,6 +19,9 @@ successor organizations). So this tool CLASSIFIES, it never repoints:
                    review queue proper (squashed copies land here too)
   probe-failed     liveness or history probe inconclusive
   missing          directory component absent from camp — seeding worklist
+  removed-by-request  absent from camp AND the directory's repository
+                   carries an opted-out ledger marker: the author asked
+                   for removal, so this is NOT a seeding candidate
 
 Every acted-on change stays a reviewed registry act; this output is the
 worklist, not the decision.
@@ -117,15 +120,26 @@ def crosscheck(index_dir: str | Path, pluglist: dict[str, str],
         if entry.get("component"):
             entries[entry["component"]] = entry
 
+    # Repositories whose authors asked for removal (scan-ledger opted-out
+    # markers, keyed by repo path): a directory row pointing at one of
+    # these is recorded history, never a seeding candidate.
+    from .scan import load_ledger
+    opted_out = {key.lower() for key, rec in load_ledger(index).items()
+                 if rec.get("outcome") == "opted-out"}
+
     classes: dict[str, list] = {name: [] for name in (
         "match", "claimed-differs", "same-owner", "owner-alias",
         "directory-dead", "shared-history", "independent", "probe-failed",
-        "missing")}
+        "missing", "removed-by-request")}
 
     for component, dir_url in sorted(pluglist.items()):
         entry = entries.get(component)
         if entry is None:
-            classes["missing"].append((component, "", dir_url))
+            parts = _repo_host_path(dir_url)
+            if parts and parts[1] in opted_out:
+                classes["removed-by-request"].append((component, "", dir_url))
+            else:
+                classes["missing"].append((component, "", dir_url))
             continue
         camp_url = entry.get("source", "")
         row = (component, camp_url, dir_url)
