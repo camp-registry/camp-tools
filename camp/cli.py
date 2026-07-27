@@ -560,6 +560,22 @@ def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_crosscheck_directory(args: argparse.Namespace) -> int:
+    from .crosscheck import crosscheck, load_pluglist, write_reports
+    pluglist = load_pluglist(args.pluglist)
+    print(f"{len(pluglist)} directory components with usable VCS URLs",
+          file=sys.stderr)
+    classes = crosscheck(args.index_dir, pluglist, probe=not args.no_probe,
+                         log=lambda m: print(m, file=sys.stderr))
+    write_reports(classes, args.out)
+    for name in ("match", "same-owner", "owner-alias", "directory-dead",
+                 "shared-history", "independent", "probe-failed",
+                 "claimed-differs", "missing"):
+        print(f"{len(classes[name]):5d} {name}")
+    print(f"reports written to {args.out} (match omitted; exceptions only)")
+    return 0
+
+
 def _cmd_refresh_metrics(args: argparse.Namespace) -> int:
     from .scan import refresh_metrics
     failed = refresh_metrics(args.index_dir, args.components)
@@ -810,6 +826,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_recheck_licenses)
+
+    p = sub.add_parser("crosscheck-directory",
+                       help="classify entry sources against the old "
+                            "moodle.org directory's VCS URLs (camp-tools#14); "
+                            "reports only, never repoints")
+    p.add_argument("index_dir")
+    p.add_argument("--pluglist",
+                   default="https://download.moodle.org/api/1.3/pluglist.php",
+                   help="pluglist JSON path or URL")
+    p.add_argument("--out", default="crosscheck-report",
+                   help="directory for the per-class TSV reports")
+    p.add_argument("--no-probe", action="store_true",
+                   help="skip liveness/history probes (fast, coarse)")
+    p.set_defaults(func=_cmd_crosscheck_directory)
 
     p = sub.add_parser("refresh-metrics",
                        help="immediately re-fetch upstream metrics for named "
