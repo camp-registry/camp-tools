@@ -91,7 +91,7 @@ def verify_entry(entry_path: str | Path, source_override: str | None = None) -> 
     are withdrawn from every installation channel and their artifacts are
     archived for forensics, so re-verifying them against upstream forever
     is meaningless (and impossible when the defect IS the recorded ref,
-    camp-tools#13). They are reported as skipped, never failed."""
+    camp-tools#15). They are reported as skipped, never failed."""
     entry_path = Path(entry_path)
     entry = load_entry(entry_path)
     component = entry["component"]

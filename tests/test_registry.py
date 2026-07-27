@@ -455,7 +455,7 @@ def test_description_markdown_is_sanitized():
 
 def test_release_refuses_non_tag_refs(entry_path, plugin_repo, capsys):
     """camp release must only build at immutable tags: a branch ref
-    verifies once and fails forever when it moves (camp-tools#13, the
+    verifies once and fails forever when it moves (camp-tools#15, the
     tag-main incident)."""
     rc = main(["release", str(entry_path), "master", "--source", str(plugin_repo)])
     captured = capsys.readouterr()

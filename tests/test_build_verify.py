@@ -143,7 +143,7 @@ def test_verify_detects_malformed_thirdpartylibs(plugin_repo, entry_path):
 def test_verify_skips_revoked_releases(plugin_repo, entry_path):
     """A revoked release is recorded history, not a live claim: it is
     withdrawn from installation and archived, so verify must not re-check
-    it (camp-tools#13: a defective record whose ref moved would otherwise
+    it (camp-tools#15: a defective record whose ref moved would otherwise
     fail every future PR for the entry forever)."""
     import yaml as _yaml
 

@@ -131,7 +131,7 @@ def _cmd_release(args: argparse.Namespace) -> int:
 
         # The ref must be a real tag. rev-parse accepts branches and bare
         # SHAs too, and a release recorded against a moveable ref verifies
-        # once and then fails forever when the ref moves (camp-tools#13:
+        # once and then fails forever when the ref moves (camp-tools#15:
         # a workflow_dispatch left on the default branch published
         # tag: main). Fail here, at record creation, with the fix.
         is_tag = subprocess.run(
