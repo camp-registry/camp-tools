@@ -576,6 +576,12 @@ def _cmd_crosscheck_directory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fill_repo_ids(args: argparse.Namespace) -> int:
+    from .scan import fill_repo_ids
+    failed = fill_repo_ids(args.index_dir, args.components or None)
+    return 1 if failed else 0
+
+
 def _cmd_refresh_metrics(args: argparse.Namespace) -> int:
     from .scan import refresh_metrics
     failed = refresh_metrics(args.index_dir, args.components)
@@ -848,6 +854,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("components", nargs="+",
                    help="frankenstyle component names to refresh")
     p.set_defaults(func=_cmd_refresh_metrics)
+
+    p = sub.add_parser("fill-repo-ids",
+                       help="record claimed entries' permanent numeric source "
+                            "repo id as source-repo-id, the OIDC publishing "
+                            "identity anchor (camp-index#66); no components = "
+                            "backfill every Tier 1+ entry missing the field")
+    p.add_argument("index_dir")
+    p.add_argument("components", nargs="*",
+                   help="components to (re-)resolve, overwriting — the "
+                        "source-repoint case; omit for the backfill sweep")
+    p.set_defaults(func=_cmd_fill_repo_ids)
 
     p = sub.add_parser("opt-out",
                        help="remove discovered Tier 0 listings at maintainer "

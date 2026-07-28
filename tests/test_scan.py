@@ -419,3 +419,175 @@ def test_enrich_stale_days_rolling_refresh(tmp_path, monkeypatch):
     assert all("mod_stale" in u for u in calls)
     doc = _yaml.safe_load((d / "mod_stale.yml").read_text())
     assert doc["metrics"]["stars"] == 5
+
+
+def _repoid_index(tmp_path, entries):
+    import yaml as _yaml
+    index = tmp_path / "index"
+    d = index / "plugins" / "mod"
+    d.mkdir(parents=True, exist_ok=True)
+    for entry in entries:
+        (d / f"{entry['component']}.yml").write_text(
+            _yaml.safe_dump(entry, sort_keys=False))
+    return index
+
+
+def _claimed(name, source, **extra):
+    entry = {"component": name, "source": source,
+             "maintainers": [{"github": "u"}], "tier": 1,
+             "security-contact": "https://example.org/sec",
+             "labels": ["fully-free"], "status": "active", "releases": []}
+    entry.update(extra)
+    return entry
+
+
+def test_fill_repo_ids_backfill_sweep(tmp_path, monkeypatch):
+    """No components = every Tier 1+ entry missing the field; tier 0 and
+    already-anchored entries are left alone (and not re-fetched)."""
+    import json as _json
+
+    import yaml as _yaml
+
+    import camp.scan as scan_mod
+
+    index = _repoid_index(tmp_path, [
+        _claimed("mod_missing", "https://github.com/u/moodle-mod_missing"),
+        _claimed("mod_anchored", "https://github.com/u/moodle-mod_anchored",
+                 **{"source-repo-id": 11}),
+        {"component": "mod_zero", "source": "https://github.com/u/moodle-mod_zero",
+         "maintainers": [{"github": "u"}], "tier": 0, "status": "active",
+         "releases": []},
+    ])
+    calls = []
+
+    def fake_request(url, token, log=print):
+        calls.append(url)
+        return 200, _json.dumps({"id": 4242}).encode(), {}
+
+    monkeypatch.setattr(scan_mod, "_request", fake_request)
+    failed = scan_mod.fill_repo_ids(index, log=lambda *a: None)
+
+    assert failed == []
+    assert len(calls) == 1 and "mod_missing" in calls[0]
+    got = _yaml.safe_load(
+        (index / "plugins" / "mod" / "mod_missing.yml").read_text())
+    assert got["source-repo-id"] == 4242
+    # the anchor reads directly after the path it anchors
+    keys = list(got.keys())
+    assert keys.index("source-repo-id") == keys.index("source") + 1
+    anchored = _yaml.safe_load(
+        (index / "plugins" / "mod" / "mod_anchored.yml").read_text())
+    assert anchored["source-repo-id"] == 11
+    zero = _yaml.safe_load(
+        (index / "plugins" / "mod" / "mod_zero.yml").read_text())
+    assert "source-repo-id" not in zero
+
+
+def test_fill_repo_ids_named_component_overwrites(tmp_path, monkeypatch):
+    """Naming a component re-resolves and overwrites: the repoint case."""
+    import json as _json
+
+    import yaml as _yaml
+
+    import camp.scan as scan_mod
+
+    index = _repoid_index(tmp_path, [
+        _claimed("mod_repointed", "https://github.com/newowner/moodle-mod_repointed",
+                 **{"source-repo-id": 11}),
+    ])
+    monkeypatch.setattr(scan_mod, "_request",
+                        lambda url, token, log=print:
+                        (200, _json.dumps({"id": 9000}).encode(), {}))
+    failed = scan_mod.fill_repo_ids(index, ["mod_repointed"],
+                                    log=lambda *a: None)
+    assert failed == []
+    got = _yaml.safe_load(
+        (index / "plugins" / "mod" / "mod_repointed.yml").read_text())
+    assert got["source-repo-id"] == 9000
+
+
+def test_fill_repo_ids_refuses_tier0_and_reports_failures(tmp_path, monkeypatch):
+    import json as _json
+
+    import camp.scan as scan_mod
+
+    index = _repoid_index(tmp_path, [
+        {"component": "mod_zero", "source": "https://github.com/u/moodle-mod_zero",
+         "maintainers": [{"github": "u"}], "tier": 0, "status": "active",
+         "releases": []},
+        _claimed("mod_gone", "https://github.com/u/moodle-mod_gone"),
+    ])
+    monkeypatch.setattr(scan_mod, "_request",
+                        lambda url, token, log=print: (404, b"{}", {}))
+    failed = scan_mod.fill_repo_ids(index, ["mod_zero", "mod_gone", "mod_absent"],
+                                    log=lambda *a: None)
+    assert sorted(failed) == ["mod_absent", "mod_gone", "mod_zero"]
+
+
+def test_fetch_repo_id_gitlab_encodes_path(monkeypatch):
+    import json as _json
+
+    import camp.scan as scan_mod
+
+    seen = {}
+
+    def fake_request(url, token, log=print):
+        seen["url"] = url
+        return 200, _json.dumps({"id": 84895550}).encode(), {}
+
+    monkeypatch.setattr(scan_mod, "_request", fake_request)
+    status, repo_id = scan_mod._fetch_repo_id(
+        "https://gitlab.com/grp/sub/moodle-local_x", None, log=lambda *a: None)
+    assert status == "ok" and repo_id == 84895550
+    assert seen["url"] == ("https://gitlab.com/api/v4/projects/"
+                           "grp%2Fsub%2Fmoodle-local_x")
+
+
+def test_refresh_metrics_keeps_repo_id_current(tmp_path, monkeypatch):
+    """A repoint's refresh-metrics pass updates the OIDC anchor with the
+    metrics, and an id fetch failure does not fail the refresh."""
+    import json as _json
+
+    import yaml as _yaml
+
+    import camp.scan as scan_mod
+
+    index = _repoid_index(tmp_path, [
+        _claimed("mod_moved", "https://github.com/newowner/moodle-mod_moved",
+                 **{"source-repo-id": 11}),
+    ])
+
+    def fake_request(url, token, log=print):
+        if "releases/latest" in url:
+            return 404, b"{}", {}
+        return 200, _json.dumps({
+            "id": 9000, "full_name": "newowner/moodle-mod_moved",
+            "pushed_at": "2026-07-01T00:00:00Z", "stargazers_count": 1,
+            "forks_count": 0, "open_issues_count": 0, "archived": False,
+        }).encode(), {}
+
+    monkeypatch.setattr(scan_mod, "_request", fake_request)
+    failed = scan_mod.refresh_metrics(index, ["mod_moved"], token="x",
+                                      log=lambda *a: None)
+    assert failed == []
+    got = _yaml.safe_load(
+        (index / "plugins" / "mod" / "mod_moved.yml").read_text())
+    assert got["source-repo-id"] == 9000
+    keys = list(got.keys())
+    assert keys.index("source-repo-id") == keys.index("source") + 1
+
+
+def test_entry_schema_accepts_and_types_source_repo_id(index_dir):
+    import yaml as _yaml
+
+    from camp.validate import validate_entry
+
+    entry_path = index_dir / "plugins" / "mod" / "mod_anchor.yml"
+    entry = _claimed("mod_anchor", "https://github.com/u/moodle-mod_anchor",
+                     **{"source-repo-id": 123456})
+    entry_path.write_text(_yaml.safe_dump(entry, sort_keys=False))
+    assert validate_entry(entry_path) == []
+
+    entry["source-repo-id"] = "123456"
+    entry_path.write_text(_yaml.safe_dump(entry, sort_keys=False))
+    assert any("source-repo-id" in p for p in validate_entry(entry_path))

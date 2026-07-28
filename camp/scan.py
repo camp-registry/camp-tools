@@ -644,6 +644,103 @@ def _fetch_metrics(source: str, token: str | None, checked: str,
     return "error", None, None
 
 
+def _fetch_repo_id(source: str, token: str | None, log=print) -> tuple[str, int | None]:
+    """Fetch the source platform's permanent numeric repository id
+    (GitHub repository id / GitLab project id). Returns ('ok', id),
+    ('gone', None) on 404, or ('error', None). The id is the identity
+    anchor for OIDC trusted publishing (camp-index#66): unlike the
+    path, it survives renames and ownership transfers."""
+    parsed = urllib.parse.urlparse(source)
+    host = parsed.netloc
+    path = parsed.path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if host == "github.com":
+        status, body, _ = _request(f"https://api.github.com/repos/{path}", token)
+    elif "gitlab" in host:
+        api = (f"{parsed.scheme}://{host}/api/v4/projects/"
+               f"{urllib.parse.quote(path, safe='')}")
+        status, body, _ = _request(api, None)
+    else:
+        log(f"  {source}: unsupported host for repo id")
+        return "error", None
+    if status == 404:
+        return "gone", None
+    if status != 200:
+        log(f"  {path}: HTTP {status} fetching repo id")
+        return "error", None
+    repo_id = json.loads(body).get("id")
+    if not isinstance(repo_id, int):
+        return "error", None
+    return "ok", repo_id
+
+
+def _with_repo_id(entry: dict, repo_id: int) -> dict:
+    """Entry with source-repo-id set, placed directly after source so the
+    anchor reads next to the path it anchors."""
+    entry = dict(entry)
+    entry.pop("source-repo-id", None)
+    rebuilt: dict = {}
+    for key, value in entry.items():
+        rebuilt[key] = value
+        if key == "source":
+            rebuilt["source-repo-id"] = repo_id
+    if "source-repo-id" not in rebuilt:
+        rebuilt["source-repo-id"] = repo_id
+    return rebuilt
+
+
+def fill_repo_ids(index_dir: str | Path, components: list[str] | None = None,
+                  token: str | None = None, log=print) -> list[str]:
+    """Record claimed entries' permanent numeric source repository id as
+    `source-repo-id`, the OIDC trusted-publishing identity anchor
+    (camp-index#66). With no components: sweep every Tier 1+ entry still
+    missing the field (the one-time backfill). With components:
+    re-resolve and overwrite (the source-repoint case — run alongside
+    refresh-metrics, which also keeps the id current). Tier 0 entries
+    are refused: discovery carries no ownership assertion to anchor.
+    Returns the components that failed."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    index = Path(index_dir)
+    failed: list[str] = []
+    if components:
+        targets = list(components)
+        overwrite = True
+    else:
+        targets = []
+        overwrite = False
+        for path in sorted(index.glob("plugins/*/*.yml")):
+            with open(path) as f:
+                entry = yaml.safe_load(f) or {}
+            if entry.get("tier", 0) >= 1 and "source-repo-id" not in entry:
+                targets.append(entry["component"])
+    for component in targets:
+        path = (index / "plugins" / component.partition("_")[0]
+                / f"{component}.yml")
+        if not path.exists():
+            log(f"  ! {component}: no listing file")
+            failed.append(component)
+            continue
+        with open(path) as f:
+            entry = yaml.safe_load(f) or {}
+        if entry.get("tier", 0) < 1:
+            log(f"  ! {component}: tier 0 (unclaimed); nothing to anchor")
+            failed.append(component)
+            continue
+        if not overwrite and "source-repo-id" in entry:
+            continue
+        status, repo_id = _fetch_repo_id(entry.get("source", ""), token, log)
+        if status != "ok":
+            log(f"  ! {component}: repo id fetch failed ({status})")
+            failed.append(component)
+            continue
+        with open(path, "w") as f:
+            yaml.safe_dump(_with_repo_id(entry, repo_id), f, sort_keys=False,
+                           allow_unicode=True)
+        log(f"  {component}: source-repo-id {repo_id} ({entry['source']})")
+    return failed
+
+
 _BADGE_LINE = re.compile(r"^\[?!\[")          # image or linked-image (badge) line
 _MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")  # [text](url) -> text
 
@@ -1008,6 +1105,18 @@ def refresh_metrics(index_dir: str | Path, components: list[str],
                 entry["source"] = canonical
             else:
                 entry["metrics"]["renamed-to"] = canonical
+        # Keep the OIDC identity anchor current in the same pass: a
+        # repoint that changes `source` must change `source-repo-id`
+        # with it, or the publish service refuses the new repo's tokens
+        # (camp-index#66). Failure here is a note, not a refresh failure
+        # — the metrics part already succeeded.
+        if entry.get("tier", 0) >= 1:
+            id_status, repo_id = _fetch_repo_id(entry["source"], token, log)
+            if id_status == "ok" and repo_id != entry.get("source-repo-id"):
+                entry = _with_repo_id(entry, repo_id)
+                log(f"  {component}: source-repo-id -> {repo_id}")
+            elif id_status != "ok":
+                log(f"  {component}: source-repo-id not refreshed ({id_status})")
         with open(path, "w") as f:
             yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
         log(f"  refreshed {component} from {entry['source']}")

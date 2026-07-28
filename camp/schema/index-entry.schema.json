@@ -23,6 +23,11 @@
       "type": "string",
       "pattern": "^https://"
     },
+    "source-repo-id": {
+      "description": "The source platform's permanent numeric id for the repository (GitHub repository id / GitLab project id), recorded at claim time and kept current on source repoints (`camp fill-repo-ids`). The identity anchor for OIDC trusted publishing (camp-index#66): unlike the path in `source`, it survives renames and ownership transfers, so a re-registered old name cannot impersonate the listed source. Absent on entries claimed before the field existed; the publish service falls back to the path match until backfilled.",
+      "type": "integer",
+      "minimum": 1
+    },
     "maintainers": {
       "type": "array",
       "minItems": 1,
