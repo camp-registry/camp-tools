@@ -33,6 +33,98 @@ def test_plugin_folder():
         plugin_folder("notfrankenstyle")
 
 
+def _tag_with_symlinks(plugin_repo, links, extra=None):
+    """Commit files plus symlinks (path -> target string) and tag v3.0.0."""
+    import os
+
+    for relpath, content in (extra or {}).items():
+        path = plugin_repo / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    for relpath, target in links.items():
+        path = plugin_repo / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(target, path)
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "add symlinks")
+    git(plugin_repo, "tag", "v3.0.0")
+
+
+def test_intree_file_symlink_materialized(plugin_repo):
+    """The webpack/Vue plugin convention (camp-index#134): amd/src/x.js is
+    a symlink to the bundle webpack emitted in amd/build. The ZIP gets a
+    regular file with the target's bytes at the link's path."""
+    bundle = "define([],function(){/* bundle */});\n"
+    _tag_with_symlinks(
+        plugin_repo,
+        links={"amd/src/app-lazy.js": "../build/app-lazy.min.js"},
+        extra={"amd/build/app-lazy.min.js": bundle})
+
+    first = build_zip(str(plugin_repo), "v3.0.0", "mod_example")
+    zf = zipfile.ZipFile(io.BytesIO(first.data))
+    assert zf.read("example/amd/src/app-lazy.js").decode() == bundle
+    info = zf.getinfo("example/amd/src/app-lazy.js")
+    assert (info.external_attr >> 16) & 0o777 == 0o644
+    assert first.sha256 == build_zip(str(plugin_repo), "v3.0.0", "mod_example").sha256
+
+
+def test_symlink_executable_bit_follows_target(plugin_repo):
+    import os
+
+    script = plugin_repo / "cli" / "run.sh"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\n")
+    os.chmod(script, 0o755)
+    _tag_with_symlinks(plugin_repo, links={"run.sh": "cli/run.sh"})
+
+    artifact = build_zip(str(plugin_repo), "v3.0.0", "mod_example")
+    info = zipfile.ZipFile(io.BytesIO(artifact.data)).getinfo("example/run.sh")
+    assert (info.external_attr >> 16) & 0o777 == 0o755
+
+
+def test_escaping_symlink_refused(plugin_repo):
+    _tag_with_symlinks(plugin_repo, links={"evil.js": "../../outside.txt"})
+    with pytest.raises(BuildError, match="escapes the source tree"):
+        build_zip(str(plugin_repo), "v3.0.0", "mod_example")
+
+
+def test_absolute_symlink_refused(plugin_repo):
+    _tag_with_symlinks(plugin_repo, links={"evil.js": "/etc/hosts"})
+    with pytest.raises(BuildError, match="only relative in-tree targets"):
+        build_zip(str(plugin_repo), "v3.0.0", "mod_example")
+
+
+def test_dangling_symlink_refused(plugin_repo):
+    _tag_with_symlinks(plugin_repo, links={"gone.js": "missing.js"})
+    with pytest.raises(BuildError, match="does not exist"):
+        build_zip(str(plugin_repo), "v3.0.0", "mod_example")
+
+
+def test_symlink_chain_refused(plugin_repo):
+    _tag_with_symlinks(
+        plugin_repo,
+        links={"a.js": "b.js", "b.js": "real.js"},
+        extra={"real.js": "// real\n"})
+    with pytest.raises(BuildError, match="chains are not supported"):
+        build_zip(str(plugin_repo), "v3.0.0", "mod_example")
+
+
+def test_directory_symlink_refused(plugin_repo):
+    _tag_with_symlinks(
+        plugin_repo,
+        links={"srclink": "amd"},
+        extra={"amd/build/app.min.js": "// bundle\n"})
+    with pytest.raises(BuildError, match="target is a directory"):
+        build_zip(str(plugin_repo), "v3.0.0", "mod_example")
+
+
+def test_symlink_count_capped(plugin_repo):
+    links = {f"link{i}.js": "real.js" for i in range(11)}
+    _tag_with_symlinks(plugin_repo, links=links, extra={"real.js": "// real\n"})
+    with pytest.raises(BuildError, match="limit 10"):
+        build_zip(str(plugin_repo), "v3.0.0", "mod_example")
+
+
 def test_non_plugin_tree_rejected(plugin_repo):
     git(plugin_repo, "rm", "-q", "version.php")
     git(plugin_repo, "commit", "-q", "-m", "remove version.php")

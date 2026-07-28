@@ -11,6 +11,9 @@ normalized ZIP:
   - every timestamp fixed to the tagged commit's committer time (UTC)
   - permissions normalized to 0644, or 0755 when the tar entry is executable
   - deflate compression at a fixed level, no ZIP extra fields
+  - symlinks to a regular file inside the tree materialized as a copy of
+    the target (the webpack/Vue plugin convention: amd/src/app-lazy.js ->
+    ../build/app-lazy.min.js); anything else symlink-shaped is refused
 
 Anyone can independently rebuild the artifact from the public tag and get a
 byte-identical file, regardless of their git or zip version.
@@ -20,11 +23,17 @@ from __future__ import annotations
 
 import hashlib
 import io
+import posixpath
 import subprocess
 import tarfile
 import time
 import zipfile
 from dataclasses import dataclass
+
+# Symlinks let one blob appear at many paths, so materializing them
+# multiplies output size in a way plain files cannot (the author never
+# committed the duplicate bytes). Legitimate use is one or two links.
+MAX_SYMLINKS = 10
 
 
 class BuildError(Exception):
@@ -63,6 +72,32 @@ def commit_timestamp(repo: str, commit: str) -> int:
     return int(_git(repo, "log", "-1", "--format=%ct", commit).decode().strip())
 
 
+def _symlink_target(name: str, target: str,
+                    files: dict[str, tuple[bytes, bool]],
+                    symlinks: dict[str, str]) -> str:
+    """Resolve a tar symlink to the in-tree regular file it points at.
+
+    The target string is author-controlled input. Only one shape is
+    accepted: a relative path that lands on a regular file in the same
+    tree. Absolute targets, escapes, directories, chains and dangling
+    links are all refused.
+    """
+    what = f"symlink {name} -> {target}"
+    if target.startswith("/") or "\\" in target:
+        raise BuildError(f"{what}: only relative in-tree targets are supported")
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), target))
+    if resolved == ".." or resolved.startswith("../"):
+        raise BuildError(f"{what}: target escapes the source tree")
+    if resolved in symlinks:
+        raise BuildError(f"{what}: target is itself a symlink; chains are not supported")
+    if resolved not in files:
+        prefix = resolved + "/"
+        if any(path.startswith(prefix) for path in files):
+            raise BuildError(f"{what}: target is a directory")
+        raise BuildError(f"{what}: target does not exist in the source tree")
+    return resolved
+
+
 @dataclass
 class BuiltArtifact:
     data: bytes
@@ -81,17 +116,35 @@ def build_zip(repo: str, tag: str, component: str) -> BuiltArtifact:
     tar_bytes = _git(repo, "archive", "--format=tar", commit)
 
     entries: dict[str, tuple[bytes, bool]] = {}
+    symlinks: dict[str, str] = {}
     with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tar:
         for member in tar:
             if member.isdir():
                 continue
+            if member.issym():
+                # Resolved after the walk: the target may appear later in
+                # the stream.
+                symlinks[member.name] = member.linkname
+                continue
             if not member.isfile():
-                # Symlinks and specials have no safe meaning inside a plugin
+                # Hardlinks and specials have no safe meaning inside a plugin
                 # ZIP that Moodle will extract; refuse rather than guess.
                 raise BuildError(f"unsupported entry in source tree: {member.name} ({member.type!r})")
             fileobj = tar.extractfile(member)
             assert fileobj is not None
             entries[member.name] = (fileobj.read(), bool(member.mode & 0o100))
+
+    if len(symlinks) > MAX_SYMLINKS:
+        raise BuildError(
+            f"source tree has {len(symlinks)} symlinks (limit {MAX_SYMLINKS})")
+    for name in sorted(symlinks):
+        # A ZIP that Moodle extracts looks like a checked-out tree on disk,
+        # so a link whose target is a regular file inside the tree has one
+        # unambiguous meaning: the target's bytes at the link's path.
+        # SECURITY: resolution must stay a pure lookup against the tar's own
+        # member set — never the filesystem — or a crafted target string
+        # could read files off the build host into a published artifact.
+        entries[name] = entries[_symlink_target(name, symlinks[name], entries, symlinks)]
 
     if "version.php" not in entries:
         raise BuildError("source tree has no version.php at its root; not a Moodle plugin?")
