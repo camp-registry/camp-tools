@@ -81,9 +81,19 @@ def validate_entry(path: str | Path) -> list[str]:
 def validate_listing(path: str | Path) -> list[str]:
     """Validate a .camp/listing.yml manifest. Returns a list of problems."""
     try:
-        with open(path) as f:
-            listing = yaml.safe_load(f)
-    except (OSError, yaml.YAMLError) as exc:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as exc:
+        return [str(exc)]
+    return validate_listing_bytes(raw)
+
+
+def validate_listing_bytes(raw: bytes) -> list[str]:
+    """Validate listing manifest content already in memory (e.g. a git blob
+    read at a pinned commit). Returns a list of problems."""
+    try:
+        listing = yaml.safe_load(raw)
+    except yaml.YAMLError as exc:
         return [str(exc)]
     validator = jsonschema.Draft202012Validator(_schema("listing.schema.json"))
     problems = [

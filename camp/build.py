@@ -169,12 +169,20 @@ def build_zip(repo: str, tag: str, component: str) -> BuiltArtifact:
     )
 
 
-def file_sha256_at_commit(repo: str, commit: str, path: str) -> str | None:
-    """SHA-256 of a file's blob content at a commit, or None if absent."""
+def file_bytes_at_commit(repo: str, commit: str, path: str) -> bytes | None:
+    """A file's blob content at a commit, or None if absent."""
     result = subprocess.run(
         ["git", "-C", repo, "show", f"{commit}:{path}"],
         capture_output=True,
     )
     if result.returncode != 0:
         return None
-    return hashlib.sha256(result.stdout).hexdigest()
+    return result.stdout
+
+
+def file_sha256_at_commit(repo: str, commit: str, path: str) -> str | None:
+    """SHA-256 of a file's blob content at a commit, or None if absent."""
+    raw = file_bytes_at_commit(repo, commit, path)
+    if raw is None:
+        return None
+    return hashlib.sha256(raw).hexdigest()

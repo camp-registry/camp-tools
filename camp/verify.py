@@ -18,6 +18,7 @@ For every release in an index entry (RFC §4.2):
 
 from __future__ import annotations
 
+import hashlib
 import io
 import subprocess
 import tempfile
@@ -26,8 +27,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree
 
-from .build import BuildError, build_zip, file_sha256_at_commit, plugin_folder, resolve_tag
-from .validate import load_entry
+from .build import (BuildError, build_zip, file_bytes_at_commit, plugin_folder,
+                    resolve_tag)
+from .validate import load_entry, validate_listing_bytes
 
 LISTING_PATH = ".camp/listing.yml"
 
@@ -38,6 +40,9 @@ class ReleaseResult:
     ok: bool
     checks: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    # Warn-only findings (D23): true statements about the release that do not
+    # gate verification, e.g. a pinned listing manifest that will not render.
+    warnings: list[str] = field(default_factory=list)
 
 
 def _clone(source: str, dest: str) -> None:
@@ -162,14 +167,30 @@ def verify_entry(entry_path: str | Path, source_override: str | None = None) -> 
 
             pinned = release.get("listing-sha256")
             if pinned:
-                actual = file_sha256_at_commit(repo, commit, LISTING_PATH)
-                if actual is None:
+                raw = file_bytes_at_commit(repo, commit, LISTING_PATH)
+                if raw is None:
                     result.ok = False
                     result.problems.append(f"{LISTING_PATH} missing at {commit[:12]} but hash is pinned")
-                elif actual != pinned:
+                elif hashlib.sha256(raw).hexdigest() != pinned:
                     result.ok = False
                     result.problems.append(f"{LISTING_PATH} hash mismatch at {commit[:12]}")
                 else:
                     result.checks.append("pinned listing manifest matches")
+                    # The pin proves the bytes; it does not prove they parse.
+                    # An invalid manifest is skipped at publish and the plugin
+                    # page silently falls back to the index entry's discovery
+                    # summary (camp-tools#23) — tell the author here instead.
+                    listing_problems = validate_listing_bytes(raw)
+                    if listing_problems:
+                        more = (f" (+{len(listing_problems) - 1} more)"
+                                if len(listing_problems) > 1 else "")
+                        # PyYAML errors span lines; keep the warning one line
+                        # so it also works as a GitHub Actions annotation.
+                        first = " ".join(listing_problems[0].split())
+                        result.warnings.append(
+                            f"{LISTING_PATH} at {commit[:12]} is invalid and the site "
+                            f"will not show its content (the page falls back to the "
+                            f"index entry summary); fix it for the next release: "
+                            f"{first}{more}")
 
     return results

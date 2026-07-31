@@ -136,6 +136,60 @@ def test_non_plugin_tree_rejected(plugin_repo):
 def test_verify_passes_on_intact_entry(plugin_repo, entry_path):
     results = verify_entry(entry_path, source_override=str(plugin_repo))
     assert len(results) == 1 and results[0].ok
+    assert results[0].warnings == []
+
+
+BROKEN_LISTING = """name: mod_example
+summary: A perfectly good summary that will never render.
+labels:
+  - fully-free
+# screenshots:
+#   - path: .camp/screenshots/overview.png
+ links:
+   issues: https://example.org/issues
+"""
+
+
+def _retag_with_listing(plugin_repo, entry_path, listing_text):
+    """Rewrite .camp/listing.yml, re-record the release at a new tag with
+    hashes computed by the real build code (pin matches the new bytes)."""
+    from camp.build import build_zip, file_sha256_at_commit, resolve_tag
+
+    (plugin_repo / ".camp" / "listing.yml").write_text(listing_text)
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "update listing")
+    git(plugin_repo, "tag", "v1.1.0")
+
+    entry = yaml.safe_load(entry_path.read_text())
+    release = entry["releases"][0]
+    release["tag"] = "v1.1.0"
+    release["commit"] = resolve_tag(str(plugin_repo), "v1.1.0")
+    release["zip-sha256"] = build_zip(str(plugin_repo), "v1.1.0", "mod_example").sha256
+    release["listing-sha256"] = file_sha256_at_commit(
+        str(plugin_repo), release["commit"], ".camp/listing.yml")
+    entry_path.write_text(yaml.safe_dump(entry))
+
+
+def test_verify_warns_on_unparseable_pinned_listing(plugin_repo, entry_path):
+    """The pin proves the bytes, not that they parse (camp-tools#23:
+    quiz_archive shipped a manifest with a stray-indented `links:` key).
+    Verification must stay green — the release is fine — but say the
+    listing will not render."""
+    _retag_with_listing(plugin_repo, entry_path, BROKEN_LISTING)
+
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert results[0].ok
+    assert any("will not show its content" in w for w in results[0].warnings)
+
+
+def test_verify_warns_on_schema_invalid_pinned_listing(plugin_repo, entry_path):
+    """Parseable YAML that fails the listing schema gets the same warning."""
+    _retag_with_listing(plugin_repo, entry_path,
+                        "name: mod_example\nsummary: fine\nunknown-key: boom\n")
+
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert results[0].ok
+    assert any("will not show its content" in w for w in results[0].warnings)
 
 
 def test_verify_detects_moved_tag(plugin_repo, entry_path):

@@ -472,3 +472,27 @@ def test_release_accepts_real_tag(entry_path, plugin_repo, tmp_path, capsys):
     # failures (version collision with the fixture's existing release)
     # are acceptable here.
     assert "not a tag" not in captured.err
+
+
+def test_release_warns_on_invalid_listing(entry_path, plugin_repo, capsys):
+    """A present-but-invalid .camp/listing.yml must not block the release
+    (warn-only, D23) but must be reported at publish time instead of the
+    page silently falling back to the discovery summary (camp-tools#23)."""
+    from conftest import git
+    (plugin_repo / ".camp" / "listing.yml").write_text(
+        "name: mod_example\nsummary: fine\n links: {}\n")
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "break listing")
+    git(plugin_repo, "tag", "v2.1.0")
+    main(["release", str(entry_path), "v2.1.0", "--source", str(plugin_repo)])
+    captured = capsys.readouterr()
+    assert "will not show its content" in captured.err
+    assert "camp validate-listing" in captured.err
+
+
+def test_release_no_listing_warning_when_valid(entry_path, plugin_repo, capsys):
+    from conftest import git
+    git(plugin_repo, "tag", "v2.2.0")
+    main(["release", str(entry_path), "v2.2.0", "--source", str(plugin_repo)])
+    captured = capsys.readouterr()
+    assert "will not show its content" not in captured.err

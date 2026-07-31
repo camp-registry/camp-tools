@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import datetime
 import re
@@ -24,7 +25,8 @@ import yaml
 
 from . import build as build_mod
 from . import composer as composer_mod
-from .validate import load_entry, validate_entry, validate_listing
+from .validate import (load_entry, validate_entry, validate_listing,
+                       validate_listing_bytes)
 from .verify import verify_entry
 
 
@@ -64,6 +66,11 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(f"{marker} {result.version}")
         for check in result.checks:
             print(f"  + {check}")
+        for warning in result.warnings:
+            print(f"  ! {warning}")
+            # Surfaces as an annotation on the release PR when run in
+            # Actions; prints as a harmless plain line elsewhere.
+            print(f"::warning title=camp verify::{result.version}: {warning}")
         for problem in result.problems:
             print(f"  - {problem}")
         failed = failed or not result.ok
@@ -153,7 +160,23 @@ def _cmd_release(args: argparse.Namespace) -> int:
         version = release_field.split(" ")[0]
         moodle_version = _version_php_field(repo, artifact.commit, "version")
         php_min = _version_php_field(repo, artifact.commit, "php")
-        listing_hash = build_mod.file_sha256_at_commit(repo, artifact.commit, ".camp/listing.yml")
+        listing_raw = build_mod.file_bytes_at_commit(repo, artifact.commit, ".camp/listing.yml")
+        listing_hash = (hashlib.sha256(listing_raw).hexdigest()
+                        if listing_raw is not None else None)
+        if listing_raw is not None:
+            # Warn-only (D23): the pin records the bytes either way, but an
+            # invalid manifest never renders — the plugin page silently falls
+            # back to the index entry's discovery summary (camp-tools#23).
+            # This is the author's one publish-time chance to hear about it.
+            listing_problems = validate_listing_bytes(listing_raw)
+            if listing_problems:
+                first = " ".join(listing_problems[0].split())
+                print(f"warning: .camp/listing.yml at {args.tag} is invalid and "
+                      f"the site will not show its content (the page falls back "
+                      f"to the index entry summary): {first}. Fix the manifest "
+                      f"and it takes effect with the next release; check "
+                      f"locally with 'camp validate-listing .camp/listing.yml'",
+                      file=sys.stderr)
         released_ts = build_mod.commit_timestamp(repo, artifact.commit)
 
         derived = derive_supported_moodle(repo, artifact.commit)
