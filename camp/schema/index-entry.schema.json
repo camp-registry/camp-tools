@@ -127,6 +127,10 @@
       "type": "string",
       "format": "date"
     },
+    "dependencies": {
+      "description": "Inter-plugin dependencies observed from $plugin->dependencies in version.php on the default branch, written at scan time (Tier 0) or by the `camp enrich` cycle for entries whose newest release record predates the per-release field. Registry-observed data, like supported-moodle — not author-declared listing content. A release record's own dependencies block, observed at the pinned commit, is the authoritative form when present.",
+      "$ref": "#/$defs/dependencies"
+    },
     "metrics": {
       "description": "Upstream repository activity signals, refreshed periodically by `camp enrich` from the source platform's API (GitHub/GitLab). Advisory only — they help prioritize which discovered plugins to verify next; they are not registry assertions and carry a `checked` date so consumers can judge freshness.",
       "type": "object",
@@ -236,6 +240,10 @@
             "type": "string",
             "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"
           },
+          "dependencies": {
+            "description": "Inter-plugin dependencies observed from $plugin->dependencies in version.php at the tagged commit. Core enforces the declaration at install time, so it is accurate in a way optional metadata is not. Absent when the release declares none.",
+            "$ref": "#/$defs/dependencies"
+          },
           "zip-sha256": {
             "description": "SHA-256 of the canonical distribution ZIP built deterministically from the tagged commit (see tools/camp/build.py for the canonical form).",
             "type": "string",
@@ -256,6 +264,27 @@
             "type": "string",
             "format": "date-time"
           }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "dependencies": {
+      "description": "Frankenstyle component -> minimum required $plugin->version integer, or 'any' (Moodle core's ANY_VERSION) when any installed version satisfies it.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z][a-z0-9]*_[a-z][a-z0-9_]*$": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "const": "any"
+            }
+          ]
         }
       }
     }

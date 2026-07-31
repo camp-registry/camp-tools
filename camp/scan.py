@@ -35,6 +35,8 @@ from pathlib import Path
 
 import yaml
 
+from . import versionphp
+
 USER_AGENT = "camp-seeding-scanner/0.1 (community Moodle plugin repository)"
 # Frankenstyle plugin-type prefixes, used to build targeted name searches.
 # A prefix search (e.g. "moodle-mod_ in:name") returns a corpus small enough
@@ -169,10 +171,11 @@ def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
     ledger[candidate.full_name] = entry
 
 
-def _request(url: str, token: str | None, retries: int = 3) -> tuple[int, bytes, dict]:
+def _request(url: str, token: str | None, retries: int = 3,
+             accept: str = "application/vnd.github+json") -> tuple[int, bytes, dict]:
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
-        "Accept": "application/vnd.github+json",
+        "Accept": accept,
         **({"Authorization": f"Bearer {token}"} if token else {}),
     })
     for attempt in range(retries):
@@ -555,7 +558,8 @@ def _fetch_latest_release(host: str, path: str, token: str | None) -> dict | Non
     return None
 
 
-def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
+def _entry_for(candidate: Candidate, component: str, today: str,
+               version_text: str = "") -> dict:
     maintainer = {("gitlab" if candidate.platform == "gitlab" else "github"): candidate.owner}
     entry: dict = {
         "component": component,
@@ -570,6 +574,12 @@ def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
         entry["license"] = candidate.license_spdx
     if candidate.description:
         entry["summary"] = candidate.description[:300]
+    # Observed from the same version.php fetch that yielded the component
+    # name; Tier 0 has no release ledger, so the declaration is recorded at
+    # the entry level from the default branch (camp-tools#20).
+    dependencies = versionphp.parse_dependencies(version_text)
+    if dependencies:
+        entry["dependencies"] = dependencies
     entry["metrics"] = _metrics_dict(
         updated=candidate.pushed_at, stars=candidate.stars, forks=candidate.forks,
         open_issues=candidate.open_issues, archived=candidate.archived, checked=today,
@@ -799,12 +809,44 @@ def _fetch_readme_summary(source: str, token: str | None, log) -> str | None:
     return _summary_from_readme(text)
 
 
+def _fetch_version_php_text(source: str, token: str | None) -> str | None:
+    """version.php text from the default branch of a source repo, or None
+    when it cannot be observed (missing file, unsupported host, transient
+    error). GitHub's contents API defaults to the default branch when no ref
+    is given; GitLab's raw-file endpoint accepts ref=HEAD."""
+    parsed = urllib.parse.urlparse(source)
+    host = parsed.netloc
+    path = parsed.path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if host == "github.com":
+        status, body, _ = _request(
+            f"https://api.github.com/repos/{path}/contents/version.php",
+            token, accept="application/vnd.github.raw+json")
+    elif "gitlab" in host:
+        encoded = urllib.parse.quote(path, safe="")
+        status, body, _ = _request(
+            f"https://{host}/api/v4/projects/{encoded}/repository/files/"
+            f"version.php/raw?ref=HEAD", None)
+    else:
+        return None
+    return body.decode(errors="replace") if status == 200 else None
+
+
 def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = None,
            force: bool = False, readme: bool = True,
            stale_days: int | None = None, log=print) -> dict:
     """Backfill/refresh entries with upstream `metrics` and, for discovered
     (Tier 0) entries whose source repo set no description, a one-line
     `summary` derived from its README.
+
+    On the same refresh cycle, entries whose newest release does not carry a
+    `dependencies` record get an entry-level observation of
+    $plugin->dependencies from the default branch (camp-tools#20): the
+    backfill path for listings that predate the field, kept current — and
+    removed again — as the declaration changes upstream. Entries whose
+    ledger already records dependencies at the pinned commit skip the extra
+    fetch; the release record is the authoritative form.
 
     Metrics are advisory activity signals and refresh at every tier —
     claiming a plugin shouldn't freeze its liveness data. Summary scraping
@@ -819,8 +861,8 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
     token = token or os.environ.get("GITHUB_TOKEN")
     today = datetime.date.today().isoformat()
     paths = sorted((Path(index_dir) / "plugins").glob("*/*.yml"))
-    stats = {"metrics": 0, "summary": 0, "skipped": 0, "gone": 0, "error": 0,
-             "renamed": 0, "flagged-renames": 0}
+    stats = {"metrics": 0, "summary": 0, "dependencies": 0, "skipped": 0,
+             "gone": 0, "error": 0, "renamed": 0, "flagged-renames": 0}
     fetched = 0
 
     for path in paths:
@@ -888,13 +930,36 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
                 stats["summary"] += 1
                 changed = True
 
+        if needs_metrics:
+            # Dependency observation rides the metrics cycle so it stays as
+            # current as the liveness data. The ledger's pinned record is
+            # authoritative when the newest release carries one; otherwise
+            # observe the default branch, setting or clearing the entry-level
+            # field to match what version.php declares today.
+            releases = entry.get("releases") or []
+            newest = (max(releases, key=lambda r: r.get("moodle-version", 0))
+                      if releases else None)
+            if newest is None or "dependencies" not in newest:
+                text = _fetch_version_php_text(entry["source"], token)
+                if text is not None:
+                    observed = versionphp.parse_dependencies(text)
+                    if observed and entry.get("dependencies") != observed:
+                        entry["dependencies"] = observed
+                        stats["dependencies"] += 1
+                        changed = True
+                    elif not observed and "dependencies" in entry:
+                        del entry["dependencies"]
+                        stats["dependencies"] += 1
+                        changed = True
+
         if changed:
             with open(path, "w") as f:
                 yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
             if (stats["metrics"] + stats["summary"]) % 250 == 0:
                 log(f"  … {stats['metrics']} metrics, {stats['summary']} summaries")
 
-    log(f"enriched: {stats['metrics']} metrics, {stats['summary']} summaries; "
+    log(f"enriched: {stats['metrics']} metrics, {stats['summary']} summaries, "
+        f"{stats['dependencies']} dependency observations; "
         f"skipped {stats['skipped']}, gone {stats['gone']}, errors {stats['error']}; "
         f"{stats['renamed']} renames fixed, {stats['flagged-renames']} flagged")
     return stats
@@ -981,7 +1046,8 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
         if not dry_run:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with open(out_path, "w") as f:
-                yaml.safe_dump(_entry_for(candidate, component, today), f,
+                yaml.safe_dump(_entry_for(candidate, component, today,
+                                          version_text=_version_text), f,
                                sort_keys=False, allow_unicode=True)
         record_outcome(ledger, candidate, "written",
                        f"listed as {component}; license {spdx} classified from text", today)
@@ -1383,7 +1449,8 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
             if not dry_run:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(out_path, "w") as f:
-                    yaml.safe_dump(_entry_for(candidate, component, today), f,
+                    yaml.safe_dump(_entry_for(candidate, component, today,
+                                              version_text=version_text), f,
                                    sort_keys=False, allow_unicode=True)
             record_outcome(ledger, candidate, "written", f"listed as {component}", today)
             seen_components.add(component)
@@ -1490,7 +1557,8 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
             if not dry_run:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(out_path, "w") as f:
-                    yaml.safe_dump(_entry_for(candidate, component, today), f,
+                    yaml.safe_dump(_entry_for(candidate, component, today,
+                                              version_text=version_text), f,
                                    sort_keys=False, allow_unicode=True)
             record_outcome(ledger, candidate, "written", f"listed as {component}", today)
             seen_components.add(component)

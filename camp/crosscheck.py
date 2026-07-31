@@ -180,6 +180,56 @@ def crosscheck(index_dir: str | Path, pluglist: dict[str, str],
     return classes
 
 
+def dependency_xref(index_dir: str | Path) -> dict:
+    """Cross-reference declared plugin dependencies against the index
+    (camp-tools#20). Returns:
+
+      edges     [(component, dependency, minimum)] — every declared edge,
+                from the newest release when the entry has a ledger, else
+                the entry-level scan observation (Tier 0)
+      unlisted  {dependency: [dependents...]} — referenced but absent from
+                the index: seeding candidates with built-in evidence of
+                relevance
+      parents   [(component, dependency)] — a plugin whose component name
+                extends its dependency's name (block_foo_bar -> block_foo,
+                or a plugintype rooted at the dependency): the
+                subplugin-declares-parent evidence camp-tools#16 needs
+
+    Like crosscheck(), this output is a worklist, not a decision.
+    """
+    index = Path(index_dir)
+    entries: dict[str, dict] = {}
+    for path in (index / "plugins").glob("*/*.yml"):
+        entry = yaml.safe_load(path.open()) or {}
+        if entry.get("component"):
+            entries[entry["component"]] = entry
+
+    edges: list[tuple[str, str, int | str]] = []
+    for component in sorted(entries):
+        entry = entries[component]
+        releases = entry.get("releases") or []
+        newest = max(releases, key=lambda r: r.get("moodle-version", 0)) if releases else {}
+        deps = newest.get("dependencies") or entry.get("dependencies") or {}
+        edges.extend((component, dep, minimum) for dep, minimum in sorted(deps.items()))
+
+    unlisted: dict[str, list[str]] = {}
+    parents: list[tuple[str, str]] = []
+    for component, dep, _minimum in edges:
+        if dep not in entries:
+            unlisted.setdefault(dep, []).append(component)
+        # A dependent whose plugintype embeds the dependency's name reads as
+        # a subplugin/extension of it: mod_quiz <- quizaccess_* / quiz_*,
+        # mod_assign <- assignsubmission_*, editor_atto <- atto_*, and the
+        # component-prefix case block_foo <- block_foo_bar. Heuristic
+        # worklist evidence, not a parenthood ruling.
+        dep_name = dep.partition("_")[2]
+        comp_type = component.partition("_")[0]
+        if (component.startswith(dep + "_")
+                or (len(dep_name) >= 3 and comp_type.startswith(dep_name))):
+            parents.append((component, dep))
+    return {"edges": edges, "unlisted": unlisted, "parents": parents}
+
+
 def write_reports(classes: dict[str, list], out_dir: str | Path) -> None:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

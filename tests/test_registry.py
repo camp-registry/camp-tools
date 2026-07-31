@@ -496,3 +496,56 @@ def test_release_no_listing_warning_when_valid(entry_path, plugin_repo, capsys):
     main(["release", str(entry_path), "v2.2.0", "--source", str(plugin_repo)])
     captured = capsys.readouterr()
     assert "will not show its content" not in captured.err
+
+
+def test_release_records_dependencies(entry_path, plugin_repo):
+    """$plugin->dependencies at the tagged commit lands in the release
+    record as observed data, same footing as supported-moodle (camp-tools#20)."""
+    from conftest import git
+    (plugin_repo / "version.php").write_text(
+        "<?php\n"
+        "defined('MOODLE_INTERNAL') || die();\n"
+        "$plugin->version   = 2026073100;\n"
+        "$plugin->requires  = 2024100700;\n"
+        "$plugin->component = 'mod_example';\n"
+        "$plugin->release   = '1.1.0';\n"
+        "$plugin->php       = '8.1.0';\n"
+        "$plugin->dependencies = [\n"
+        "    'mod_forum' => 2024042200,\n"
+        "    'local_helper' => ANY_VERSION,\n"
+        "];\n")
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "declare dependencies")
+    git(plugin_repo, "tag", "v1.1.0")
+    assert main(["release", str(entry_path), "v1.1.0",
+                 "--source", str(plugin_repo)]) == 0
+    entry = yaml.safe_load(entry_path.read_text())
+    record = entry["releases"][-1]
+    assert record["dependencies"] == {"mod_forum": 2024042200,
+                                      "local_helper": "any"}
+    assert validate_entry(entry_path) == []
+
+
+def test_release_omits_dependencies_when_none(entry_path, plugin_repo):
+    from conftest import git
+    (plugin_repo / "version.php").write_text(
+        (plugin_repo / "version.php").read_text().replace("'1.0.0'", "'2.3.0'"))
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "bump release")
+    git(plugin_repo, "tag", "v2.3.0")
+    assert main(["release", str(entry_path), "v2.3.0",
+                 "--source", str(plugin_repo)]) == 0
+    entry = yaml.safe_load(entry_path.read_text())
+    assert "dependencies" not in entry["releases"][-1]
+
+
+def test_entry_schema_rejects_bad_dependency_shapes(entry_path):
+    _mutate(entry_path, lambda e: e["releases"][0].update(
+        dependencies={"NotFrankenstyle": 2024042200}))
+    assert validate_entry(entry_path)
+    _mutate(entry_path, lambda e: e["releases"][0].update(
+        dependencies={"mod_ok": "sometimes"}))
+    assert validate_entry(entry_path)
+    _mutate(entry_path, lambda e: e["releases"][0].update(
+        dependencies={"mod_ok": "any"}))
+    assert validate_entry(entry_path) == []

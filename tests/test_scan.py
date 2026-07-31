@@ -113,7 +113,7 @@ def test_search_skips_private_repos():
          "default_branch": "main", "archived": False},
     ]}
     calls = {"n": 0}
-    def fake_request(url, token, log=print):
+    def fake_request(url, token, log=print, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             return 200, json.dumps(payload).encode(), {}
@@ -355,7 +355,7 @@ def test_enrich_detects_renamed_repos(tmp_path, monkeypatch):
             entry["releases"] = []
         (d / f"{name}.yml").write_text(_yaml.safe_dump(entry, sort_keys=False))
 
-    def fake_request(url, token, log=print):
+    def fake_request(url, token, log=print, **kwargs):
         # the API answers the old path with the repo's NEW identity
         name = url.rsplit("/", 1)[1]
         body = _json.dumps({
@@ -402,7 +402,7 @@ def test_enrich_stale_days_rolling_refresh(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_request(url, token, log=print):
+    def fake_request(url, token, log=print, **kwargs):
         calls.append(url)
         if "releases/latest" in url:
             return 404, b"{}", {}
@@ -460,7 +460,7 @@ def test_fill_repo_ids_backfill_sweep(tmp_path, monkeypatch):
     ])
     calls = []
 
-    def fake_request(url, token, log=print):
+    def fake_request(url, token, log=print, **kwargs):
         calls.append(url)
         return 200, _json.dumps({"id": 4242}).encode(), {}
 
@@ -531,7 +531,7 @@ def test_fetch_repo_id_gitlab_encodes_path(monkeypatch):
 
     seen = {}
 
-    def fake_request(url, token, log=print):
+    def fake_request(url, token, log=print, **kwargs):
         seen["url"] = url
         return 200, _json.dumps({"id": 84895550}).encode(), {}
 
@@ -557,7 +557,7 @@ def test_refresh_metrics_keeps_repo_id_current(tmp_path, monkeypatch):
                  **{"source-repo-id": 11}),
     ])
 
-    def fake_request(url, token, log=print):
+    def fake_request(url, token, log=print, **kwargs):
         if "releases/latest" in url:
             return 404, b"{}", {}
         return 200, _json.dumps({
@@ -591,3 +591,166 @@ def test_entry_schema_accepts_and_types_source_repo_id(index_dir):
     entry["source-repo-id"] = "123456"
     entry_path.write_text(_yaml.safe_dump(entry, sort_keys=False))
     assert any("source-repo-id" in p for p in validate_entry(entry_path))
+
+
+def test_entry_records_dependencies(tmp_path):
+    """A Tier 0 entry carries dependencies observed from the same
+    version.php fetch that yielded the component name (camp-tools#20)."""
+    text = ("<?php\n$plugin->component = 'mod_x';\n"
+            "$plugin->dependencies = ['mod_forum' => 2024042200, "
+            "'local_helper' => ANY_VERSION];\n")
+    entry = _entry_for(_candidate(), "mod_x", "2026-07-31", version_text=text)
+    assert entry["dependencies"] == {"mod_forum": 2024042200,
+                                     "local_helper": "any"}
+
+    from camp.validate import validate_entry
+    entry_dir = tmp_path / "plugins" / "mod"
+    entry_dir.mkdir(parents=True)
+    entry_path = entry_dir / "mod_x.yml"
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+    assert validate_entry(entry_path) == []
+
+
+def test_entry_omits_dependencies_when_none():
+    text = "<?php\n$plugin->component = 'mod_x';\n$plugin->version = 1;\n"
+    entry = _entry_for(_candidate(), "mod_x", "2026-07-31", version_text=text)
+    assert "dependencies" not in entry
+
+
+def test_site_renders_depends_on_row(index_dir, tmp_path):
+    """The Depends on row links listed dependencies to their camp page and
+    marks unlisted ones plainly (camp-tools#20)."""
+    from camp.site import generate as site_generate
+
+    entry_path = index_dir / "plugins" / "mod" / "mod_example.yml"
+    entry = yaml.safe_load(entry_path.read_text())
+    entry["releases"][0]["dependencies"] = {
+        "mod_listed": 2024042200, "local_unlisted": "any"}
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+
+    dep_entry = {
+        "component": "mod_listed",
+        "source": "https://github.com/o/moodle-mod_listed",
+        "maintainers": [{"github": "o"}],
+        "tier": 0, "status": "active", "releases": [],
+    }
+    (index_dir / "plugins" / "mod" / "mod_listed.yml").write_text(
+        yaml.safe_dump(dep_entry, sort_keys=False))
+
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "Depends on" in html
+    assert '<a class="mono" href="/plugin/mod_listed.html">mod_listed</a>' in html
+    assert "2024042200 or newer" in html
+    assert "local_unlisted</span> · not in the archive" in html
+    assert "declared in version.php at the latest release" in html
+
+
+def test_site_depends_on_row_tier0_entry_level(index_dir, tmp_path):
+    from camp.site import generate as site_generate
+
+    entry = {
+        "component": "mod_disc",
+        "source": "https://github.com/o/moodle-mod_disc",
+        "maintainers": [{"github": "o"}],
+        "tier": 0, "status": "active", "releases": [],
+        "dependencies": {"mod_forum": "any"},
+    }
+    (index_dir / "plugins" / "mod" / "mod_disc.yml").write_text(
+        yaml.safe_dump(entry, sort_keys=False))
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_disc.html").read_text()
+    assert "Depends on" in html
+    assert "on the default branch" in html
+    assert "or newer" not in html
+
+
+def test_site_no_depends_on_row_when_none(index_dir, tmp_path):
+    from camp.site import generate as site_generate
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    assert "Depends on" not in (out / "plugin" / "mod_example.html").read_text()
+
+
+def test_enrich_observes_and_clears_dependencies(tmp_path, monkeypatch):
+    """The enrich cycle backfills entry-level dependencies from the default
+    branch for entries whose newest release record lacks the field, and
+    clears a stale observation when the declaration goes away
+    (camp-tools#20)."""
+    import json as _json
+
+    import camp.scan as scan_mod
+
+    index = tmp_path / "index"
+    d = index / "plugins" / "mod"
+    d.mkdir(parents=True)
+    # stale-dated metrics so needs_metrics triggers without force
+    (d / "mod_dep.yml").write_text(yaml.safe_dump({
+        "component": "mod_dep", "source": "https://github.com/u/mod_dep",
+        "maintainers": [{"github": "u"}], "tier": 0, "status": "active",
+        "releases": []}, sort_keys=False))
+    (d / "mod_stale.yml").write_text(yaml.safe_dump({
+        "component": "mod_stale", "source": "https://github.com/u/mod_stale",
+        "maintainers": [{"github": "u"}], "tier": 0, "status": "active",
+        "releases": [], "dependencies": {"mod_gone": "any"}}, sort_keys=False))
+
+    def fake_request(url, token, log=print, **kwargs):
+        if "releases/latest" in url:
+            return 404, b"{}", {}
+        if url.endswith("contents/version.php"):
+            if "mod_dep" in url:
+                return 200, (b"<?php\n$plugin->component = 'mod_dep';\n"
+                             b"$plugin->dependencies = "
+                             b"['mod_forum' => 2024042200];\n"), {}
+            return 200, b"<?php\n$plugin->component = 'mod_stale';\n", {}
+        name = url.rsplit("/", 1)[1]
+        return 200, _json.dumps({
+            "full_name": f"u/{name}", "pushed_at": "2026-07-01T00:00:00Z",
+            "stargazers_count": 0, "forks_count": 0, "open_issues_count": 0,
+            "archived": False}).encode(), {}
+
+    monkeypatch.setattr(scan_mod, "_request", fake_request)
+    stats = scan_mod.enrich(index, token="x", readme=False, log=lambda *a: None)
+    assert stats["dependencies"] == 2
+    dep = yaml.safe_load((d / "mod_dep.yml").read_text())
+    assert dep["dependencies"] == {"mod_forum": 2024042200}
+    stale = yaml.safe_load((d / "mod_stale.yml").read_text())
+    assert "dependencies" not in stale
+
+
+def test_enrich_skips_dependency_fetch_when_ledger_has_it(tmp_path, monkeypatch):
+    import json as _json
+
+    import camp.scan as scan_mod
+
+    index = tmp_path / "index"
+    d = index / "plugins" / "mod"
+    d.mkdir(parents=True)
+    (d / "mod_led.yml").write_text(yaml.safe_dump({
+        "component": "mod_led", "source": "https://github.com/u/mod_led",
+        "maintainers": [{"github": "u"}], "tier": 2,
+        "security-contact": "s@example.org", "labels": ["fully-free"],
+        "status": "active",
+        "releases": [{"version": "1.0.0", "tag": "v1", "commit": "a" * 40,
+                      "moodle-version": 2026010100, "supported-moodle": ["5.0"],
+                      "zip-sha256": "b" * 64,
+                      "published": "2026-01-01T00:00:00Z",
+                      "dependencies": {"mod_forum": "any"}}]}, sort_keys=False))
+
+    calls = []
+
+    def fake_request(url, token, log=print, **kwargs):
+        calls.append(url)
+        if "releases/latest" in url:
+            return 404, b"{}", {}
+        name = url.rsplit("/", 1)[1]
+        return 200, _json.dumps({
+            "full_name": f"u/{name}", "pushed_at": "2026-07-01T00:00:00Z",
+            "stargazers_count": 0, "forks_count": 0, "open_issues_count": 0,
+            "archived": False}).encode(), {}
+
+    monkeypatch.setattr(scan_mod, "_request", fake_request)
+    scan_mod.enrich(index, token="x", readme=False, log=lambda *a: None)
+    assert not any("contents/version.php" in u for u in calls)

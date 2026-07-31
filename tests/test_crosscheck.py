@@ -112,3 +112,53 @@ def test_missing_splits_out_removed_by_request(tmp_path, monkeypatch):
     }, log=lambda *a: None)
     assert [r[0] for r in classes["removed-by-request"]] == ["filter_gone"]
     assert [r[0] for r in classes["missing"]] == ["filter_new"]
+
+
+def _dep_entry(component, source, tier=0, dependencies=None, releases=None):
+    entry = {"component": component, "source": source,
+             "maintainers": [{"github": "o"}], "tier": tier,
+             "status": "active", "releases": releases or []}
+    if dependencies:
+        entry["dependencies"] = dependencies
+    return entry
+
+
+def test_dependency_xref(tmp_path):
+    import yaml
+    from camp.crosscheck import dependency_xref
+
+    plugins = tmp_path / "plugins"
+    (plugins / "mod").mkdir(parents=True)
+    (plugins / "quizaccess").mkdir(parents=True)
+
+    # Tier 2 entry: newest release's declaration wins over entry level.
+    releases = [
+        {"version": "1.0.0", "tag": "v1", "commit": "a" * 40,
+         "moodle-version": 2025010100, "supported-moodle": ["4.5"],
+         "zip-sha256": "b" * 64, "published": "2025-01-01T00:00:00Z",
+         "dependencies": {"mod_stale": 1}},
+        {"version": "2.0.0", "tag": "v2", "commit": "c" * 40,
+         "moodle-version": 2026010100, "supported-moodle": ["5.0"],
+         "zip-sha256": "d" * 64, "published": "2026-01-01T00:00:00Z",
+         "dependencies": {"mod_quiz": 2024042200, "local_unlisted": "any"}},
+    ]
+    (plugins / "quizaccess" / "quizaccess_x.yml").write_text(yaml.safe_dump(
+        _dep_entry("quizaccess_x", "https://github.com/o/r", tier=2,
+                   releases=releases)))
+    (plugins / "mod" / "mod_quiz.yml").write_text(yaml.safe_dump(
+        _dep_entry("mod_quiz", "https://github.com/o/q")))
+    # Tier 0 entry-level observation is read when there is no ledger.
+    (plugins / "mod" / "mod_disc.yml").write_text(yaml.safe_dump(
+        _dep_entry("mod_disc", "https://github.com/o/d",
+                   dependencies={"local_unlisted": "any"})))
+
+    xref = dependency_xref(tmp_path)
+    assert ("quizaccess_x", "mod_quiz", 2024042200) in xref["edges"]
+    assert ("quizaccess_x", "mod_stale", 1) not in xref["edges"]
+    assert ("mod_disc", "local_unlisted", "any") in xref["edges"]
+    # mod_stale never appears: only the newest release's declaration counts
+    assert set(xref["unlisted"]) == {"local_unlisted"}
+    assert sorted(xref["unlisted"]["local_unlisted"]) == ["mod_disc", "quizaccess_x"]
+    # quizaccess_x declaring mod_quiz is subplugin-parent evidence
+    assert ("quizaccess_x", "mod_quiz") in xref["parents"]
+    assert ("mod_disc", "local_unlisted") not in xref["parents"]

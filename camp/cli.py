@@ -25,6 +25,7 @@ import yaml
 
 from . import build as build_mod
 from . import composer as composer_mod
+from . import versionphp
 from .validate import (load_entry, validate_entry, validate_listing,
                        validate_listing_bytes)
 from .verify import verify_entry
@@ -88,14 +89,19 @@ def _cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
-def _version_php_field(repo: str, commit: str, field: str) -> str | None:
+def _version_php_text(repo: str, commit: str) -> str | None:
     result = subprocess.run(
         ["git", "-C", repo, "show", f"{commit}:version.php"],
         capture_output=True, text=True,
     )
-    if result.returncode != 0:
+    return result.stdout if result.returncode == 0 else None
+
+
+def _version_php_field(repo: str, commit: str, field: str) -> str | None:
+    text = _version_php_text(repo, commit)
+    if text is None:
         return None
-    match = re.search(rf"\$plugin->{field}\s*=\s*['\"]?([^'\";]+)['\"]?\s*;", result.stdout)
+    match = re.search(rf"\$plugin->{field}\s*=\s*['\"]?([^'\";]+)['\"]?\s*;", text)
     return match.group(1).strip() if match else None
 
 
@@ -160,6 +166,10 @@ def _cmd_release(args: argparse.Namespace) -> int:
         version = release_field.split(" ")[0]
         moodle_version = _version_php_field(repo, artifact.commit, "version")
         php_min = _version_php_field(repo, artifact.commit, "php")
+        # Observed from version.php at the pinned commit, same footing as
+        # supported-moodle below: registry-observed data, not listing content.
+        dependencies = versionphp.parse_dependencies(
+            _version_php_text(repo, artifact.commit) or "")
         listing_raw = build_mod.file_bytes_at_commit(repo, artifact.commit, ".camp/listing.yml")
         listing_hash = (hashlib.sha256(listing_raw).hexdigest()
                         if listing_raw is not None else None)
@@ -213,6 +223,8 @@ def _cmd_release(args: argparse.Namespace) -> int:
     }
     if php_min:
         record["php-min"] = php_min
+    if dependencies:
+        record["dependencies"] = dependencies
     if listing_hash:
         record["listing-sha256"] = listing_hash
 
@@ -599,6 +611,34 @@ def _cmd_crosscheck_directory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dependency_report(args: argparse.Namespace) -> int:
+    from .crosscheck import dependency_xref
+    xref = dependency_xref(args.index_dir)
+    print(f"{len(xref['edges'])} declared dependency edge(s) across the index")
+    if xref["unlisted"]:
+        print(f"\n{len(xref['unlisted'])} dependency component(s) not in the "
+              f"index — seeding candidates with built-in evidence of relevance "
+              f"(triage: components bundled with Moodle core, e.g. theme_boost "
+              f"or tool_lp, need no listing):")
+        for dep, dependents in sorted(xref["unlisted"].items()):
+            print(f"  {dep:<40} required by {', '.join(dependents)}")
+    if xref["parents"]:
+        print(f"\n{len(xref['parents'])} dependent(s) declaring an apparent "
+              f"parent (subplugin-family evidence, camp-tools#16):")
+        for component, dep in xref["parents"]:
+            print(f"  {component:<40} -> {dep}")
+    if args.out:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "dependency-edges.tsv", "w") as fh:
+            fh.writelines(f"{c}\t{d}\t{m}\n" for c, d, m in xref["edges"])
+        with open(out / "dependency-unlisted.tsv", "w") as fh:
+            fh.writelines(f"{d}\t{','.join(deps)}\n"
+                          for d, deps in sorted(xref["unlisted"].items()))
+        print(f"\nreports written to {out}")
+    return 0
+
+
 def _cmd_fill_repo_ids(args: argparse.Namespace) -> int:
     from .scan import fill_repo_ids
     failed = fill_repo_ids(args.index_dir, args.components or None)
@@ -869,6 +909,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-probe", action="store_true",
                    help="skip liveness/history probes (fast, coarse)")
     p.set_defaults(func=_cmd_crosscheck_directory)
+
+    p = sub.add_parser("dependency-report",
+                       help="cross-reference declared plugin dependencies "
+                            "against the index: unlisted dependencies are "
+                            "seeding candidates, parent-declaring dependents "
+                            "are subplugin-family evidence (camp-tools#20)")
+    p.add_argument("index_dir")
+    p.add_argument("--out", default=None,
+                   help="directory for TSV reports (edges + unlisted)")
+    p.set_defaults(func=_cmd_dependency_report)
 
     p = sub.add_parser("refresh-metrics",
                        help="immediately re-fetch upstream metrics for named "

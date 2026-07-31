@@ -1934,7 +1934,8 @@ def _reviewed_badge(badge_src) -> str:
 def _detail_page(entry: dict, listing: dict, base_url: str,
                  advisories: AdvisorySet, today: datetime.date,
                  checks_dir=None, shots=None, reviews=None,
-                 badge_src=None, artifacts_base: str | None = None) -> str:
+                 badge_src=None, artifacts_base: str | None = None,
+                 known_components: set[str] | None = None) -> str:
     component = entry["component"]
     artifacts_base = artifacts_base or f"{base_url}/artifacts"
     plugintype = component.partition("_")[0]
@@ -2396,6 +2397,32 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                    f'<span class="fv mono" style="font-size:0.78125rem;word-break:break-all">'
                    f'<a href="{escape(entry["source"])}">'
                    f'{escape(entry["source"].removeprefix("https://"))}</a></span></div>')
+    # $plugin->dependencies, observed from version.php (camp-tools#20): the
+    # latest release's declaration when there is a ledger, else the entry's
+    # scan-time observation (Tier 0). Listed dependencies link to their own
+    # page; unlisted ones are said plainly.
+    dependencies = ((latest or {}).get("dependencies")
+                    or entry.get("dependencies") or {})
+    if dependencies:
+        dep_items = []
+        for dep_component, dep_min in sorted(dependencies.items()):
+            if known_components and dep_component in known_components:
+                dep_name = (f'<a class="mono" href="/plugin/{escape(dep_component)}.html">'
+                            f'{escape(dep_component)}</a>')
+                note = ""
+            else:
+                dep_name = f'<span class="mono">{escape(dep_component)}</span>'
+                note = " · not in the archive"
+            version_note = "" if dep_min == "any" else f" · {dep_min} or newer"
+            dep_items.append(f'<div>{dep_name}{escape(version_note)}{note}</div>')
+        dep_origin = ("at the latest release" if (latest or {}).get("dependencies")
+                      else "on the default branch")
+        kv_rows.append(
+            '<div class="kvrow"><span class="fk">Depends on</span>'
+            f'<span class="fv">{"".join(dep_items)}'
+            f'<div class="attrib" style="margin-top:6px">declared in version.php '
+            f'{dep_origin} · Moodle requires these plugins to be installed first'
+            f'</div></span></div>')
     link_bits = []
     for key, label in (("docs", "Documentation"), ("changelog", "Changelog"),
                        ("donate", "Support the author")):
@@ -2690,6 +2717,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     if shots_src and shots_src.exists():
         shutil.copytree(shots_src, out / "shots", dirs_exist_ok=True)
 
+    known_components = {e["component"] for e, _ in entries}
     for entry, listing in entries:
         component = entry["component"]
         shots = []
@@ -2701,7 +2729,8 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
         page = _detail_page(entry, listing, base_url, advisories, today,
                             checks_dir=checks_dir, shots=shots,
                             reviews=reviews_by_component.get(component),
-                            badge_src=badge_src, artifacts_base=artifacts_base)
+                            badge_src=badge_src, artifacts_base=artifacts_base,
+                            known_components=known_components)
         (out / "plugin" / f"{component}.html").write_text(page)
 
     browse_html, records = _browse_page(entries, today)
