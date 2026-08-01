@@ -5,7 +5,11 @@
   "description": "Descriptive listing content, kept in the plugin's own repository (RFC §4.1) and treated as untrusted input: the description is sanitized markdown (no raw HTML), screenshots are raster-only and re-encoded by CI. Ingested and hash-pinned at each tagged release.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "summary", "labels"],
+  "required": [
+    "name",
+    "summary",
+    "labels"
+  ],
   "properties": {
     "name": {
       "description": "Human-readable plugin name shown in listings.",
@@ -52,10 +56,18 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path"],
+        "required": [
+          "path"
+        ],
         "properties": {
-          "path": { "type": "string", "pattern": "\\.(png|jpe?g|webp)$" },
-          "caption": { "type": "string", "maxLength": 120 }
+          "path": {
+            "type": "string",
+            "pattern": "\\.(png|jpe?g|webp)$"
+          },
+          "caption": {
+            "type": "string",
+            "maxLength": 120
+          }
         }
       }
     },
@@ -63,10 +75,44 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "docs": { "type": "string", "pattern": "^https://" },
-        "issues": { "type": "string", "pattern": "^https://" },
-        "changelog": { "type": "string", "pattern": "^https://" },
-        "donate": { "type": "string", "pattern": "^https://" }
+        "docs": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "issues": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "changelog": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "donate": {
+          "type": "string",
+          "pattern": "^https://"
+        }
+      }
+    },
+    "badges": {
+      "description": "Author-declared endpoint badges (shields.io endpoint schema v1) from allowlisted hosts — e.g. an MDL Shield security grade. The registry fetches the JSON at publish time and renders the chip itself; visitors load nothing third-party (RFC §4.6).",
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "endpoint"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "pattern": "^https://"
+          },
+          "link": {
+            "type": "string",
+            "pattern": "^https://"
+          }
+        }
       }
     }
   }

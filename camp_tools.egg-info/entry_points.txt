@@ -1,0 +1,2 @@
+[console_scripts]
+camp = camp.cli:main

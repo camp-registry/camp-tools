@@ -35,6 +35,8 @@ from pathlib import Path
 
 import yaml
 
+from . import versionphp
+
 USER_AGENT = "camp-seeding-scanner/0.1 (community Moodle plugin repository)"
 # Frankenstyle plugin-type prefixes, used to build targeted name searches.
 # A prefix search (e.g. "moodle-mod_ in:name") returns a corpus small enough
@@ -92,7 +94,7 @@ class Candidate:
 @dataclass
 class ScanResult:
     candidate: Candidate
-    outcome: str  # written | exists | no-version-php | bad-license | skipped-known | fetch-error
+    outcome: str  # written | exists | copy | name-collision | no-version-php | bad-license | skipped-known | fetch-error
     component: str | None = None
 
 
@@ -129,34 +131,51 @@ def save_ledger(index_dir: str | Path, repos: dict) -> None:
                        sort_keys=False, allow_unicode=True)
 
 
+# Outcomes the recheck window never reopens. 'opted-out' is a maintainer's
+# standing request (RFC §4.4): re-evaluating it would re-list a repository
+# whose owner asked to be removed. Keyed by repository, so a later rename
+# of the repo escapes the marker; the rename detector doesn't track
+# unlisted repos, and that residual risk is accepted.
+PERMANENT_OUTCOMES = frozenset({"opted-out"})
+
+
 def should_skip(ledger: dict, full_name: str, today: str,
                 recheck_days: int = DEFAULT_RECHECK_DAYS) -> bool:
     """Skip repos already evaluated within the recheck window. 'written'
     entries are never skipped by the ledger (the index itself is the
-    authority for those)."""
+    authority for those); PERMANENT_OUTCOMES are always skipped."""
     record = ledger.get(full_name)
     if record is None or record.get("outcome") == "written":
         return False
+    if record.get("outcome") in PERMANENT_OUTCOMES:
+        return True
     last = datetime.date.fromisoformat(record["last-checked"])
     age = (datetime.date.fromisoformat(today) - last).days
     return age < recheck_days
 
 
 def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
-                   detail: str, today: str) -> None:
+                   detail: str, today: str, component: str | None = None) -> None:
     previous = ledger.get(candidate.full_name, {})
-    ledger[candidate.full_name] = {
+    entry = {
         "outcome": outcome,
         "detail": detail,
         "first-seen": previous.get("first-seen", today),
         "last-checked": today,
     }
+    # Collision-class outcomes carry the component explicitly so the
+    # claim-time check in index CI can grep the ledger without parsing
+    # detail strings.
+    if component and outcome in ("copy", "name-collision"):
+        entry["component"] = component
+    ledger[candidate.full_name] = entry
 
 
-def _request(url: str, token: str | None, retries: int = 3) -> tuple[int, bytes, dict]:
+def _request(url: str, token: str | None, retries: int = 3,
+             accept: str = "application/vnd.github+json") -> tuple[int, bytes, dict]:
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
-        "Accept": "application/vnd.github+json",
+        "Accept": accept,
         **({"Authorization": f"Bearer {token}"} if token else {}),
     })
     for attempt in range(retries):
@@ -204,6 +223,10 @@ def _search(query: str, limit: int, token: str | None, log,
         if not items:
             break
         for repo in items:
+            # Authenticated search returns private repos the token can
+            # access; a public index must never list a non-public source.
+            if repo.get("private") or repo.get("visibility", "public") != "public":
+                continue
             candidates.append(Candidate(
                 full_name=repo["full_name"],
                 html_url=repo["html_url"],
@@ -267,13 +290,17 @@ def _fetch_component(candidate: Candidate, token: str | None,
     case). With a token, uses the authenticated contents API (5000/hr core
     quota); the anonymous raw host throttles hard.
     """
+    # Branch names may contain characters urllib refuses to send raw (a
+    # non-ASCII default branch crashes putrequest with UnicodeEncodeError),
+    # so the ref is always percent-encoded.
+    ref = urllib.parse.quote(candidate.default_branch, safe="")
     if token:
         url = (f"https://api.github.com/repos/{candidate.full_name}/contents/"
-               f"version.php?ref={candidate.default_branch}")
+               f"version.php?ref={ref}")
         req_token = token
     else:
         url = (f"https://raw.githubusercontent.com/{candidate.full_name}/"
-               f"{candidate.default_branch}/version.php")
+               f"{ref}/version.php")
         req_token = None
     headers_accept = {"Accept": "application/vnd.github.raw+json"} if token else {}
     request = urllib.request.Request(url, headers={
@@ -360,8 +387,126 @@ def _name_matches_component(full_name: str, component: str) -> bool:
     return short_name in repo_name or full in repo_name
 
 
+# --- component-name collisions -----------------------------------------------
+# A candidate whose component is already listed is one of three things: the
+# listed repository itself seen again ("exists"), a detached copy that shares
+# git history with it ("copy"; GitHub-flagged forks never get here because
+# the search queries exclude them), or a genuinely independent plugin that
+# picked the same name ("name-collision", handled case by case at claim time
+# per NAMESPACE.md in camp-docs). A copy whose history was squashed or
+# re-initialized classifies as name-collision; that errs toward human
+# attention, which is the safe direction.
+
+
+def _normalize_repo_url(url: str) -> str:
+    tail = url.strip().lower().split("://")[-1]
+    return tail.rstrip("/").removesuffix(".git")
+
+
+def _repo_host_path(url: str) -> tuple[str, str] | None:
+    host, _, path = _normalize_repo_url(url).partition("/")
+    if not path or "." not in host:
+        return None
+    return host, path
+
+
+def _listing_source(index_dir: str | Path, component: str) -> str | None:
+    path = (Path(index_dir) / "plugins" / component.partition("_")[0]
+            / f"{component}.yml")
+    if not path.exists():
+        return None
+    with open(path) as f:
+        entry = yaml.safe_load(f) or {}
+    return entry.get("source")
+
+
+def _root_commit(host: str, path: str, token: str | None) -> str | None:
+    """The oldest commit SHA reachable from the default branch, via the
+    commits API's last page. None when it can't be determined."""
+    if host == "github.com":
+        url = f"https://api.github.com/repos/{path}/commits?per_page=1"
+        status, body, headers = _request(url, token)
+        if status != 200:
+            return None
+        link = headers.get("Link") or headers.get("link") or ""
+        last = re.search(r'<([^>]+)>;\s*rel="last"', link)
+        if last:
+            status, body, _ = _request(last.group(1), token)
+            if status != 200:
+                return None
+        commits = json.loads(body)
+        return commits[0].get("sha") if commits else None
+    if "gitlab" in host:
+        encoded = urllib.parse.quote(path, safe="")
+        url = f"https://{host}/api/v4/projects/{encoded}/repository/commits?per_page=1"
+        status, body, headers = _gitlab_request(url, None)
+        if status != 200:
+            return None
+        pages = headers.get("x-total-pages") or headers.get("X-Total-Pages")
+        if pages and pages != "1":
+            status, body, _ = _gitlab_request(f"{url}&page={pages}", None)
+            if status != 200:
+                return None
+        commits = json.loads(body)
+        return commits[0].get("id") if commits else None
+    return None
+
+
+def _has_commit(host: str, path: str, sha: str, token: str | None) -> bool | None:
+    """Whether the repository contains the commit. None = undetermined."""
+    if host == "github.com":
+        status, _, _ = _request(
+            f"https://api.github.com/repos/{path}/commits/{sha}", token)
+    elif "gitlab" in host:
+        encoded = urllib.parse.quote(path, safe="")
+        status, _, _ = _gitlab_request(
+            f"https://{host}/api/v4/projects/{encoded}/repository/commits/{sha}",
+            None)
+    else:
+        return None
+    if status == 200:
+        return True
+    if status in (404, 422):
+        return False
+    return None
+
+
+def _shares_history(candidate_url: str, listed_url: str,
+                    token: str | None) -> bool | None:
+    """Whether the candidate's root commit is reachable in the listed
+    repository. The root is the right commit to probe: a copy diverges at
+    the tip but keeps its origin, whichever repository came first."""
+    cand = _repo_host_path(candidate_url)
+    listed = _repo_host_path(listed_url)
+    if not cand or not listed:
+        return None
+    sha = _root_commit(*cand, token)
+    if not sha:
+        return None
+    return _has_commit(listed[0], listed[1], sha, token)
+
+
+def classify_existing(index_dir: str | Path, candidate_url: str,
+                      component: str, gh_token: str | None) -> tuple[str, str]:
+    """(outcome, detail) for a candidate whose component is already listed.
+    gh_token is a GitHub token; GitLab endpoints are probed unauthenticated."""
+    source = _listing_source(index_dir, component)
+    if not source or _normalize_repo_url(source) == _normalize_repo_url(candidate_url):
+        return ("exists",
+                f"component {component} already registered (first-come, RFC §8)")
+    shared = _shares_history(candidate_url, source, gh_token)
+    if shared:
+        return ("copy",
+                f"shares git history with {source}, which holds component {component}")
+    probe = "" if shared is False else "; history probe inconclusive"
+    return ("name-collision",
+            f"independent repository declaring {component}, held by "
+            f"{source}{probe}; see NAMESPACE.md")
+
+
 def _metrics_dict(*, updated: str | None, stars: int, forks: int,
-                  open_issues: int, archived: bool, checked: str) -> dict:
+                  open_issues: int, archived: bool, checked: str,
+                  latest_release: dict | None = None) -> dict:
     """Ordered upstream-activity metrics block (schema `metrics`). `updated`
     is omitted when the platform gave no timestamp; `checked` is always set so
     consumers can judge freshness."""
@@ -372,11 +517,49 @@ def _metrics_dict(*, updated: str | None, stars: int, forks: int,
     metrics["forks"] = forks
     metrics["open-issues"] = open_issues
     metrics["archived"] = archived
+    if latest_release:
+        metrics["latest-release"] = latest_release
     metrics["checked"] = checked
     return metrics
 
 
-def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
+def _fetch_latest_release(host: str, path: str, token: str | None) -> dict | None:
+    """Upstream's newest formal release (tag + date), or None. Plugins that
+    only tag without releases are skipped — tag-list ordering is not
+    reliably chronological on either platform."""
+    if host == "github.com":
+        status, body, _ = _request(
+            f"https://api.github.com/repos/{path}/releases/latest", token)
+        if status != 200:
+            return None
+        rel = json.loads(body)
+        tag = rel.get("tag_name")
+        if not tag:
+            return None
+        out = {"tag": tag}
+        if rel.get("published_at"):
+            out["date"] = rel["published_at"]
+        return out
+    if "gitlab" in host:
+        api = (f"https://{host}/api/v4/projects/"
+               f"{urllib.parse.quote(path, safe='')}/releases?per_page=1")
+        status, body, _ = _request(api, None)
+        if status != 200:
+            return None
+        rels = json.loads(body)
+        if not rels:
+            return None
+        out = {"tag": rels[0].get("tag_name", "")}
+        if not out["tag"]:
+            return None
+        if rels[0].get("released_at"):
+            out["date"] = rels[0]["released_at"]
+        return out
+    return None
+
+
+def _entry_for(candidate: Candidate, component: str, today: str,
+               version_text: str = "") -> dict:
     maintainer = {("gitlab" if candidate.platform == "gitlab" else "github"): candidate.owner}
     entry: dict = {
         "component": component,
@@ -391,6 +574,12 @@ def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
         entry["license"] = candidate.license_spdx
     if candidate.description:
         entry["summary"] = candidate.description[:300]
+    # Observed from the same version.php fetch that yielded the component
+    # name; Tier 0 has no release ledger, so the declaration is recorded at
+    # the entry level from the default branch (camp-tools#20).
+    dependencies = versionphp.parse_dependencies(version_text)
+    if dependencies:
+        entry["dependencies"] = dependencies
     entry["metrics"] = _metrics_dict(
         updated=candidate.pushed_at, stars=candidate.stars, forks=candidate.forks,
         open_issues=candidate.open_issues, archived=candidate.archived, checked=today,
@@ -405,10 +594,14 @@ def _entry_for(candidate: Candidate, component: str, today: str) -> dict:
 # unenriched rather than failing the run.
 
 def _fetch_metrics(source: str, token: str | None, checked: str,
-                   log) -> tuple[str, dict | None]:
-    """Fetch upstream metrics for one source repo. Returns (status, metrics)
-    where status is 'ok' (metrics populated), 'gone' (404 — repo removed or
-    renamed), or 'error' (transient/unsupported host — retry later)."""
+                   log) -> tuple[str, dict | None, str | None]:
+    """Fetch upstream metrics for one source repo. Returns
+    (status, metrics, canonical) where status is 'ok' (metrics populated),
+    'gone' (404 — repo removed), or 'error' (transient/unsupported host —
+    retry later). `canonical` is the repo's canonical URL when it differs
+    from `source` — GitHub 301s renamed repos forever, so without this
+    check a migration is invisible (it hid logstore_xapi's move for
+    months)."""
     parsed = urllib.parse.urlparse(source)
     host = parsed.netloc
     path = parsed.path.strip("/")
@@ -424,35 +617,138 @@ def _fetch_metrics(source: str, token: str | None, checked: str,
             time.sleep(wait)
             status, body, headers = _request(url, token)
         if status == 404:
-            return "gone", None
+            return "gone", None, None
         if status != 200:
             log(f"  {path}: GitHub HTTP {status}")
-            return "error", None
+            return "error", None, None
         repo = json.loads(body)
+        canonical = None
+        full_name = repo.get("full_name") or ""
+        if full_name and full_name.lower() != path.lower():
+            canonical = f"https://github.com/{full_name}"
         return "ok", _metrics_dict(
             updated=repo.get("pushed_at"), stars=repo.get("stargazers_count", 0),
             forks=repo.get("forks_count", 0), open_issues=repo.get("open_issues_count", 0),
             archived=repo.get("archived", False), checked=checked,
-        )
+            latest_release=_fetch_latest_release("github.com", path, token),
+        ), canonical
 
     if "gitlab" in host:
         api = (f"{parsed.scheme}://{host}/api/v4/projects/"
                f"{urllib.parse.quote(path, safe='')}")
         status, body, _ = _request(api, None)
         if status == 404:
-            return "gone", None
+            return "gone", None, None
         if status != 200:
             log(f"  {path}: GitLab HTTP {status}")
-            return "error", None
+            return "error", None, None
         proj = json.loads(body)
         return "ok", _metrics_dict(
             updated=proj.get("last_activity_at"), stars=proj.get("star_count", 0),
             forks=proj.get("forks_count", 0), open_issues=proj.get("open_issues_count", 0),
             archived=proj.get("archived", False), checked=checked,
-        )
+            latest_release=_fetch_latest_release(host, path, None),
+        ), None
 
     log(f"  {source}: unsupported host, skipped")
-    return "error", None
+    return "error", None, None
+
+
+def _fetch_repo_id(source: str, token: str | None, log=print) -> tuple[str, int | None]:
+    """Fetch the source platform's permanent numeric repository id
+    (GitHub repository id / GitLab project id). Returns ('ok', id),
+    ('gone', None) on 404, or ('error', None). The id is the identity
+    anchor for OIDC trusted publishing (camp-index#66): unlike the
+    path, it survives renames and ownership transfers."""
+    parsed = urllib.parse.urlparse(source)
+    host = parsed.netloc
+    path = parsed.path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if host == "github.com":
+        status, body, _ = _request(f"https://api.github.com/repos/{path}", token)
+    elif "gitlab" in host:
+        api = (f"{parsed.scheme}://{host}/api/v4/projects/"
+               f"{urllib.parse.quote(path, safe='')}")
+        status, body, _ = _request(api, None)
+    else:
+        log(f"  {source}: unsupported host for repo id")
+        return "error", None
+    if status == 404:
+        return "gone", None
+    if status != 200:
+        log(f"  {path}: HTTP {status} fetching repo id")
+        return "error", None
+    repo_id = json.loads(body).get("id")
+    if not isinstance(repo_id, int):
+        return "error", None
+    return "ok", repo_id
+
+
+def _with_repo_id(entry: dict, repo_id: int) -> dict:
+    """Entry with source-repo-id set, placed directly after source so the
+    anchor reads next to the path it anchors."""
+    entry = dict(entry)
+    entry.pop("source-repo-id", None)
+    rebuilt: dict = {}
+    for key, value in entry.items():
+        rebuilt[key] = value
+        if key == "source":
+            rebuilt["source-repo-id"] = repo_id
+    if "source-repo-id" not in rebuilt:
+        rebuilt["source-repo-id"] = repo_id
+    return rebuilt
+
+
+def fill_repo_ids(index_dir: str | Path, components: list[str] | None = None,
+                  token: str | None = None, log=print) -> list[str]:
+    """Record claimed entries' permanent numeric source repository id as
+    `source-repo-id`, the OIDC trusted-publishing identity anchor
+    (camp-index#66). With no components: sweep every Tier 1+ entry still
+    missing the field (the one-time backfill). With components:
+    re-resolve and overwrite (the source-repoint case — run alongside
+    refresh-metrics, which also keeps the id current). Tier 0 entries
+    are refused: discovery carries no ownership assertion to anchor.
+    Returns the components that failed."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    index = Path(index_dir)
+    failed: list[str] = []
+    if components:
+        targets = list(components)
+        overwrite = True
+    else:
+        targets = []
+        overwrite = False
+        for path in sorted(index.glob("plugins/*/*.yml")):
+            with open(path) as f:
+                entry = yaml.safe_load(f) or {}
+            if entry.get("tier", 0) >= 1 and "source-repo-id" not in entry:
+                targets.append(entry["component"])
+    for component in targets:
+        path = (index / "plugins" / component.partition("_")[0]
+                / f"{component}.yml")
+        if not path.exists():
+            log(f"  ! {component}: no listing file")
+            failed.append(component)
+            continue
+        with open(path) as f:
+            entry = yaml.safe_load(f) or {}
+        if entry.get("tier", 0) < 1:
+            log(f"  ! {component}: tier 0 (unclaimed); nothing to anchor")
+            failed.append(component)
+            continue
+        if not overwrite and "source-repo-id" in entry:
+            continue
+        status, repo_id = _fetch_repo_id(entry.get("source", ""), token, log)
+        if status != "ok":
+            log(f"  ! {component}: repo id fetch failed ({status})")
+            failed.append(component)
+            continue
+        with open(path, "w") as f:
+            yaml.safe_dump(_with_repo_id(entry, repo_id), f, sort_keys=False,
+                           allow_unicode=True)
+        log(f"  {component}: source-repo-id {repo_id} ({entry['source']})")
+    return failed
 
 
 _BADGE_LINE = re.compile(r"^\[?!\[")          # image or linked-image (badge) line
@@ -513,11 +809,50 @@ def _fetch_readme_summary(source: str, token: str | None, log) -> str | None:
     return _summary_from_readme(text)
 
 
+def _fetch_version_php_text(source: str, token: str | None) -> str | None:
+    """version.php text from the default branch of a source repo, or None
+    when it cannot be observed (missing file, unsupported host, transient
+    error). GitHub's contents API defaults to the default branch when no ref
+    is given; GitLab's raw-file endpoint accepts ref=HEAD."""
+    parsed = urllib.parse.urlparse(source)
+    host = parsed.netloc
+    path = parsed.path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if host == "github.com":
+        status, body, _ = _request(
+            f"https://api.github.com/repos/{path}/contents/version.php",
+            token, accept="application/vnd.github.raw+json")
+    elif "gitlab" in host:
+        encoded = urllib.parse.quote(path, safe="")
+        status, body, _ = _request(
+            f"https://{host}/api/v4/projects/{encoded}/repository/files/"
+            f"version.php/raw?ref=HEAD", None)
+    else:
+        return None
+    return body.decode(errors="replace") if status == 200 else None
+
+
 def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = None,
-           force: bool = False, readme: bool = True, log=print) -> dict:
-    """Backfill/refresh discovered (Tier 0) entries with upstream `metrics` and,
-    where the source repo set no description, a one-line `summary` derived from
-    its README.
+           force: bool = False, readme: bool = True,
+           stale_days: int | None = None, log=print) -> dict:
+    """Backfill/refresh entries with upstream `metrics` and, for discovered
+    (Tier 0) entries whose source repo set no description, a one-line
+    `summary` derived from its README.
+
+    On the same refresh cycle, entries whose newest release does not carry a
+    `dependencies` record get an entry-level observation of
+    $plugin->dependencies from the default branch (camp-tools#20): the
+    backfill path for listings that predate the field, kept current — and
+    removed again — as the declaration changes upstream. Entries whose
+    ledger already records dependencies at the pinned commit skip the extra
+    fetch; the release record is the authoritative form.
+
+    Metrics are advisory activity signals and refresh at every tier —
+    claiming a plugin shouldn't freeze its liveness data. Summary scraping
+    stays Tier 0 only: from Tier 1 up the summary is on its way to being
+    replaced by the author's own .camp/listing.yml, so enrich never
+    overwrites what an author (or the registry) set.
 
     Resumable: an entry is skipped once it has metrics and a summary (or can't
     gain one), unless `force` is set — so an interrupted run resumes cleanly and
@@ -526,7 +861,8 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
     token = token or os.environ.get("GITHUB_TOKEN")
     today = datetime.date.today().isoformat()
     paths = sorted((Path(index_dir) / "plugins").glob("*/*.yml"))
-    stats = {"metrics": 0, "summary": 0, "skipped": 0, "gone": 0, "error": 0}
+    stats = {"metrics": 0, "summary": 0, "dependencies": 0, "skipped": 0,
+             "gone": 0, "error": 0, "renamed": 0, "flagged-renames": 0}
     fetched = 0
 
     for path in paths:
@@ -534,13 +870,20 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
             break
         with open(path) as f:
             entry = yaml.safe_load(f)
-        if entry.get("tier", 0) != 0:
+        if entry.get("status", "active") == "delisted":
             continue
 
-        needs_metrics = force or not entry.get("metrics")
+        metrics_checked = (entry.get("metrics") or {}).get("checked", "")
+        is_stale = (stale_days is not None and
+                    (not metrics_checked or metrics_checked <
+                     (datetime.date.today()
+                      - datetime.timedelta(days=stale_days)).isoformat()))
+        needs_metrics = force or is_stale or not entry.get("metrics")
         # README summary is a fallback only when the repo gave no description,
-        # and only for GitHub sources (see _fetch_readme_summary).
-        needs_summary = (readme and "github.com" in entry.get("source", "")
+        # only for GitHub sources (see _fetch_readme_summary), and only at
+        # Tier 0 — never overwrite a claimed entry's summary.
+        needs_summary = (readme and entry.get("tier", 0) == 0
+                         and "github.com" in entry.get("source", "")
                          and (force or not (entry.get("summary") or "").strip()))
         if not needs_metrics and not needs_summary:
             stats["skipped"] += 1
@@ -550,11 +893,28 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
         changed = False
 
         if needs_metrics:
-            status, metrics = _fetch_metrics(entry["source"], token, today, log)
+            status, metrics, canonical = _fetch_metrics(
+                entry["source"], token, today, log)
             if status == "ok":
                 entry["metrics"] = metrics
                 stats["metrics"] += 1
                 changed = True
+                if canonical:
+                    # The repo moved; GitHub redirects the old name forever,
+                    # so only this check ever notices. Scanner-owned entries
+                    # are auto-canonicalized; claimed entries belong to their
+                    # maintainer — record and flag, never rewrite.
+                    if entry.get("tier", 0) == 0:
+                        log(f"  renamed: {entry['source']} -> {canonical} "
+                            "(tier 0, source updated)")
+                        entry["source"] = canonical
+                        stats["renamed"] += 1
+                    else:
+                        log(f"  RENAMED (tier {entry.get('tier')}): "
+                            f"{entry['source']} -> {canonical} — flagged in "
+                            "metrics; maintainer/registry should update source")
+                        entry["metrics"]["renamed-to"] = canonical
+                        stats["flagged-renames"] += 1
             elif status == "gone":
                 stats["gone"] += 1
                 log(f"  gone: {entry['source']}")
@@ -570,14 +930,38 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
                 stats["summary"] += 1
                 changed = True
 
+        if needs_metrics:
+            # Dependency observation rides the metrics cycle so it stays as
+            # current as the liveness data. The ledger's pinned record is
+            # authoritative when the newest release carries one; otherwise
+            # observe the default branch, setting or clearing the entry-level
+            # field to match what version.php declares today.
+            releases = entry.get("releases") or []
+            newest = (max(releases, key=lambda r: r.get("moodle-version", 0))
+                      if releases else None)
+            if newest is None or "dependencies" not in newest:
+                text = _fetch_version_php_text(entry["source"], token)
+                if text is not None:
+                    observed = versionphp.parse_dependencies(text)
+                    if observed and entry.get("dependencies") != observed:
+                        entry["dependencies"] = observed
+                        stats["dependencies"] += 1
+                        changed = True
+                    elif not observed and "dependencies" in entry:
+                        del entry["dependencies"]
+                        stats["dependencies"] += 1
+                        changed = True
+
         if changed:
             with open(path, "w") as f:
                 yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
             if (stats["metrics"] + stats["summary"]) % 250 == 0:
                 log(f"  … {stats['metrics']} metrics, {stats['summary']} summaries")
 
-    log(f"enriched: {stats['metrics']} metrics, {stats['summary']} summaries; "
-        f"skipped {stats['skipped']}, gone {stats['gone']}, errors {stats['error']}")
+    log(f"enriched: {stats['metrics']} metrics, {stats['summary']} summaries, "
+        f"{stats['dependencies']} dependency observations; "
+        f"skipped {stats['skipped']}, gone {stats['gone']}, errors {stats['error']}; "
+        f"{stats['renamed']} renames fixed, {stats['flagged-renames']} flagged")
     return stats
 
 
@@ -652,15 +1036,18 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
         plugintype = component.partition("_")[0]
         out_path = index / "plugins" / plugintype / f"{component}.yml"
         if out_path.exists():
-            record_outcome(ledger, candidate, "exists",
-                           f"component {component} already registered (first-come, RFC §8)", today)
-            results.append(ScanResult(candidate, "exists", component))
+            outcome, detail = classify_existing(index, candidate.html_url,
+                                                component, token)
+            record_outcome(ledger, candidate, outcome, detail, today,
+                           component=component)
+            results.append(ScanResult(candidate, outcome, component))
             continue
 
         if not dry_run:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             with open(out_path, "w") as f:
-                yaml.safe_dump(_entry_for(candidate, component, today), f,
+                yaml.safe_dump(_entry_for(candidate, component, today,
+                                          version_text=_version_text), f,
                                sort_keys=False, allow_unicode=True)
         record_outcome(ledger, candidate, "written",
                        f"listed as {component}; license {spdx} classified from text", today)
@@ -670,6 +1057,204 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
     if not dry_run:
         save_ledger(index, ledger)
     return results
+
+
+def check_collisions(index_dir: str | Path, token: str | None = None,
+                     component: str | None = None, reclassify: bool = False,
+                     include_copies: bool = False, dry_run: bool = False,
+                     log=print) -> dict:
+    """Report same-component ledger entries; with reclassify=True, also
+    backfill legacy 'exists' entries that point at a repository other than
+    the listing's source, splitting them into copy / name-collision via the
+    shared-history probe. Entries whose probe is inconclusive on both hosts
+    are left as 'exists' for a later run rather than guessed at."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    index = Path(index_dir)
+    ledger = load_ledger(index)
+    today = datetime.date.today().isoformat()
+    stats = {"collisions": [], "copies": [], "reclassified": 0, "inconclusive": 0}
+    # Both legacy 'exists' wordings qualify: "already registered" (listing
+    # file existed at scan time) and "already indexed this run" (another
+    # repo claimed the component earlier in the same sweep). The first
+    # backfill matched only the former and left 727 of the latter
+    # unclassified (camp-tools#11).
+    legacy = re.compile(r"component (\S+) already (?:registered|indexed this run)")
+
+    for full_name, entry in sorted(ledger.items()):
+        outcome = entry.get("outcome")
+        if reclassify and outcome == "exists":
+            match = legacy.search(entry.get("detail", ""))
+            if not match:
+                continue
+            comp = match.group(1)
+            source = _listing_source(index, comp)
+            if not source:
+                continue
+            listed = _repo_host_path(source)
+            if listed and listed[1] == full_name.lower():
+                continue  # the listed repository itself, re-seen
+            # Ledger keys carry no host; nearly all are GitHub, so probe
+            # there first and fall back to GitLab.com.
+            shared = None
+            for url in (f"https://github.com/{full_name}",
+                        f"https://gitlab.com/{full_name}"):
+                shared = _shares_history(url, source, token)
+                if shared is not None:
+                    break
+            if shared is None:
+                stats["inconclusive"] += 1
+                log(f"  ? {full_name}: probe inconclusive, left as exists")
+                continue
+            if shared:
+                outcome, detail = ("copy", f"shares git history with {source}, "
+                                           f"which holds component {comp}")
+            else:
+                outcome, detail = ("name-collision",
+                                   f"independent repository declaring {comp}, "
+                                   f"held by {source}; see NAMESPACE.md")
+            entry.update({"outcome": outcome, "detail": detail,
+                          "component": comp, "last-checked": today})
+            stats["reclassified"] += 1
+        if component and entry.get("component") != component:
+            continue
+        if outcome == "name-collision":
+            stats["collisions"].append((full_name, entry))
+        elif outcome == "copy":
+            stats["copies"].append((full_name, entry))
+
+    for full_name, entry in stats["collisions"]:
+        log(f"name-collision: {full_name}  [{entry.get('component', '?')}]  "
+            f"{entry.get('detail', '')}")
+    if include_copies:
+        for full_name, entry in stats["copies"]:
+            log(f"copy: {full_name}  [{entry.get('component', '?')}]  "
+                f"{entry.get('detail', '')}")
+    log(f"{len(stats['collisions'])} name-collision(s), "
+        f"{len(stats['copies'])} cop(ies)"
+        + (f"; {stats['reclassified']} reclassified, "
+           f"{stats['inconclusive']} inconclusive" if reclassify else ""))
+    if reclassify and stats["reclassified"] and not dry_run:
+        save_ledger(index, ledger)
+    return stats
+
+
+def refresh_metrics(index_dir: str | Path, components: list[str],
+                    token: str | None = None, log=print) -> list[str]:
+    """Immediately re-fetch upstream metrics for the named entries, outside
+    enrich's staleness window. The use case is a source repoint (a claim PR
+    that changes `source`): until the rolling refresh reaches the entry, it
+    wears the previous repository's activity data and health phrase, up to
+    two weeks for the seeding cohort (camp-tools#9). Rename handling
+    matches enrich: tier 0 sources auto-canonicalize, claimed entries get
+    metrics.renamed-to flagged. Returns the components that failed."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    today = datetime.date.today().isoformat()
+    failed: list[str] = []
+    for component in components:
+        path = (Path(index_dir) / "plugins" / component.partition("_")[0]
+                / f"{component}.yml")
+        if not path.exists():
+            log(f"  ! {component}: no listing file")
+            failed.append(component)
+            continue
+        with open(path) as f:
+            entry = yaml.safe_load(f) or {}
+        status, metrics, canonical = _fetch_metrics(
+            entry["source"], token, today, log)
+        if status != "ok":
+            log(f"  ! {component}: metrics fetch failed ({status})")
+            failed.append(component)
+            continue
+        entry["metrics"] = metrics
+        if canonical:
+            if entry.get("tier", 0) == 0:
+                entry["source"] = canonical
+            else:
+                entry["metrics"]["renamed-to"] = canonical
+        # Keep the OIDC identity anchor current in the same pass: a
+        # repoint that changes `source` must change `source-repo-id`
+        # with it, or the publish service refuses the new repo's tokens
+        # (camp-index#66). Failure here is a note, not a refresh failure
+        # — the metrics part already succeeded.
+        if entry.get("tier", 0) >= 1:
+            id_status, repo_id = _fetch_repo_id(entry["source"], token, log)
+            if id_status == "ok" and repo_id != entry.get("source-repo-id"):
+                entry = _with_repo_id(entry, repo_id)
+                log(f"  {component}: source-repo-id -> {repo_id}")
+            elif id_status != "ok":
+                log(f"  {component}: source-repo-id not refreshed ({id_status})")
+        with open(path, "w") as f:
+            yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
+        log(f"  refreshed {component} from {entry['source']}")
+    return failed
+
+
+def opt_out(index_dir: str | Path, components: list[str], reason: str = "",
+            log=print) -> list[str]:
+    """Remove discovered listings at maintainer request (RFC §4.4) and
+    record a permanent 'opted-out' ledger entry per source repository so
+    discovery never re-lists it. Only unclaimed Tier 0 listings without
+    releases qualify: claimed listings are the maintainer's own file (they
+    edit or delist it by PR), and released listings are never deleted at
+    all (the archive keeps published history; delisting is a status
+    change). Returns the components that could NOT be removed."""
+    index = Path(index_dir)
+    today = datetime.date.today().isoformat()
+    ledger = load_ledger(index)
+    failed: list[str] = []
+
+    for component in components:
+        path = (index / "plugins" / component.partition("_")[0]
+                / f"{component}.yml")
+        if not path.exists():
+            log(f"  ! {component}: no listing file")
+            failed.append(component)
+            continue
+        with open(path) as f:
+            entry = yaml.safe_load(f) or {}
+        if entry.get("tier", 0) >= 1:
+            log(f"  ! {component}: claimed (tier {entry['tier']}); the "
+                f"maintainer edits or delists their own entry by PR")
+            failed.append(component)
+            continue
+        if entry.get("releases"):
+            log(f"  ! {component}: has released versions; published history "
+                f"is never deleted (use status: delisted)")
+            failed.append(component)
+            continue
+        source = entry.get("source", "")
+        listed = _repo_host_path(source)
+        if not listed:
+            log(f"  ! {component}: unparseable source {source!r}")
+            failed.append(component)
+            continue
+        # Ledger keys carry the platform's original casing and lookups are
+        # exact, so a lowercased key would never match the scanner's and
+        # the opt-out would silently fail to stick. Parse the path
+        # case-preserved and reuse an existing entry's key if one matches
+        # case-insensitively.
+        tail = source.strip().split("://")[-1].rstrip("/")
+        if tail.lower().endswith(".git"):
+            tail = tail[:-4]
+        repo_key = tail.partition("/")[2]
+        repo_key = next((k for k in ledger if k.lower() == repo_key.lower()),
+                        repo_key)
+        previous = ledger.get(repo_key, {})
+        detail = "listing removed at maintainer request"
+        if reason:
+            detail += f" ({reason})"
+        ledger[repo_key] = {
+            "outcome": "opted-out",
+            "detail": detail,
+            "component": component,
+            "first-seen": previous.get("first-seen", today),
+            "last-checked": today,
+        }
+        path.unlink()
+        log(f"  - {component}  ({repo_key}, opted out)")
+
+    save_ledger(index, ledger)
+    return failed
 
 
 # --- GitLab discovery --------------------------------------------------------
@@ -734,6 +1319,9 @@ def _gitlab_search(term: str, limit: int, token: str | None, log) -> list[Candid
         if not projects:
             break
         for project in projects:
+            # Same rule as the GitHub scanner: tokens see private projects.
+            if project.get("visibility", "public") != "public":
+                continue
             license_key = (project.get("license") or {}).get("key")
             candidates.append(Candidate(
                 full_name=project["path_with_namespace"],
@@ -757,7 +1345,9 @@ def _gitlab_fetch_file(project_path: str, path: str, ref: str,
                        token: str | None) -> tuple[str, bytes | None]:
     encoded_project = urllib.parse.quote(project_path, safe="")
     encoded_path = urllib.parse.quote(path, safe="")
-    url = f"{GITLAB_API}/projects/{encoded_project}/repository/files/{encoded_path}/raw?ref={ref}"
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    url = (f"{GITLAB_API}/projects/{encoded_project}/repository/files/"
+           f"{encoded_path}/raw?ref={encoded_ref}")
     status, body, _ = _gitlab_request(url, token)
     if status == 200:
         return "ok", body
@@ -839,10 +1429,14 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
             plugintype = component.partition("_")[0]
             out_path = index / "plugins" / plugintype / f"{component}.yml"
             if out_path.exists():
-                record_outcome(ledger, candidate, "exists",
-                               f"component {component} already registered "
-                               f"(first-come, RFC §8)", today)
-                results.append(ScanResult(candidate, "exists", component))
+                # The history probe talks to the GitHub API when the listed
+                # holder lives there; the GitLab token would be rejected.
+                outcome, detail = classify_existing(
+                    index, candidate.html_url, component,
+                    os.environ.get("GITHUB_TOKEN"))
+                record_outcome(ledger, candidate, outcome, detail, today,
+                               component=component)
+                results.append(ScanResult(candidate, outcome, component))
                 seen_components.add(component)
                 continue
             if not _name_matches_component(candidate.full_name, component):
@@ -855,7 +1449,8 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
             if not dry_run:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(out_path, "w") as f:
-                    yaml.safe_dump(_entry_for(candidate, component, today), f,
+                    yaml.safe_dump(_entry_for(candidate, component, today,
+                                              version_text=version_text), f,
                                    sort_keys=False, allow_unicode=True)
             record_outcome(ledger, candidate, "written", f"listed as {component}", today)
             seen_components.add(component)
@@ -951,17 +1546,19 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
             plugintype = component.partition("_")[0]
             out_path = index / "plugins" / plugintype / f"{component}.yml"
             if out_path.exists():
-                record_outcome(ledger, candidate, "exists",
-                               f"component {component} already registered "
-                               f"(first-come, RFC §8)", today)
-                results.append(ScanResult(candidate, "exists", component))
+                outcome, detail = classify_existing(index, candidate.html_url,
+                                                    component, token)
+                record_outcome(ledger, candidate, outcome, detail, today,
+                               component=component)
+                results.append(ScanResult(candidate, outcome, component))
                 seen_components.add(component)
                 continue
 
             if not dry_run:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(out_path, "w") as f:
-                    yaml.safe_dump(_entry_for(candidate, component, today), f,
+                    yaml.safe_dump(_entry_for(candidate, component, today,
+                                              version_text=version_text), f,
                                    sort_keys=False, allow_unicode=True)
             record_outcome(ledger, candidate, "written", f"listed as {component}", today)
             seen_components.add(component)

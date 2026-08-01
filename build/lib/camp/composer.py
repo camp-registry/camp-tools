@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 from .advisory import AdvisorySet
+from .moodleversions import branch_names, branches_known_at, next_branch
 from .validate import load_entry
 
 PLUGIN_TYPE_PREFIX = "moodle-"
@@ -40,7 +41,8 @@ def _composer_type(component: str) -> str:
 
 
 def package_definition(entry: dict, base_url: str,
-                       advisories: AdvisorySet | None = None) -> tuple[str, dict]:
+                       advisories: AdvisorySet | None = None,
+                       artifacts_base: str | None = None) -> tuple[str, dict]:
     """(package name, {version: definition}) for one index entry. Versions
     revoked by a security advisory (RFC §5.3) are omitted from installation
     metadata; the release ledger and archive are untouched."""
@@ -59,7 +61,8 @@ def package_definition(entry: dict, base_url: str,
             "license": [entry.get("license", "GPL-3.0-or-later")],
             "dist": {
                 "type": "zip",
-                "url": f"{base_url}/artifacts/{component}/{component}-{version}.zip",
+                "url": (f"{artifacts_base or base_url + '/artifacts'}/"
+                        f"{component}/{component}-{version}.zip"),
                 "shasum": release["zip-sha256"],
             },
             "source": {
@@ -71,6 +74,13 @@ def package_definition(entry: dict, base_url: str,
                 "moodle/moodle-composer-installer": "*",
                 "php": f">={release.get('php-min', '7.4')}",
             },
+            # Branch compatibility as resolver-visible constraints. conflict
+            # (not require): it only bites when moodle/moodle is actually in
+            # the dependency graph — tree-only installs are untouched. The
+            # upper bound exists only when the author deliberately stopped
+            # short of a branch that already existed at publish time; camp
+            # doesn't invent claims in either direction.
+            **_core_conflict(release),
             "extra": {
                 "camp": {
                     "component": component,
@@ -93,7 +103,22 @@ def package_definition(entry: dict, base_url: str,
     return name, versions
 
 
-def generate(index_dir: str | Path, base_url: str) -> dict:
+def _core_conflict(release: dict) -> dict:
+    supported = [b for b in release.get("supported-moodle") or []
+                 if b in branch_names()]
+    if not supported:
+        return {}
+    parts = [f"<{supported[0]}"]
+    successor = next_branch(supported[-1])
+    published = str(release.get("published", "")).replace("-", "")[:8]
+    if successor and published.isdigit() and \
+            successor in branches_known_at(int(published)):
+        parts.append(f">={successor}")
+    return {"conflict": {"moodle/moodle": " || ".join(parts)}}
+
+
+def generate(index_dir: str | Path, base_url: str,
+             artifacts_base: str | None = None) -> dict:
     """Build the full packages.json document from an index tree."""
     advisories = AdvisorySet.load(index_dir)
     packages: dict[str, dict] = {}
@@ -103,7 +128,8 @@ def generate(index_dir: str | Path, base_url: str) -> dict:
         # published); only 'delisted' drops out of installation metadata.
         if entry.get("status", "active") == "delisted" or entry["tier"] < 2:
             continue
-        name, versions = package_definition(entry, base_url, advisories)
+        name, versions = package_definition(entry, base_url, advisories,
+                                            artifacts_base=artifacts_base)
         if versions:
             packages[name] = versions
     return {"packages": packages}
@@ -130,7 +156,7 @@ def generate_advisories(index_dir: str | Path, base_url: str) -> dict:
             "title": advisory["title"],
             "severity": advisory["severity"],
             "affectedVersions": advisory["affected-versions"],
-            "link": f"{base_url}/advisories/{advisory['id']}",
+            "link": f"{base_url}/advisories/{advisory['id']}.html",
             "cve": advisory.get("cve"),
             "reportedAt": advisory["published"],
             "sources": [{"name": "camp", "remoteId": advisory["id"]}],
@@ -138,8 +164,9 @@ def generate_advisories(index_dir: str | Path, base_url: str) -> dict:
     return {"advisories": document}
 
 
-def write(index_dir: str | Path, base_url: str, out_path: str | Path) -> int:
-    document = generate(index_dir, base_url)
+def write(index_dir: str | Path, base_url: str, out_path: str | Path,
+          artifacts_base: str | None = None) -> int:
+    document = generate(index_dir, base_url, artifacts_base=artifacts_base)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:

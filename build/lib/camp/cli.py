@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import datetime
 import re
@@ -24,7 +25,9 @@ import yaml
 
 from . import build as build_mod
 from . import composer as composer_mod
-from .validate import load_entry, validate_entry, validate_listing
+from . import versionphp
+from .validate import (load_entry, validate_entry, validate_listing,
+                       validate_listing_bytes)
 from .verify import verify_entry
 
 
@@ -64,6 +67,11 @@ def _cmd_verify(args: argparse.Namespace) -> int:
         print(f"{marker} {result.version}")
         for check in result.checks:
             print(f"  + {check}")
+        for warning in result.warnings:
+            print(f"  ! {warning}")
+            # Surfaces as an annotation on the release PR when run in
+            # Actions; prints as a harmless plain line elsewhere.
+            print(f"::warning title=camp verify::{result.version}: {warning}")
         for problem in result.problems:
             print(f"  - {problem}")
         failed = failed or not result.ok
@@ -81,14 +89,19 @@ def _cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
-def _version_php_field(repo: str, commit: str, field: str) -> str | None:
+def _version_php_text(repo: str, commit: str) -> str | None:
     result = subprocess.run(
         ["git", "-C", repo, "show", f"{commit}:version.php"],
         capture_output=True, text=True,
     )
-    if result.returncode != 0:
+    return result.stdout if result.returncode == 0 else None
+
+
+def _version_php_field(repo: str, commit: str, field: str) -> str | None:
+    text = _version_php_text(repo, commit)
+    if text is None:
         return None
-    match = re.search(rf"\$plugin->{field}\s*=\s*['\"]?([^'\";]+)['\"]?\s*;", result.stdout)
+    match = re.search(rf"\$plugin->{field}\s*=\s*['\"]?([^'\";]+)['\"]?\s*;", text)
     return match.group(1).strip() if match else None
 
 
@@ -129,16 +142,66 @@ def _cmd_release(args: argparse.Namespace) -> int:
                 check=True,
             )
 
+        # The ref must be a real tag. rev-parse accepts branches and bare
+        # SHAs too, and a release recorded against a moveable ref verifies
+        # once and then fails forever when the ref moves (camp-tools#15:
+        # a workflow_dispatch left on the default branch published
+        # tag: main). Fail here, at record creation, with the fix.
+        is_tag = subprocess.run(
+            ["git", "-C", repo, "rev-parse", "--verify", "--quiet",
+             f"refs/tags/{args.tag}"],
+            capture_output=True)
+        if is_tag.returncode != 0:
+            print(f"error: '{args.tag}' is not a tag in the source repository. "
+                  f"Releases must be built at immutable tags; a branch or "
+                  f"commit ref would verify once and then fail forever. If "
+                  f"this ran from workflow_dispatch, pick the tag in the ref "
+                  f"dropdown (or: gh workflow run camp-release.yml --ref "
+                  f"{args.tag if args.tag.startswith('v') else 'v1.2.3'})",
+                  file=sys.stderr)
+            return 1
+
         artifact = build_mod.build_zip(repo, args.tag, component)
         release_field = _version_php_field(repo, artifact.commit, "release") or args.tag.lstrip("v")
         version = release_field.split(" ")[0]
         moodle_version = _version_php_field(repo, artifact.commit, "version")
         php_min = _version_php_field(repo, artifact.commit, "php")
-        listing_hash = build_mod.file_sha256_at_commit(repo, artifact.commit, ".camp/listing.yml")
+        # Observed from version.php at the pinned commit, same footing as
+        # supported-moodle below: registry-observed data, not listing content.
+        dependencies = versionphp.parse_dependencies(
+            _version_php_text(repo, artifact.commit) or "")
+        listing_raw = build_mod.file_bytes_at_commit(repo, artifact.commit, ".camp/listing.yml")
+        listing_hash = (hashlib.sha256(listing_raw).hexdigest()
+                        if listing_raw is not None else None)
+        if listing_raw is not None:
+            # Warn-only (D23): the pin records the bytes either way, but an
+            # invalid manifest never renders — the plugin page silently falls
+            # back to the index entry's discovery summary (camp-tools#23).
+            # This is the author's one publish-time chance to hear about it.
+            listing_problems = validate_listing_bytes(listing_raw)
+            if listing_problems:
+                first = " ".join(listing_problems[0].split())
+                print(f"warning: .camp/listing.yml at {args.tag} is invalid and "
+                      f"the site will not show its content (the page falls back "
+                      f"to the index entry summary): {first}. Fix the manifest "
+                      f"and it takes effect with the next release; check "
+                      f"locally with 'camp validate-listing .camp/listing.yml'",
+                      file=sys.stderr)
         released_ts = build_mod.commit_timestamp(repo, artifact.commit)
 
-        supported = (args.supported_moodle.split(",") if args.supported_moodle
-                     else derive_supported_moodle(repo, artifact.commit))
+        derived = derive_supported_moodle(repo, artifact.commit)
+        if args.supported_moodle:
+            supported = [b.strip() for b in args.supported_moodle.split(",")]
+            if derived and supported != derived:
+                # Warn-only (D23): the author's explicit override wins, but
+                # disagreement usually means one of the two is stale.
+                print(f"warning: --supported-moodle ({','.join(supported)}) "
+                      f"disagrees with version.php at {args.tag}, which "
+                      f"declares {','.join(derived)}; the override wins — "
+                      f"update version.php if it is the stale one",
+                      file=sys.stderr)
+        else:
+            supported = derived
 
     if any(r["tag"] == args.tag for r in entry["releases"]):
         print(f"error: tag {args.tag} is already in the ledger; releases are immutable", file=sys.stderr)
@@ -160,10 +223,17 @@ def _cmd_release(args: argparse.Namespace) -> int:
     }
     if php_min:
         record["php-min"] = php_min
+    if dependencies:
+        record["dependencies"] = dependencies
     if listing_hash:
         record["listing-sha256"] = listing_hash
 
     entry["releases"].append(record)
+    # The first verified release is what makes a plugin source-verified
+    # (RFC §4.4); the schema forbids releases below tier 2, and registry CI
+    # independently re-verifies before the PR can merge.
+    if entry.get("tier", 0) < 2:
+        entry["tier"] = 2
     with open(entry_path, "w") as f:
         yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
     print(f"appended {version} ({args.tag} @ {artifact.commit[:12]}) to {entry_path}")
@@ -268,6 +338,29 @@ def _cmd_scan_malware(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_checks(args: argparse.Namespace) -> int:
+    from .checks import run_checks
+    run_checks(args.index_dir, args.out_dir, reuse=args.reuse)
+    return 0
+
+
+def _cmd_ingest_all(args: argparse.Namespace) -> int:
+    from .ingest import ingest_all
+    ingested, reused = ingest_all(args.index_dir, args.out, reuse=args.reuse)
+    print(f"ingest-all: {ingested} ingested, {reused} reused from prior publish")
+    return 0
+
+
+def _cmd_artifacts(args: argparse.Namespace) -> int:
+    from .artifacts import materialize
+    result = materialize(args.index_dir, args.out_dir)
+    print(f"artifacts: {result.built} built, {result.kept} kept, "
+          f"{result.withdrawn} withdrawn (revoked)")
+    for problem in result.problems:
+        print(f"  ! {problem}", file=sys.stderr)
+    return 1 if result.problems else 0
+
+
 def _cmd_scaffold(args: argparse.Namespace) -> int:
     from .scaffold import scaffold
     actions, fine = scaffold(args.source_dir, component=args.component,
@@ -334,9 +427,45 @@ def _cmd_ledger_check(args: argparse.Namespace) -> int:
 
 
 def _cmd_composer(args: argparse.Namespace) -> int:
-    count = composer_mod.write(args.index_dir, args.base_url.rstrip("/"), args.out)
+    count = composer_mod.write(args.index_dir, args.base_url.rstrip("/"), args.out,
+                               artifacts_base=(args.artifacts_base or "").rstrip("/") or None)
     print(f"wrote {args.out} ({count} packages)")
     return 0
+
+
+def _archive_store(args):
+    import os
+    from .archive import s3_store
+    key_id = os.environ.get("B2_KEY_ID", "")
+    app_key = os.environ.get("B2_APPLICATION_KEY", "")
+    if not (key_id and app_key):
+        print("error: B2_KEY_ID and B2_APPLICATION_KEY must be set", file=sys.stderr)
+        return None
+    return s3_store(args.bucket, args.endpoint, key_id, app_key)
+
+
+def _cmd_deposit(args: argparse.Namespace) -> int:
+    from .archive import deposit
+    store = _archive_store(args)
+    if store is None:
+        return 1
+    result = deposit(args.index_dir, store)
+    print(f"deposit: {result.deposited} deposited, {result.present} already archived")
+    for problem in result.problems:
+        print(f"  ! {problem}", file=sys.stderr)
+    return 0 if result.ok else 1
+
+
+def _cmd_archive_audit(args: argparse.Namespace) -> int:
+    from .archive import audit
+    store = _archive_store(args)
+    if store is None:
+        return 1
+    result = audit(args.index_dir, store)
+    print(f"archive-audit: {result.present} verified")
+    for problem in result.problems:
+        print(f"  ! {problem}", file=sys.stderr)
+    return 0 if result.ok else 1
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
@@ -382,8 +511,7 @@ def _cmd_advisory_new(args: argparse.Namespace) -> int:
     from .advisory import ADVISORIES_RELPATH, next_id
     year = int(args.year) if args.year else datetime.datetime.now(datetime.UTC).year
     advisory_id = next_id(args.index_dir, year)
-    out_path = (Path(args.index_dir) / ADVISORIES_RELPATH / args.component
-                / f"{advisory_id}.yml")
+    out_path = Path(args.index_dir) / ADVISORIES_RELPATH / f"{advisory_id}.yml"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     scaffold = {
@@ -433,9 +561,48 @@ def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_check_moodle_branches(args: argparse.Namespace) -> int:
+    from .moodleversions import check_upstream
+    findings = check_upstream()
+    if not findings:
+        print("moodle branches: table is current with upstream")
+        return 0
+    print("UNKNOWN Moodle branches upstream — extend BRANCHES in "
+          "camp/moodleversions.py:", file=sys.stderr)
+    for f in findings:
+        print(f"  {f['name']} (code {f['code']}) — suggested row:\n{f['row']}",
+              file=sys.stderr)
+    return 1
+
+
+def _cmd_check_standard_plugins(args: argparse.Namespace) -> int:
+    from . import standardplugins
+    fresh = standardplugins.build_table(log=lambda m: print(m, file=sys.stderr))
+    if args.write:
+        standardplugins.write_table(fresh)
+        print(f"wrote {standardplugins.DATA_PATH} "
+              f"({len(fresh['components'])} components, "
+              f"{len(fresh['branches'])} branches)")
+        return 0
+    committed = standardplugins.load()
+    if committed == fresh:
+        print("standard-plugins table: current with upstream")
+        return 0
+    old, new = committed["components"], fresh["components"]
+    print("standard-plugins table DRIFTED from upstream — review and refresh "
+          "with 'camp check-standard-plugins --write':", file=sys.stderr)
+    for name in sorted(set(old) ^ set(new)):
+        print(f"  {'+' if name in new else '-'} {name}", file=sys.stderr)
+    for name in sorted(set(old) & set(new)):
+        if old[name] != new[name]:
+            print(f"  ~ {name}: {old[name]} -> {new[name]}", file=sys.stderr)
+    return 1
+
+
 def _cmd_enrich(args: argparse.Namespace) -> int:
     from .scan import enrich
-    enrich(args.index_dir, limit=args.limit, force=args.force, readme=not args.no_readme)
+    enrich(args.index_dir, limit=args.limit, force=args.force,
+           readme=not args.no_readme, stale_days=args.stale_days)
     return 0
 
 
@@ -449,6 +616,95 @@ def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
           ", ".join(f"{count} {outcome}" for outcome, count in sorted(by_outcome.items())))
     if args.dry_run:
         print("(dry run: nothing written)")
+    return 0
+
+
+def _cmd_crosscheck_directory(args: argparse.Namespace) -> int:
+    from .crosscheck import crosscheck, load_pluglist, write_reports
+    pluglist = load_pluglist(args.pluglist)
+    print(f"{len(pluglist)} directory components with usable VCS URLs",
+          file=sys.stderr)
+    classes = crosscheck(args.index_dir, pluglist, probe=not args.no_probe,
+                         log=lambda m: print(m, file=sys.stderr))
+    write_reports(classes, args.out)
+    for name in ("match", "same-owner", "owner-alias", "directory-dead",
+                 "shared-history", "independent", "probe-failed",
+                 "claimed-differs", "missing", "removed-by-request"):
+        print(f"{len(classes[name]):5d} {name}")
+    print(f"reports written to {args.out} (match omitted; exceptions only)")
+    return 0
+
+
+def _cmd_dependency_report(args: argparse.Namespace) -> int:
+    from .crosscheck import dependency_xref
+    xref = dependency_xref(args.index_dir)
+    print(f"{len(xref['edges'])} declared dependency edge(s) across the index")
+    if xref["unlisted"]:
+        print(f"\n{len(xref['unlisted'])} dependency component(s) not in the "
+              f"index — seeding candidates with built-in evidence of relevance:")
+        for dep, dependents in sorted(xref["unlisted"].items()):
+            print(f"  {dep:<40} required by {', '.join(dependents)}")
+    if xref["standard"]:
+        print(f"\n{len(xref['standard'])} dependency component(s) bundled "
+              f"with Moodle core (satisfied by the install itself; not "
+              f"seeding candidates):")
+        for dep, dependents in sorted(xref["standard"].items()):
+            print(f"  {dep:<40} required by {', '.join(dependents)}")
+    if xref["unbundled-unlisted"]:
+        print(f"\n{len(xref['unbundled-unlisted'])} once-standard "
+              f"component(s) core has deleted and the index does not list — "
+              f"the unbundling watchlist (triage: seed the ones that "
+              f"continue as separately distributed plugins):")
+        for dep, last_standard in xref["unbundled-unlisted"]:
+            print(f"  {dep:<40} standard through {last_standard}")
+    if xref["parents"]:
+        print(f"\n{len(xref['parents'])} dependent(s) declaring an apparent "
+              f"parent (subplugin-family evidence, camp-tools#16):")
+        for component, dep in xref["parents"]:
+            print(f"  {component:<40} -> {dep}")
+    if args.out:
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(out / "dependency-edges.tsv", "w") as fh:
+            fh.writelines(f"{c}\t{d}\t{m}\n" for c, d, m in xref["edges"])
+        with open(out / "dependency-unlisted.tsv", "w") as fh:
+            fh.writelines(f"{d}\t{','.join(deps)}\n"
+                          for d, deps in sorted(xref["unlisted"].items()))
+        print(f"\nreports written to {out}")
+    return 0
+
+
+def _cmd_fill_repo_ids(args: argparse.Namespace) -> int:
+    from .scan import fill_repo_ids
+    failed = fill_repo_ids(args.index_dir, args.components or None)
+    return 1 if failed else 0
+
+
+def _cmd_refresh_metrics(args: argparse.Namespace) -> int:
+    from .scan import refresh_metrics
+    failed = refresh_metrics(args.index_dir, args.components)
+    done = len(args.components) - len(failed)
+    print(f"{done} entr(ies) refreshed"
+          + (f"; {len(failed)} failed: {', '.join(failed)}" if failed else ""))
+    return 1 if failed else 0
+
+
+def _cmd_opt_out(args: argparse.Namespace) -> int:
+    from .scan import opt_out
+    failed = opt_out(args.index_dir, args.components, reason=args.reason)
+    done = len(args.components) - len(failed)
+    print(f"{done} listing(s) removed and opted out"
+          + (f"; {len(failed)} refused: {', '.join(failed)}" if failed else ""))
+    return 1 if failed else 0
+
+
+def _cmd_check_collisions(args: argparse.Namespace) -> int:
+    from .scan import check_collisions
+    check_collisions(args.index_dir, component=args.component,
+                     reclassify=args.reclassify, include_copies=args.copies,
+                     dry_run=args.dry_run)
+    # Warn-only by design (NAMESPACE.md): collisions are surfaced for
+    # humans, never a gate.
     return 0
 
 
@@ -474,7 +730,10 @@ def _cmd_scan_report(args: argparse.Namespace) -> int:
 def _cmd_site(args: argparse.Namespace) -> int:
     from . import site as site_mod
     count = site_mod.generate(args.index_dir, args.base_url.rstrip("/"), args.out_dir,
-                              listings_dir=args.listings)
+                              listings_dir=args.listings, checks_dir=args.checks,
+                              reviews_source=args.reviews,
+                              artifacts_base=(args.artifacts_base or "").rstrip("/") or None,
+                              authors_md=args.authors_md)
     print(f"generated site in {args.out_dir} ({count} plugins)")
     return 0
 
@@ -520,7 +779,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("base_url")
     p.add_argument("out")
+    p.add_argument("--artifacts-base", help="artifact archive base URL "
+                   "(default: <base_url>/artifacts)")
     p.set_defaults(func=_cmd_composer)
+
+    for verb, fn, hlp in (
+            ("deposit", _cmd_deposit,
+             "deposit every ledger release into the append-only archive"),
+            ("archive-audit", _cmd_archive_audit,
+             "verify the archive holds every ledger release, hash-exact")):
+        p = sub.add_parser(verb, help=hlp)
+        p.add_argument("index_dir")
+        p.add_argument("--bucket", required=True)
+        p.add_argument("--endpoint", required=True,
+                       help="S3-compatible endpoint hostname")
+        p.set_defaults(func=fn)
 
     p = sub.add_parser("rekor", help="build a Rekor transparency-log entry (dry-run unless --submit)")
     p.add_argument("artifact")
@@ -554,6 +827,28 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--require-engine", action="store_true",
                    help="fail if no scan engine is available (CI mode)")
     p.set_defaults(func=_cmd_scan_malware)
+
+    p = sub.add_parser("checks",
+                       help="static code-check summaries for released plugins (the prechecker)")
+    p.add_argument("index_dir")
+    p.add_argument("out_dir")
+    p.add_argument("--reuse", help="previous publish's checks (URL base or dir); "
+                   "commit-matched summaries are reused instead of recomputed")
+    p.set_defaults(func=_cmd_checks)
+
+    p = sub.add_parser("ingest-all",
+                       help="ingest listings for every released entry (one clone "
+                       "each; --reuse skips entries unchanged since the last publish)")
+    p.add_argument("index_dir")
+    p.add_argument("--out", required=True)
+    p.add_argument("--reuse", help="the live site's base URL (or a prior dist dir)")
+    p.set_defaults(func=_cmd_ingest_all)
+
+    p = sub.add_parser("artifacts",
+                       help="materialize every ledger release's canonical ZIP (rebuild + hash-gate)")
+    p.add_argument("index_dir")
+    p.add_argument("out_dir")
+    p.set_defaults(func=_cmd_artifacts)
 
     p = sub.add_parser("scaffold", help="scaffold .camp/listing.yml + .gitattributes in a plugin repo")
     p.add_argument("source_dir")
@@ -612,6 +907,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="re-evaluate ledger-rejected repos older than this (0 = always recheck)")
     p.set_defaults(func=_cmd_scan_gitlab)
 
+    p = sub.add_parser("check-moodle-branches",
+                       help="fail if Moodle has stable branches our table lacks")
+    p.set_defaults(func=_cmd_check_moodle_branches)
+
     p = sub.add_parser("enrich",
                        help="backfill/refresh Tier 0 metrics + README-derived summaries")
     p.add_argument("index_dir")
@@ -621,6 +920,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="refresh entries even if they already have metrics/summary")
     p.add_argument("--no-readme", action="store_true",
                    help="skip the README summary fallback (metrics only)")
+    p.add_argument("--stale-days", type=int, default=None,
+                   help="also refresh entries whose metrics are older than "
+                   "this many days (rolling refresh; combine with --limit)")
     p.set_defaults(func=_cmd_enrich)
 
     p = sub.add_parser("recheck-licenses",
@@ -628,6 +930,80 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_recheck_licenses)
+
+    p = sub.add_parser("crosscheck-directory",
+                       help="classify entry sources against the old "
+                            "moodle.org directory's VCS URLs (camp-tools#14); "
+                            "reports only, never repoints")
+    p.add_argument("index_dir")
+    p.add_argument("--pluglist",
+                   default="https://download.moodle.org/api/1.3/pluglist.php",
+                   help="pluglist JSON path or URL")
+    p.add_argument("--out", default="crosscheck-report",
+                   help="directory for the per-class TSV reports")
+    p.add_argument("--no-probe", action="store_true",
+                   help="skip liveness/history probes (fast, coarse)")
+    p.set_defaults(func=_cmd_crosscheck_directory)
+
+    p = sub.add_parser("check-standard-plugins",
+                       help="check the committed Moodle-standard-components "
+                            "table against upstream lib/plugins.json per "
+                            "branch (camp-tools#25); --write refreshes it")
+    p.add_argument("--write", action="store_true",
+                   help="rewrite camp/standardplugins.json from upstream")
+    p.set_defaults(func=_cmd_check_standard_plugins)
+
+    p = sub.add_parser("dependency-report",
+                       help="cross-reference declared plugin dependencies "
+                            "against the index: unlisted dependencies are "
+                            "seeding candidates, parent-declaring dependents "
+                            "are subplugin-family evidence (camp-tools#20)")
+    p.add_argument("index_dir")
+    p.add_argument("--out", default=None,
+                   help="directory for TSV reports (edges + unlisted)")
+    p.set_defaults(func=_cmd_dependency_report)
+
+    p = sub.add_parser("refresh-metrics",
+                       help="immediately re-fetch upstream metrics for named "
+                            "entries (use after a source repoint; camp-tools#9)")
+    p.add_argument("index_dir")
+    p.add_argument("components", nargs="+",
+                   help="frankenstyle component names to refresh")
+    p.set_defaults(func=_cmd_refresh_metrics)
+
+    p = sub.add_parser("fill-repo-ids",
+                       help="record claimed entries' permanent numeric source "
+                            "repo id as source-repo-id, the OIDC publishing "
+                            "identity anchor (camp-index#66); no components = "
+                            "backfill every Tier 1+ entry missing the field")
+    p.add_argument("index_dir")
+    p.add_argument("components", nargs="*",
+                   help="components to (re-)resolve, overwriting — the "
+                        "source-repoint case; omit for the backfill sweep")
+    p.set_defaults(func=_cmd_fill_repo_ids)
+
+    p = sub.add_parser("opt-out",
+                       help="remove discovered Tier 0 listings at maintainer "
+                            "request; the repos are permanently opted out of "
+                            "discovery (RFC §4.4)")
+    p.add_argument("index_dir")
+    p.add_argument("components", nargs="+",
+                   help="frankenstyle component names to remove")
+    p.add_argument("--reason", default="",
+                   help="recorded in the ledger detail, e.g. 'camp-index#42'")
+    p.set_defaults(func=_cmd_opt_out)
+
+    p = sub.add_parser("check-collisions",
+                       help="report component-name collisions recorded in the scan ledger")
+    p.add_argument("index_dir")
+    p.add_argument("--component", help="only report entries for this component")
+    p.add_argument("--copies", action="store_true",
+                   help="also list detached copies (shared-history repos)")
+    p.add_argument("--reclassify", action="store_true",
+                   help="backfill legacy 'exists' entries whose repo differs "
+                        "from the listing source (writes the ledger)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=_cmd_check_collisions)
 
     p = sub.add_parser("scan-report", help="summarize the scan ledger (rejections and why)")
     p.add_argument("index_dir")
@@ -640,6 +1016,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("out_dir")
     p.add_argument("--listings", help="directory of <component>.yml listing manifests "
                                       "(preview flag until release-time ingestion lands)")
+    p.add_argument("--checks", help="directory of code-check summaries (camp checks)")
+    p.add_argument("--reviews", help="published security-reviews feed to render "
+                   "(URL or local path; omit to render no review chips)")
+    p.add_argument("--artifacts-base", help="artifact archive base URL "
+                   "(default: <base_url>/artifacts)")
+    p.add_argument("--authors-md", help="path to camp-docs AUTHORS.md; "
+                   "rendered as /authors.html (omit for a stub linking GitHub)")
     p.set_defaults(func=_cmd_site)
 
     args = parser.parse_args(argv)

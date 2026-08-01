@@ -1,0 +1,6 @@
+Playfair Display (c) The Playfair Display Project Authors
+Mulish (c) The Mulish Project Authors
+IBM Plex Mono (c) IBM Corp.
+All three families are licensed under the SIL Open Font License 1.1
+(https://openfontlicense.org). Latin woff2 subsets, self-hosted so that
+neither the site nor its mirrors call third-party font CDNs (RFC §4.6).

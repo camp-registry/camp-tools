@@ -8,18 +8,28 @@ For every release in an index entry (RFC §4.2):
   3. rebuild the canonical ZIP deterministically from that commit,
   4. confirm the rebuilt artifact's SHA-256 matches the ledger,
   5. if a listing hash is pinned, confirm .camp/listing.yml at that commit
-     still matches it.
+     still matches it,
+  6. confirm every location declared in the release's thirdpartylibs.xml
+     exists in the artifact — the tag must contain everything it declares
+     (AUTHORS.md release rule three; Moodle's own grunt tooling stats each
+     declared location in every installed component and aborts the whole
+     site build on a missing one).
 """
 
 from __future__ import annotations
 
+import hashlib
+import io
 import subprocess
 import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from xml.etree import ElementTree
 
-from .build import BuildError, build_zip, file_sha256_at_commit, resolve_tag
-from .validate import load_entry
+from .build import (BuildError, build_zip, file_bytes_at_commit, plugin_folder,
+                    resolve_tag)
+from .validate import load_entry, validate_listing_bytes
 
 LISTING_PATH = ".camp/listing.yml"
 
@@ -30,6 +40,9 @@ class ReleaseResult:
     ok: bool
     checks: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    # Warn-only findings (D23): true statements about the release that do not
+    # gate verification, e.g. a pinned listing manifest that will not render.
+    warnings: list[str] = field(default_factory=list)
 
 
 def _clone(source: str, dest: str) -> None:
@@ -41,12 +54,59 @@ def _clone(source: str, dest: str) -> None:
         raise BuildError(f"clone of {source} failed: {result.stderr.decode(errors='replace').strip()}")
 
 
+def thirdparty_problems(zip_data: bytes, component: str) -> list[str] | None:
+    """Declared-contents check for one built artifact.
+
+    Returns None when the release ships no thirdpartylibs.xml, else the
+    list of problems: declared locations absent from the artifact, or a
+    manifest that isn't valid XML. Both fail verification — a release
+    whose own manifest misdescribes it can't be vouched for, and Moodle's
+    grunt ignorefiles hard-fails any site that installs it."""
+    folder = plugin_folder(component)
+    with zipfile.ZipFile(io.BytesIO(zip_data)) as archive:
+        names = set(archive.namelist())
+        manifest = f"{folder}/thirdpartylibs.xml"
+        if manifest not in names:
+            return None
+        raw = archive.read(manifest)
+    try:
+        root = ElementTree.fromstring(raw)
+    except ElementTree.ParseError as exc:
+        return [f"thirdpartylibs.xml is not well-formed XML: {exc}"]
+    problems = []
+    for library in root.iter("library"):
+        location = (library.findtext("location") or "").strip().strip("/")
+        if not location:
+            continue
+        prefixed = f"{folder}/{location}"
+        if prefixed in names or any(n.startswith(prefixed + "/") for n in names):
+            continue
+        problems.append(
+            f"thirdpartylibs.xml declares {location}, which is not in the "
+            f"release — the tag must contain everything it declares"
+        )
+    return problems
+
+
 def verify_entry(entry_path: str | Path, source_override: str | None = None) -> list[ReleaseResult]:
     """Verify every release of one index entry. source_override uses a local
-    checkout instead of cloning (for development and for CI cache hits)."""
+    checkout instead of cloning (for development and for CI cache hits).
+
+    Advisory-revoked releases are recorded history, not live claims: they
+    are withdrawn from every installation channel and their artifacts are
+    archived for forensics, so re-verifying them against upstream forever
+    is meaningless (and impossible when the defect IS the recorded ref,
+    camp-tools#15). They are reported as skipped, never failed."""
+    entry_path = Path(entry_path)
     entry = load_entry(entry_path)
     component = entry["component"]
     results: list[ReleaseResult] = []
+
+    root = entry_path.resolve().parent.parent.parent
+    advisories = None
+    if (root / "advisories").is_dir():
+        from .advisory import AdvisorySet
+        advisories = AdvisorySet.load(root)
 
     with tempfile.TemporaryDirectory(prefix="camp-verify-") as tmp:
         if source_override:
@@ -58,6 +118,12 @@ def verify_entry(entry_path: str | Path, source_override: str | None = None) -> 
         for release in entry["releases"]:
             result = ReleaseResult(version=release["version"], ok=True)
             results.append(result)
+
+            if advisories and advisories.is_revoked(component, str(release["version"])):
+                result.checks.append(
+                    "revoked by advisory — withdrawn from installation; "
+                    "verification skipped")
+                continue
 
             try:
                 commit = resolve_tag(repo, release["tag"])
@@ -92,16 +158,39 @@ def verify_entry(entry_path: str | Path, source_override: str | None = None) -> 
                     f"rebuilt ZIP ({artifact.file_count} files) sha256 matches ledger"
                 )
 
+            declared = thirdparty_problems(artifact.data, component)
+            if declared:
+                result.ok = False
+                result.problems.extend(declared)
+            elif declared is not None:
+                result.checks.append("thirdpartylibs.xml declared locations all present")
+
             pinned = release.get("listing-sha256")
             if pinned:
-                actual = file_sha256_at_commit(repo, commit, LISTING_PATH)
-                if actual is None:
+                raw = file_bytes_at_commit(repo, commit, LISTING_PATH)
+                if raw is None:
                     result.ok = False
                     result.problems.append(f"{LISTING_PATH} missing at {commit[:12]} but hash is pinned")
-                elif actual != pinned:
+                elif hashlib.sha256(raw).hexdigest() != pinned:
                     result.ok = False
                     result.problems.append(f"{LISTING_PATH} hash mismatch at {commit[:12]}")
                 else:
                     result.checks.append("pinned listing manifest matches")
+                    # The pin proves the bytes; it does not prove they parse.
+                    # An invalid manifest is skipped at publish and the plugin
+                    # page silently falls back to the index entry's discovery
+                    # summary (camp-tools#23) — tell the author here instead.
+                    listing_problems = validate_listing_bytes(raw)
+                    if listing_problems:
+                        more = (f" (+{len(listing_problems) - 1} more)"
+                                if len(listing_problems) > 1 else "")
+                        # PyYAML errors span lines; keep the warning one line
+                        # so it also works as a GitHub Actions annotation.
+                        first = " ".join(listing_problems[0].split())
+                        result.warnings.append(
+                            f"{LISTING_PATH} at {commit[:12]} is invalid and the site "
+                            f"will not show its content (the page falls back to the "
+                            f"index entry summary); fix it for the next release: "
+                            f"{first}{more}")
 
     return results
