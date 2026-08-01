@@ -37,6 +37,7 @@ from . import checks as checks_mod
 from . import reviews as reviews_mod
 from .reviews import PLUGIN_URL_PREFIX as MDLSHIELD_PLUGIN_URL
 from .composer import _package_name
+from . import standardplugins
 from .validate import load_entry
 
 PLUGINTYPE_NAMES = {
@@ -2400,19 +2401,39 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     # $plugin->dependencies, observed from version.php (camp-tools#20): the
     # latest release's declaration when there is a ledger, else the entry's
     # scan-time observation (Tier 0). Listed dependencies link to their own
-    # page; unlisted ones are said plainly.
+    # page; components Moodle bundles are said to ship with it, per branch
+    # (camp-tools#25) — core-ness is judged against this plugin's supported
+    # range, so a dependency core dropped mid-range says where it split.
     dependencies = ((latest or {}).get("dependencies")
                     or entry.get("dependencies") or {})
     if dependencies:
+        supported_range = (latest or {}).get("supported-moodle")
         dep_items = []
         for dep_component, dep_min in sorted(dependencies.items()):
-            if known_components and dep_component in known_components:
+            listed = bool(known_components) and dep_component in known_components
+            if listed:
                 dep_name = (f'<a class="mono" href="/plugin/{escape(dep_component)}.html">'
                             f'{escape(dep_component)}</a>')
-                note = ""
             else:
                 dep_name = f'<span class="mono">{escape(dep_component)}</span>'
-                note = " · not in the archive"
+            core = standardplugins.classify(dep_component, supported_range)
+            if core and core[0] == "standard":
+                note = " · ships with Moodle"
+            elif core and core[0] == "standard-until":
+                # "separate install" promises availability, so it renders
+                # only when the archive can actually offer the plugin; a
+                # dependency that simply died with core states its history.
+                _, until, since = core
+                if listed:
+                    note = (f" · ships with Moodle up to {until}"
+                            + (f" · separate install from {since}" if since else ""))
+                else:
+                    note = (f" · shipped with Moodle up to {until}"
+                            + (f" · removed in {since}" if since else ""))
+            elif core and core[0] == "removed":
+                note = " · removed from Moodle core"
+            else:
+                note = "" if listed else " · not in the archive"
             version_note = "" if dep_min == "any" else f" · {dep_min} or newer"
             dep_items.append(f'<div>{dep_name}{escape(version_note)}{note}</div>')
         dep_origin = ("at the latest release" if (latest or {}).get("dependencies")

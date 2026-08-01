@@ -188,8 +188,18 @@ def dependency_xref(index_dir: str | Path) -> dict:
                 from the newest release when the entry has a ledger, else
                 the entry-level scan observation (Tier 0)
       unlisted  {dependency: [dependents...]} — referenced but absent from
-                the index: seeding candidates with built-in evidence of
-                relevance
+                the index AND unknown to Moodle core's lists: seeding
+                candidates with built-in evidence of relevance
+      standard  {dependency: [dependents...]} — referenced, absent from the
+                index, but named in core's standard/deleted lists
+                (camp-tools#25): satisfied by the Moodle install itself on
+                the branches where it ships, not a seeding candidate
+      unbundled-unlisted  [(component, last_standard_branch)...] — named in
+                some branch's deleted list, still standard on an earlier
+                tracked branch, and absent from the index: the seeding
+                watchlist for plugins core stops bundling (mod_chat/
+                mod_survey pattern), independent of whether anything
+                depends on them yet; newest unbundlings first
       parents   [(component, dependency)] — a plugin whose component name
                 extends its dependency's name (block_foo_bar -> block_foo,
                 or a plugintype rooted at the dependency): the
@@ -197,6 +207,7 @@ def dependency_xref(index_dir: str | Path) -> dict:
 
     Like crosscheck(), this output is a worklist, not a decision.
     """
+    from . import standardplugins
     index = Path(index_dir)
     entries: dict[str, dict] = {}
     for path in (index / "plugins").glob("*/*.yml"):
@@ -213,10 +224,12 @@ def dependency_xref(index_dir: str | Path) -> dict:
         edges.extend((component, dep, minimum) for dep, minimum in sorted(deps.items()))
 
     unlisted: dict[str, list[str]] = {}
+    standard: dict[str, list[str]] = {}
     parents: list[tuple[str, str]] = []
     for component, dep, _minimum in edges:
         if dep not in entries:
-            unlisted.setdefault(dep, []).append(component)
+            known_to_core = standard if standardplugins.classify(dep, None) is not None else unlisted
+            known_to_core.setdefault(dep, []).append(component)
         # A dependent whose plugintype embeds the dependency's name reads as
         # a subplugin/extension of it: mod_quiz <- quizaccess_* / quiz_*,
         # mod_assign <- assignsubmission_*, editor_atto <- atto_*, and the
@@ -227,7 +240,28 @@ def dependency_xref(index_dir: str | Path) -> dict:
         if (component.startswith(dep + "_")
                 or (len(dep_name) >= 3 and comp_type.startswith(dep_name))):
             parents.append((component, dep))
-    return {"edges": edges, "unlisted": unlisted, "parents": parents}
+
+    # Once-standard components core has since deleted may continue life as
+    # separately distributed plugins (mod_chat, mod_survey at 5.0); any not
+    # yet in the index belong on the seeding worklist regardless of whether
+    # a listed plugin depends on them yet. Newest unbundlings first, and
+    # only ones still standard within the tracked branch window — the
+    # historic-branch tail (2.x themes, old assignment subplugins) died
+    # with its era and is anchor data for display, not seeding material.
+    from .moodleversions import BRANCHES
+    table = standardplugins.load()["components"]
+    order = standardplugins.load()["branches"]
+    tracked = {name for _, name, _ in BRANCHES}
+    unbundled_unlisted = sorted(
+        ((name, max(record["standard"], key=order.index))
+         for name, record in table.items()
+         if record.get("standard") and record.get("deleted") and name not in entries),
+        key=lambda pair: (-order.index(pair[1]), pair[0]))
+    unbundled_unlisted = [(name, last) for name, last in unbundled_unlisted
+                          if last in tracked]
+
+    return {"edges": edges, "unlisted": unlisted, "standard": standard,
+            "unbundled-unlisted": unbundled_unlisted, "parents": parents}
 
 
 def write_reports(classes: dict[str, list], out_dir: str | Path) -> None:

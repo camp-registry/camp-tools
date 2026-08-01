@@ -575,6 +575,30 @@ def _cmd_check_moodle_branches(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_check_standard_plugins(args: argparse.Namespace) -> int:
+    from . import standardplugins
+    fresh = standardplugins.build_table(log=lambda m: print(m, file=sys.stderr))
+    if args.write:
+        standardplugins.write_table(fresh)
+        print(f"wrote {standardplugins.DATA_PATH} "
+              f"({len(fresh['components'])} components, "
+              f"{len(fresh['branches'])} branches)")
+        return 0
+    committed = standardplugins.load()
+    if committed == fresh:
+        print("standard-plugins table: current with upstream")
+        return 0
+    old, new = committed["components"], fresh["components"]
+    print("standard-plugins table DRIFTED from upstream — review and refresh "
+          "with 'camp check-standard-plugins --write':", file=sys.stderr)
+    for name in sorted(set(old) ^ set(new)):
+        print(f"  {'+' if name in new else '-'} {name}", file=sys.stderr)
+    for name in sorted(set(old) & set(new)):
+        if old[name] != new[name]:
+            print(f"  ~ {name}: {old[name]} -> {new[name]}", file=sys.stderr)
+    return 1
+
+
 def _cmd_enrich(args: argparse.Namespace) -> int:
     from .scan import enrich
     enrich(args.index_dir, limit=args.limit, force=args.force,
@@ -617,11 +641,22 @@ def _cmd_dependency_report(args: argparse.Namespace) -> int:
     print(f"{len(xref['edges'])} declared dependency edge(s) across the index")
     if xref["unlisted"]:
         print(f"\n{len(xref['unlisted'])} dependency component(s) not in the "
-              f"index — seeding candidates with built-in evidence of relevance "
-              f"(triage: components bundled with Moodle core, e.g. theme_boost "
-              f"or tool_lp, need no listing):")
+              f"index — seeding candidates with built-in evidence of relevance:")
         for dep, dependents in sorted(xref["unlisted"].items()):
             print(f"  {dep:<40} required by {', '.join(dependents)}")
+    if xref["standard"]:
+        print(f"\n{len(xref['standard'])} dependency component(s) bundled "
+              f"with Moodle core (satisfied by the install itself; not "
+              f"seeding candidates):")
+        for dep, dependents in sorted(xref["standard"].items()):
+            print(f"  {dep:<40} required by {', '.join(dependents)}")
+    if xref["unbundled-unlisted"]:
+        print(f"\n{len(xref['unbundled-unlisted'])} once-standard "
+              f"component(s) core has deleted and the index does not list — "
+              f"the unbundling watchlist (triage: seed the ones that "
+              f"continue as separately distributed plugins):")
+        for dep, last_standard in xref["unbundled-unlisted"]:
+            print(f"  {dep:<40} standard through {last_standard}")
     if xref["parents"]:
         print(f"\n{len(xref['parents'])} dependent(s) declaring an apparent "
               f"parent (subplugin-family evidence, camp-tools#16):")
@@ -909,6 +944,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-probe", action="store_true",
                    help="skip liveness/history probes (fast, coarse)")
     p.set_defaults(func=_cmd_crosscheck_directory)
+
+    p = sub.add_parser("check-standard-plugins",
+                       help="check the committed Moodle-standard-components "
+                            "table against upstream lib/plugins.json per "
+                            "branch (camp-tools#25); --write refreshes it")
+    p.add_argument("--write", action="store_true",
+                   help="rewrite camp/standardplugins.json from upstream")
+    p.set_defaults(func=_cmd_check_standard_plugins)
 
     p = sub.add_parser("dependency-report",
                        help="cross-reference declared plugin dependencies "

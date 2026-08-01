@@ -162,3 +162,29 @@ def test_dependency_xref(tmp_path):
     # quizaccess_x declaring mod_quiz is subplugin-parent evidence
     assert ("quizaccess_x", "mod_quiz") in xref["parents"]
     assert ("mod_disc", "local_unlisted") not in xref["parents"]
+
+
+def test_dependency_xref_standard_and_unbundled_classes(tmp_path):
+    """Core-bundled dependencies split out of the seeding candidates, and
+    the unbundling watchlist surfaces once-standard deleted components not
+    in the index, newest first (camp-tools#25)."""
+    import yaml
+    from camp.crosscheck import dependency_xref
+
+    plugins = tmp_path / "plugins"
+    (plugins / "theme").mkdir(parents=True)
+    (plugins / "theme" / "theme_x.yml").write_text(yaml.safe_dump(
+        _dep_entry("theme_x", "https://github.com/o/t", tier=0,
+                   dependencies={"theme_boost": "any", "local_missing": "any"})))
+
+    xref = dependency_xref(tmp_path)
+    assert xref["standard"] == {"theme_boost": ["theme_x"]}
+    assert xref["unlisted"] == {"local_missing": ["theme_x"]}
+    watchlist = dict(xref["unbundled-unlisted"])
+    assert watchlist.get("mod_chat") == "4.5"
+    assert watchlist.get("mod_survey") == "4.5"
+    # deleted-only components (left core before the window) stay off it
+    assert "theme_bootstrapbase" not in watchlist
+    # newest unbundlings sort first
+    branches = [b for _, b in xref["unbundled-unlisted"]]
+    assert branches == sorted(branches, key=lambda b: -float(b))

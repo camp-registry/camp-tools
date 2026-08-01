@@ -754,3 +754,55 @@ def test_enrich_skips_dependency_fetch_when_ledger_has_it(tmp_path, monkeypatch)
     monkeypatch.setattr(scan_mod, "_request", fake_request)
     scan_mod.enrich(index, token="x", readme=False, log=lambda *a: None)
     assert not any("contents/version.php" in u for u in calls)
+
+
+def test_site_depends_on_core_component_wording(index_dir, tmp_path):
+    """Dependencies Moodle bundles say so instead of "not in the archive",
+    judged against the plugin's supported range (camp-tools#25)."""
+    from camp.site import generate as site_generate
+
+    entry_path = index_dir / "plugins" / "mod" / "mod_example.yml"
+    entry = yaml.safe_load(entry_path.read_text())
+    # fixture release supports 4.5 + 5.0: theme_boost standard on both,
+    # mod_chat splits at 5.0, bootstrapbase left core before the window
+    entry["releases"][0]["dependencies"] = {
+        "theme_boost": "any", "mod_chat": 2020061500,
+        "theme_bootstrapbase": "any", "local_notcore": "any"}
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "theme_boost</span> · ships with Moodle</div>" in html
+    # unlisted here: "separate install" would promise availability the
+    # archive can't offer, so the row states the history instead (the
+    # listed variant is covered by the composes test below)
+    assert ("mod_chat</span> · 2020061500 or newer · shipped with Moodle "
+            "up to 4.5 · removed in 5.0") in html
+    assert ("theme_bootstrapbase</span> · shipped with Moodle up to 3.6 "
+            "· removed in 3.7") in html
+    assert "local_notcore</span> · not in the archive" in html
+
+
+def test_site_depends_on_listed_and_unbundled_composes(index_dir, tmp_path):
+    """A dependency both listed in camp and formerly bundled gets the link
+    AND the core note (the mod_chat case: listed at Tier 0 from the
+    moodlehq legacy repo)."""
+    from camp.site import generate as site_generate
+
+    entry_path = index_dir / "plugins" / "mod" / "mod_example.yml"
+    entry = yaml.safe_load(entry_path.read_text())
+    entry["releases"][0]["dependencies"] = {"mod_chat": "any"}
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+    chat = {"component": "mod_chat",
+            "source": "https://github.com/moodlehq/moodle-mod_chat",
+            "maintainers": [{"github": "moodlehq"}],
+            "tier": 0, "status": "active", "releases": []}
+    (index_dir / "plugins" / "mod" / "mod_chat.yml").write_text(
+        yaml.safe_dump(chat, sort_keys=False))
+
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert ('<a class="mono" href="/plugin/mod_chat.html">mod_chat</a>'
+            " · ships with Moodle up to 4.5 · separate install from 5.0") in html
