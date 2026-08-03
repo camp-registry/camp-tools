@@ -1253,6 +1253,38 @@ def opt_out(index_dir: str | Path, components: list[str], reason: str = "",
         path.unlink()
         log(f"  - {component}  ({repo_key}, opted out)")
 
+        # Copy-record sweep (theme_dennis lesson, camp-index#171): other
+        # ledger records for this component were rejections relative to a
+        # listing that no longer exists — after their recheck window a
+        # scan would re-evaluate them against nothing and re-list the
+        # plugin the author just asked removed. The author's OWN repos
+        # (same owner) inherit the opt-out; anyone else's are only
+        # reported, because the request covers the author's plugin, not
+        # other people's right to the now-free name.
+        owner = repo_key.split("/")[-2].lower()
+        for key, record in ledger.items():
+            if (key == repo_key or record.get("component") != component
+                    or record.get("outcome") not in ("copy", "exists",
+                                                     "needs-review")):
+                continue
+            if key.split("/")[-2].lower() == owner:
+                ledger[key] = {
+                    "outcome": "opted-out",
+                    "detail": (f"variant repo of {repo_key}, whose listing "
+                               f"was removed at maintainer request"
+                               + (f" ({reason})" if reason else "")),
+                    "component": component,
+                    "first-seen": record.get("first-seen", today),
+                    "last-checked": today,
+                }
+                log(f"    - {key}: same-owner {record['outcome']} record, "
+                    f"opted out with the listing")
+            else:
+                log(f"    ! {key}: {record['outcome']} record for "
+                    f"{component} under a DIFFERENT owner — left alone; a "
+                    f"future scan may list it as the name is now free "
+                    f"(review if that would be unwelcome)")
+
     save_ledger(index, ledger)
     return failed
 

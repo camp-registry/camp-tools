@@ -140,3 +140,57 @@ def test_opt_out_case_preserved_without_prior_entry(tmp_path):
                    source="https://github.com/MixedCase/moodle-mod_new")
     opt_out(tmp_path, ["mod_new"], log=lambda *a: None)
     assert "MixedCase/moodle-mod_new" in load_ledger(tmp_path)
+
+
+def test_opt_out_sweeps_same_owner_copy_records(tmp_path):
+    """The theme_dennis lesson (camp-index#171): the author's own variant
+    repos, ledgered as copies of the removed listing, inherit the opt-out
+    so a post-recheck-window scan cannot resurrect the plugin from them.
+    Other owners' records are reported but left alone."""
+    _write_listing(tmp_path, "theme_x",
+                   source="https://github.com/gareth/moodle-theme_x")
+    save_ledger(tmp_path, {
+        "gareth/moodle-theme_x_m44": {
+            "outcome": "copy", "detail": "shares history",
+            "component": "theme_x",
+            "first-seen": "2026-07-11", "last-checked": "2026-07-24"},
+        "someoneelse/moodle-theme_x": {
+            "outcome": "copy", "detail": "shares history",
+            "component": "theme_x",
+            "first-seen": "2026-07-11", "last-checked": "2026-07-24"},
+        "gareth/moodle-theme_unrelated": {
+            "outcome": "copy", "detail": "shares history",
+            "component": "theme_unrelated",
+            "first-seen": "2026-07-11", "last-checked": "2026-07-24"},
+    })
+    messages = []
+    failed = opt_out(tmp_path, ["theme_x"], reason="camp-index#171",
+                     log=lambda m: messages.append(m))
+    assert failed == []
+    ledger = load_ledger(tmp_path)
+    variant = ledger["gareth/moodle-theme_x_m44"]
+    assert variant["outcome"] == "opted-out"
+    assert "camp-index#171" in variant["detail"]
+    assert variant["first-seen"] == "2026-07-11"
+    # the variant now skips forever, same as the primary repo
+    assert should_skip(ledger, "gareth/moodle-theme_x_m44",
+                       "2026-12-01", 30)
+    # another owner's copy is untouched but reported for review
+    assert ledger["someoneelse/moodle-theme_x"]["outcome"] == "copy"
+    assert any("DIFFERENT owner" in m for m in messages)
+    # unrelated components are never swept
+    assert ledger["gareth/moodle-theme_unrelated"]["outcome"] == "copy"
+
+
+def test_opt_out_sweep_matches_gitlab_keys(tmp_path):
+    _write_listing(tmp_path, "mod_y",
+                   source="https://gitlab.com/gareth/moodle-mod_y")
+    save_ledger(tmp_path, {
+        "gitlab.com/gareth/moodle-mod_y-old": {
+            "outcome": "exists", "detail": "same component",
+            "component": "mod_y",
+            "first-seen": "2026-07-01", "last-checked": "2026-07-01"},
+    })
+    opt_out(tmp_path, ["mod_y"], log=lambda *a: None)
+    assert load_ledger(tmp_path)["gitlab.com/gareth/moodle-mod_y-old"][
+        "outcome"] == "opted-out"
