@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -34,7 +35,18 @@ from .verify import _clone
 # publish are reusable verbatim — unless the checking itself changed.
 # Bump this when the tools or standard change; prior summaries with a
 # different (or missing) value are recomputed.
-CHECKER_VERSION = 3    # 3: AMD build staleness by git dates (camp-tools#4)
+CHECKER_VERSION = 4    # 4: AMD rebuild-and-diff via a Moodle grunt rig (camp-tools#4)
+
+# Subplugin type prefixes are not in the rig's lib/components.json; the
+# common families the verified corpus actually uses live here. A prefix
+# in neither map skips the rebuild with a note, never guesses.
+SUBPLUGIN_PATHS = {
+    "quizaccess": "mod/quiz/accessrule", "quiz": "mod/quiz/report",
+    "logstore": "admin/tool/log/store", "atto": "lib/editor/atto/plugins",
+    "tiny": "lib/editor/tiny/plugins", "assignsubmission": "mod/assign/submission",
+    "assignfeedback": "mod/assign/feedback", "datafield": "mod/data/field",
+    "customcertelement": "mod/customcert/element",
+}
 
 
 def _fetch_prior(reuse: str, component: str) -> dict | None:
@@ -167,6 +179,66 @@ def _amd_stale(repo: Path, fileset: dict) -> list[str]:
     return stale
 
 
+def _rig_type_path(rig: Path, prefix: str) -> str | None:
+    """Where a component of this type lives in the rig's Moodle tree,
+    from the rig's own lib/components.json plus the subplugin map."""
+    try:
+        components = json.loads((rig / "lib" / "components.json").read_text())
+        path = (components.get("plugintypes") or {}).get(prefix)
+    except (OSError, ValueError):
+        return None
+    return path or SUBPLUGIN_PATHS.get(prefix)
+
+
+def _amd_rebuild(repo: Path, rig: Path, component: str) -> dict | None:
+    """Rebuild amd/build from amd/src with the rig's grunt and diff
+    against the committed outputs — the freshness check's third slice
+    (camp-tools#4). The rebuild is ephemeral; only the verdict persists.
+
+    The survey behind the design (all 31 AMD-carrying verified releases):
+    123 of 156 files byte-identical even with a mismatched-era toolchain,
+    and every difference explained as an author's own build pipeline or a
+    self-built bundle — so one pinned rig suffices, a byte-identical
+    result is certifiable, and a difference is evidence for a human, not
+    an alarm. Returns None (no verdict recorded) when the rig cannot run
+    this plugin: unknown type path, grunt failure, timeout. Never
+    guesses. Bump CHECKER_VERSION when the rig's Moodle branch or node
+    toolchain moves."""
+    prefix, _, name = component.partition("_")
+    type_path = _rig_type_path(rig, prefix)
+    grunt = rig / "node_modules" / ".bin" / "grunt"
+    if type_path is None or not grunt.exists():
+        return None
+    dest = rig / type_path / name
+    committed = {p.name: p.read_bytes()
+                 for p in (repo / "amd" / "build").glob("*.min.js")} \
+        if (repo / "amd" / "build").is_dir() else {}
+    try:
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(repo, dest, ignore=shutil.ignore_patterns(".git"))
+        if (dest / "amd" / "build").is_dir():
+            shutil.rmtree(dest / "amd" / "build")
+        result = subprocess.run(
+            [str(grunt), "amd", "--force"], cwd=str(dest),
+            capture_output=True, timeout=600,
+            env={**os.environ, "BROWSERSLIST_IGNORE_OLD_DATA": "1"})
+        rebuilt_dir = dest / "amd" / "build"
+        rebuilt = {p.name: p.read_bytes() for p in rebuilt_dir.glob("*.min.js")} \
+            if rebuilt_dir.is_dir() else {}
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+    if not rebuilt:
+        return None
+    # set differences are the file-set slice's business; the rebuild
+    # verdict covers the files both sides have
+    common = sorted(set(committed) & set(rebuilt))
+    differs = [f[:-len(".min.js")] for f in common if committed[f] != rebuilt[f]]
+    return {"checked": len(common), "differs": differs}
+
+
 def for_version(doc: dict | None, version: str) -> dict | None:
     if not doc:
         return None
@@ -174,7 +246,8 @@ def for_version(doc: dict | None, version: str) -> dict | None:
 
 
 def run_checks(index_dir: str | Path, out_dir: str | Path, log=print,
-               reuse: str | None = None) -> int:
+               reuse: str | None = None,
+               moodle_rig: str | Path | None = None) -> int:
     """Compute summaries for every non-revoked release of every entry.
     Existing per-version results with matching commits are kept (checks
     are commit-deterministic); only new or changed versions run. `reuse`
@@ -251,6 +324,14 @@ def run_checks(index_dir: str | Path, out_dir: str | Path, log=print,
                 amd = _amd_fileset(repo)
                 if amd is not None:
                     amd["stale"] = _amd_stale(repo, amd)
+                    if moodle_rig:
+                        rebuild = _amd_rebuild(repo, Path(moodle_rig), component)
+                        if rebuild is not None:
+                            amd["rebuild"] = rebuild
+                        else:
+                            log(f"checks: {component}@{version}: rebuild "
+                                "unavailable (rig cannot run this plugin); "
+                                "no verdict recorded")
                     versions[version]["amd"] = amd
                 written += 1
                 log(f"checks: {component}@{version}: "

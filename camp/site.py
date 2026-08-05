@@ -1193,6 +1193,15 @@ document.addEventListener('DOMContentLoaded', function(){
               chip('amd build', unbuilt + ' not built', 'warn',
                    'Source module(s) with no build output: '
                    + a.src_without_build.join(', '));
+            else if (a.rebuild && (a.rebuild.differs || []).length)
+              chip('amd build', 'rebuild differs (' + a.rebuild.differs.length + ')', 'warn',
+                   'Rebuilt from source; file(s) differing from the committed outputs '
+                   + '(often the author\\u2019s own build toolchain): '
+                   + a.rebuild.differs.join(', '));
+            else if (a.rebuild)
+              chip('amd build', 'rebuilt ✓', 'ok',
+                   'Rebuilt from source with the registry\\u2019s toolchain and matched '
+                   + 'the committed outputs byte for byte');
             else
               chip('amd build', '✓', 'ok',
                    'Every AMD source module has its build output and vice versa');
@@ -1421,6 +1430,20 @@ def _check_chips(vcheck: dict) -> str:
                          f'with no build output: '
                          f'{escape(", ".join(unbuilt))}">'
                          f'{len(unbuilt)} not built</span></span>')
+        elif (amd.get("rebuild") or {}).get("differs"):
+            differs = amd["rebuild"]["differs"]
+            chips.append(f'<span class="cchip"><span class="l">amd build</span>'
+                         f'<span class="r warn" aria-label="Rebuilt from '
+                         f'source; {len(differs)} file(s) differ from the '
+                         f'committed outputs (often the author\'s own build '
+                         f'toolchain): {escape(", ".join(differs))}">'
+                         f'rebuild differs ({len(differs)})</span></span>')
+        elif amd.get("rebuild"):
+            chips.append(f'<span class="cchip"><span class="l">amd build</span>'
+                         f'<span class="r ok" aria-label="Rebuilt from source '
+                         f'with the registry\'s toolchain and matched the '
+                         f'committed outputs byte for byte">'
+                         f'rebuilt <span aria-hidden="true">✓</span></span></span>')
         else:
             chips.append(f'<span class="cchip"><span class="l">amd build</span>'
                          f'<span class="r ok" aria-label="Every AMD source '

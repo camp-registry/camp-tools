@@ -372,7 +372,8 @@ def _cmd_scan_malware(args: argparse.Namespace) -> int:
 
 def _cmd_checks(args: argparse.Namespace) -> int:
     from .checks import run_checks
-    run_checks(args.index_dir, args.out_dir, reuse=args.reuse)
+    run_checks(args.index_dir, args.out_dir, reuse=args.reuse,
+               moodle_rig=args.moodle_rig)
     return 0
 
 
@@ -945,6 +946,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("out_dir")
     p.add_argument("--reuse", help="previous publish's checks (URL base or dir); "
                    "commit-matched summaries are reused instead of recomputed")
+    p.add_argument("--moodle-rig",
+                   help="Moodle checkout with node_modules installed; enables "
+                        "the AMD rebuild-and-diff verdict (camp-tools#4). "
+                        "Omitted: the rebuild records nothing, never guesses")
     p.set_defaults(func=_cmd_checks)
 
     p = sub.add_parser("ingest-all",

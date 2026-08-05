@@ -219,3 +219,67 @@ def test_amd_stale_chip():
                                          "build_without_src": ["mywords"],
                                          "stale": ["timediff"]}})
     assert "without source" in both and "1 stale" not in both
+
+
+def _fake_rig(tmp_path):
+    """A rig whose 'grunt' minifies by stripping comment lines — enough
+    to exercise placement, rebuild, compare and cleanup."""
+    rig = tmp_path / "rig"
+    (rig / "lib").mkdir(parents=True)
+    (rig / "lib" / "components.json").write_text(
+        '{"plugintypes": {"mod": "mod", "local": "local"}}')
+    bindir = rig / "node_modules" / ".bin"
+    bindir.mkdir(parents=True)
+    grunt = bindir / "grunt"
+    grunt.write_text(
+        "#!/bin/sh\n"
+        "mkdir -p amd/build\n"
+        "for f in amd/src/*.js; do\n"
+        "  [ -e \"$f\" ] || exit 0\n"
+        "  n=$(basename \"$f\" .js)\n"
+        "  grep -v '^//' \"$f\" > \"amd/build/$n.min.js\"\n"
+        "done\n")
+    grunt.chmod(0o755)
+    (rig / "mod").mkdir()
+    (rig / "local").mkdir()
+    return rig
+
+
+def test_amd_rebuild_match_and_diff(tmp_path):
+    """Byte-matching rebuilds certify; a committed output differing from
+    the rebuild is named; unknown type paths record nothing
+    (camp-tools#4 slice three)."""
+    from camp.checks import _amd_rebuild
+    rig = _fake_rig(tmp_path)
+
+    repo = tmp_path / "plugin"
+    (repo / "amd" / "src").mkdir(parents=True)
+    (repo / "amd" / "build").mkdir()
+    (repo / "amd" / "src" / "app.js").write_text("// comment\ncode();\n")
+    (repo / "amd" / "build" / "app.min.js").write_text("code();\n")
+    (repo / "amd" / "src" / "tampered.js").write_text("// c\nsafe();\n")
+    (repo / "amd" / "build" / "tampered.min.js").write_text("evil();\n")
+
+    verdict = _amd_rebuild(repo, rig, "mod_example")
+    assert verdict == {"checked": 2, "differs": ["tampered"]}
+    # the rig tree is left clean
+    assert not (rig / "mod" / "example").exists()
+
+    assert _amd_rebuild(repo, rig, "weirdtype_example") is None
+
+
+def test_amd_rebuild_chip_states():
+    from camp.site import _check_chips
+    base = {"phplint": True, "errors": 0, "warnings": 0,
+            "amd": {"src": 1, "build": 1, "src_without_build": [],
+                    "build_without_src": [], "stale": []}}
+    certified = dict(base, amd={**base["amd"], "rebuild": {"checked": 1, "differs": []}})
+    html = _check_chips(certified)
+    assert "rebuilt" in html and "byte for byte" in html
+    differs = dict(base, amd={**base["amd"],
+                              "rebuild": {"checked": 2, "differs": ["app"]}})
+    html = _check_chips(differs)
+    assert "rebuild differs (1)" in html and "app" in html
+    # no rig verdict: the plain file-set check mark stands
+    html = _check_chips(base)
+    assert "rebuilt" not in html and "aria-hidden" in html
