@@ -37,27 +37,8 @@ from . import checks as checks_mod
 from . import reviews as reviews_mod
 from .reviews import PLUGIN_URL_PREFIX as MDLSHIELD_PLUGIN_URL
 from .composer import _package_name
-from . import standardplugins
+from . import plugintypes, standardplugins
 from .validate import load_entry
-
-PLUGINTYPE_NAMES = {
-    "mod": "Activity modules",
-    "block": "Blocks",
-    "local": "Local plugins",
-    "logstore": "Log stores",
-    "auth": "Authentication",
-    "tool": "Admin tools",
-    "theme": "Themes",
-    "qtype": "Question types",
-    "enrol": "Enrolment",
-    "repository": "Repositories",
-    "profilefield": "Profile fields",
-    "tiny": "TinyMCE editor",
-    "atto": "Atto editor",
-    "format": "Course formats",
-    "report": "Reports",
-    "filter": "Filters",
-}
 
 TIER_NAMES = {
     0: 'Discovered',
@@ -240,6 +221,9 @@ legend.facet-label{padding:0}
   margin-right:6px;vertical-align:1px}
 .facet-more{background:none;border:0;cursor:pointer;font:0.78125rem var(--mono);
   color:var(--accent);padding:7px 10px;text-align:left}
+.facet-cat{font-family:var(--mono);font-size:0.75rem;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--faint-label);padding:12px 10px 3px}
+.facet-sub .facet{padding-left:26px}
 
 /* ---- results ---- */
 .results-head{display:flex;justify-content:space-between;align-items:center;
@@ -310,6 +294,7 @@ footer .build{display:block;margin-top:4px}
 .backlink{font-family:var(--mono);font-size:0.8125rem;color:var(--muted)}
 .detail .crumb{font-family:var(--mono);font-size:0.8125rem;
   letter-spacing:.04em;color:var(--faint-label);margin:26px 0 6px}
+.detail .crumb a{color:inherit;text-decoration:underline;text-underline-offset:3px}
 .detail h1{font-family:var(--mono);font-weight:600;font-size:1.625rem;color:var(--ink)}
 .strip{display:flex;align-items:center;gap:14px;margin-top:14px;flex-wrap:wrap;
   font-family:var(--mono);font-size:0.78125rem;color:var(--faint-label)}
@@ -1434,8 +1419,10 @@ def _range_indices(entry: dict) -> tuple[int, int]:
     return (VORDER.index(known[0]), VORDER.index(known[-1]))
 
 
-def _type_label(plugintype: str) -> str:
-    return PLUGINTYPE_NAMES.get(plugintype, plugintype)
+def _type_label(plugintype: str, established: dict | None = None) -> str:
+    # Curated core name, or the established family's recorded name, or the
+    # raw prefix — display never invents names (camp-tools#24).
+    return plugintypes.display_name(plugintype, established) or plugintype
 
 
 def _zip_url(artifacts_base: str, component: str, version: str) -> str:
@@ -1552,26 +1539,63 @@ def _facet(group: str, value: str, text: str, *, dot: str = "") -> str:
             f'<span class="n"></span></button>')
 
 
-def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date) -> str:
+def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
+                 established: dict | None = None) -> str:
     total = len(entries)
 
     type_counts = Counter(e["component"].partition("_")[0] for e, _ in entries)
-    by_count = [t for t, _ in type_counts.most_common()]
-    top_types, more_types = by_count[:6], by_count[6:]
+    top_types = [t for t, _ in type_counts.most_common()][:6]
+
+    def label(t: str) -> str:
+        return _type_label(t, established)
 
     type_facets = _facet("group", "", "All types")
-    type_facets += "".join(_facet("group", t, _type_label(t)) for t in sorted(
-        top_types, key=lambda t: _type_label(t).lower()))
-    more_html = ""
-    if more_types:
-        hidden = "".join(_facet("group", t, _type_label(t)) for t in sorted(
-            more_types, key=lambda t: _type_label(t).lower()))
-        more_html = (f'<div id="more-types" hidden>{hidden}</div>'
-                     f'<button class="facet-more" data-target="more-types" '
-                     f'aria-expanded="false" aria-controls="more-types" '
-                     f'data-more="+ Show all {len(more_types)} more types" '
-                     f'data-less="− Show fewer types">'
-                     f'+ Show all {len(more_types)} more types</button>')
+    type_facets += "".join(_facet("group", t, label(t)) for t in sorted(
+        top_types, key=lambda t: label(t).lower()))
+
+    # The expanded list is the full catalog of types as a grouped
+    # hierarchy in the old directory's style (camp-tools#24): category
+    # headers, subplugin families indented under their parent's type.
+    # The top-6 types appear again in their category position — facet
+    # buttons are per-element, so duplicates count and toggle together.
+    # Each type stays its own facet value; filtering is unchanged.
+    by_category: dict[str, dict] = {}
+    for t in type_counts:
+        slot = by_category.setdefault(plugintypes.category(t, established),
+                                      {"top": [], "families": {}})
+        parent_component = plugintypes.parent(t, established)
+        if parent_component:
+            parent_type = parent_component.partition("_")[0]
+            slot["families"].setdefault(parent_type, []).append(t)
+        else:
+            slot["top"].append(t)
+    sections = []
+    for cat in plugintypes.CATEGORY_ORDER:
+        slot = by_category.get(cat)
+        if not slot:
+            continue
+        rows = []
+        families = slot["families"]
+        for t in sorted(slot["top"], key=lambda t: label(t).lower()):
+            rows.append(_facet("group", t, label(t)))
+            for fam in sorted(families.pop(t, []),
+                              key=lambda t: label(t).lower()):
+                rows.append(f'<div class="facet-sub">'
+                            f'{_facet("group", fam, label(fam))}</div>')
+        # families whose parent type has no listed members of its own
+        # still render, unindented, under the category
+        for parent_type in sorted(families):
+            for fam in sorted(families[parent_type],
+                              key=lambda t: label(t).lower()):
+                rows.append(_facet("group", fam, label(fam)))
+        sections.append(f'<div class="facet-cat">{escape(cat)}</div>'
+                        + "".join(rows))
+    more_html = (f'<div id="more-types" hidden>{"".join(sections)}</div>'
+                 f'<button class="facet-more" data-target="more-types" '
+                 f'aria-expanded="false" aria-controls="more-types" '
+                 f'data-more="+ Show all {len(type_counts)} types" '
+                 f'data-less="− Show fewer types">'
+                 f'+ Show all {len(type_counts)} types</button>')
 
     vlist = list(reversed(VORDER))
     top_vers, more_vers = vlist[:4], vlist[4:]
@@ -1936,7 +1960,9 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                  advisories: AdvisorySet, today: datetime.date,
                  checks_dir=None, shots=None, reviews=None,
                  badge_src=None, artifacts_base: str | None = None,
-                 known_components: set[str] | None = None) -> str:
+                 known_components: set[str] | None = None,
+                 established: dict | None = None,
+                 declared_families: list[tuple[str, int]] | None = None) -> str:
     component = entry["component"]
     artifacts_base = artifacts_base or f"{base_url}/artifacts"
     plugintype = component.partition("_")[0]
@@ -2398,6 +2424,37 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                    f'<span class="fv mono" style="font-size:0.78125rem;word-break:break-all">'
                    f'<a href="{escape(entry["source"])}">'
                    f'{escape(entry["source"].removeprefix("https://"))}</a></span></div>')
+    # Plugin type (camp-tools#24): uniform across all listings — the
+    # display name, or the raw prefix for types the registry has not
+    # named. Subplugin types say whose subplugin they are, in the deps
+    # row's idiom: parent linked when listed, said to ship with Moodle
+    # when core bundles it, plainly absent otherwise (camp-tools#16).
+    type_bits = escape(_type_label(plugintype, established))
+    parent_component = plugintypes.parent(plugintype, established)
+    if parent_component:
+        if known_components and parent_component in known_components:
+            parent_html = (f'<a class="mono" href="/plugin/'
+                           f'{escape(parent_component)}.html">'
+                           f'{escape(parent_component)}</a>')
+            type_bits += f' · subplugin of {parent_html}'
+        else:
+            parent_core = standardplugins.classify(parent_component, None)
+            note = (" · ships with Moodle" if parent_core
+                    else " · not in the archive")
+            type_bits += (f' · subplugin of <span class="mono">'
+                          f'{escape(parent_component)}</span>{note}')
+    kv_rows.append(f'<div class="kvrow"><span class="fk">Plugin type</span>'
+                   f'<span class="fv">{type_bits}</span></div>')
+    if declared_families:
+        family_bits = " · ".join(
+            f'<a href="/?group={escape(prefix)}">'
+            f'{escape(_type_label(prefix, established))}</a> ({count} listed)'
+            for prefix, count in declared_families)
+        kv_rows.append(
+            f'<div class="kvrow"><span class="fk">Declares subplugin type</span>'
+            f'<span class="fv">{family_bits}'
+            f'<div class="attrib" style="margin-top:6px">separately distributed '
+            f'plugins that install into this one</div></span></div>')
     # $plugin->dependencies, observed from version.php (camp-tools#20): the
     # latest release's declaration when there is a ledger, else the entry's
     # scan-time observation (Tier 0). Listed dependencies link to their own
@@ -2507,7 +2564,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
 <div class="detail">
 <main id="main-content" tabindex="-1">
   <a class="backlink" href="/">← Back to archive</a>
-  <div class="crumb">{escape(_type_label(plugintype))}</div>
+  <div class="crumb"><a href="/?group={escape(plugintype)}">{escape(_type_label(plugintype, established))}</a></div>
   <h1>{escape(name)}</h1>
   {f'<div class="mono" style="color:var(--faint-label);font-size:0.8125rem;margin-top:4px">{escape(component)}</div>' if name != component else ''}
   <div class="strip">{''.join(meta_bits)}</div>
@@ -2739,6 +2796,19 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
         shutil.copytree(shots_src, out / "shots", dirs_exist_ok=True)
 
     known_components = {e["component"] for e, _ in entries}
+    established = plugintypes.load_established(index_dir)
+    # Reverse edge of the subplugin-family relation (camp-tools#16, #24):
+    # for each listed parent, the families it declares with listed-member
+    # counts, rendered on the parent's page.
+    families_by_parent: dict[str, list[tuple[str, int]]] = {}
+    for prefix, count in Counter(e["component"].partition("_")[0]
+                                 for e, _ in entries).items():
+        parent_component = plugintypes.parent(prefix, established)
+        if parent_component:
+            families_by_parent.setdefault(parent_component, []).append(
+                (prefix, count))
+    for family_list in families_by_parent.values():
+        family_list.sort()
     for entry, listing in entries:
         component = entry["component"]
         shots = []
@@ -2751,10 +2821,12 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
                             checks_dir=checks_dir, shots=shots,
                             reviews=reviews_by_component.get(component),
                             badge_src=badge_src, artifacts_base=artifacts_base,
-                            known_components=known_components)
+                            known_components=known_components,
+                            established=established,
+                            declared_families=families_by_parent.get(component))
         (out / "plugin" / f"{component}.html").write_text(page)
 
-    browse_html, records = _browse_page(entries, today)
+    browse_html, records = _browse_page(entries, today, established=established)
     (out / "index.html").write_text(browse_html)
     (out / "index.json").write_text(json.dumps({"plugins": records},
                                                separators=(",", ":")))

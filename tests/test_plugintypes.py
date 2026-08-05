@@ -165,3 +165,61 @@ def test_check_plugin_types_drift(monkeypatch, capsys):
     assert main(["check-plugin-types"]) == 1
     err = capsys.readouterr().err
     assert "DRIFTED" in err and "+ newthing" in err
+
+
+# --- site display (camp-tools#24) --------------------------------------------
+
+def _minimal_entry(component, source="https://github.com/o/x"):
+    return {"component": component, "source": source,
+            "maintainers": [{"github": "o"}], "tier": 0,
+            "status": "active", "releases": []}
+
+
+def test_site_type_surfaces(index_dir, tmp_path):
+    """Grouped type filter, linked breadcrumb, subplugin type row with
+    parent link, parent reverse row, established display names, raw-prefix
+    fallback for unestablished types."""
+    import yaml
+    from camp.site import generate
+
+    def write(entry):
+        prefix = entry["component"].partition("_")[0]
+        d = index_dir / "plugins" / prefix
+        d.mkdir(exist_ok=True)
+        with open(d / f"{entry['component']}.yml", "w") as f:
+            yaml.safe_dump(entry, f, sort_keys=False)
+
+    write(_minimal_entry("mod_customcert"))
+    write(_minimal_entry("customcertelement_foo"))
+    write(_minimal_entry("quizaccess_bar"))
+    write(_minimal_entry("floreamui_junk"))
+    families = index_dir / pt.ESTABLISHED_PATH
+    families.parent.mkdir(parents=True)
+    families.write_text("customcertelement:\n"
+                        "  parent: mod_customcert\n"
+                        "  name: Certificate elements\n")
+
+    out = tmp_path / "site"
+    generate(index_dir, "https://repo.test", out)
+
+    browse = (out / "index.html").read_text()
+    assert '<div class="facet-cat">Activities</div>' in browse
+    # established family renders its recorded name; junk stays raw in Other
+    assert "Certificate elements" in browse
+    assert '<div class="facet-cat">Other</div>' in browse and "floreamui" in browse
+
+    member = (out / "plugin" / "customcertelement_foo.html").read_text()
+    assert '<a href="/?group=customcertelement">Certificate elements</a>' in member
+    assert 'subplugin of <a class="mono" href="/plugin/mod_customcert.html">' in member
+
+    parent_page = (out / "plugin" / "mod_customcert.html").read_text()
+    assert "Declares subplugin type" in parent_page
+    assert '<a href="/?group=customcertelement">Certificate elements</a> (1 listed)' in parent_page
+
+    # unlisted core parent: named type, mono parent, ships-with wording
+    quizaccess = (out / "plugin" / "quizaccess_bar.html").read_text()
+    assert "Quiz access rules · subplugin of " in quizaccess
+    assert "mod_quiz</span> · ships with Moodle" in quizaccess
+
+    junk = (out / "plugin" / "floreamui_junk.html").read_text()
+    assert '<a href="/?group=floreamui">floreamui</a>' in junk
