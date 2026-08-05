@@ -1499,6 +1499,7 @@ def _header() -> str:
     <a href="/">Browse</a>
     <a href="/how-it-works.html">How it works</a>
     <a href="/authors.html">Publish<span class="nav-xtra"> your plugin</span></a>
+    <a href="/names.html">Names</a>
     <a href="{MIRROR_URL}">Mirror<span class="nav-xtra"> this archive</span></a>
     <button class="theme-toggle" id="theme-toggle" aria-label="Switch theme">
       <svg class="ic-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -2618,6 +2619,118 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
 # ---------------------------------------------------------------- how ------
 
 
+def _names_page() -> str:
+    """Component-name lookup at /names.html (camp-tools#33): a client-side
+    check against /names.json, which unions every authority the registry
+    holds. Answers "is this name in use, or has it ever been" before an
+    author writes version.php."""
+    body = f"""
+{_header()}
+<div class="detail">
+<main id="main-content" tabindex="-1">
+  <h1>Component names</h1>
+  <p class="dsummary">Check whether a frankenstyle component name is in use,
+  was used historically, or is free. Sources: current listings, removal
+  records, the old moodle.org plugins directory, Moodle core, and the
+  plugin-type registry.</p>
+  <input id="nq" type="search" autocomplete="off" spellcheck="false"
+    placeholder="e.g. local_myplugin" aria-label="Component name"
+    style="margin-top:18px;padding:10px 14px;width:min(420px,100%);
+    font:0.9375rem var(--mono);background:var(--surface);color:var(--ink);
+    border:1px solid var(--border-strong);border-radius:4px">
+  <div id="nresult" aria-live="polite" style="margin-top:18px;max-width:660px"></div>
+  <div class="attrib" style="margin-top:28px">Name policy:
+  <a href="https://github.com/camp-registry/camp-docs/blob/main/NAMESPACE.md">NAMESPACE.md</a>
+  · <a href="/removed.html">Removed listings</a></div>
+</main></div>
+{_footer()}"""
+    js = """
+var data = null, nq = document.getElementById('nq'),
+    out = document.getElementById('nresult');
+function esc(s){ var d = document.createElement('span'); d.textContent = s; return d.innerHTML; }
+function render(){
+  var q = nq.value.trim().toLowerCase();
+  if (!q){ out.innerHTML = ''; return; }
+  if (!/^[a-z][a-z0-9]*(_[a-z0-9_]+)?$/.test(q)){
+    out.innerHTML = '<p>Not a valid frankenstyle shape — lowercase '
+      + '<span class="mono">type_name</span>, e.g. '
+      + '<span class="mono">local_myplugin</span>.</p>';
+    return;
+  }
+  var n = data.names[q] || null, lines = [];
+  if (n){
+    if (n.st === 'delisted')
+      lines.push('Previously listed, now delisted (published history retained).');
+    else if (n.rm === undefined || n.t !== undefined)
+      lines.push('<a href="/plugin/' + esc(q) + '.html">Listed in the archive</a>'
+        + (n.t !== undefined ? ' (tier ' + n.t + ')' : '')
+        + (n.st === 'moved' ? ' — moved' : '') + '.');
+    if (n.rm)
+      lines.push('Removed at the maintainer\\u2019s request (' + esc(n.rm)
+        + ') — see <a href="/removed.html">removed listings</a>; discovery will not re-list it.');
+    if (n.core) lines.push(esc(n.core.charAt(0).toUpperCase() + n.core.slice(1)) + '.');
+    if (n.dir)
+      lines.push('Published by the old moodle.org directory under this name — '
+        + 'per <a href="https://github.com/camp-registry/camp-docs/blob/main/NAMESPACE.md">NAMESPACE.md</a> '
+        + 'that decides the name; the claim or repoint path applies.');
+  }
+  var prefix = q.split('_')[0];
+  if (q.indexOf('_') !== -1 && data.prefixes.indexOf(prefix) === -1)
+    lines.push('<span class="mono">' + esc(prefix) + '</span> is not a known plugin type; '
+      + 'a new subplugin family needs establishment review before members can list.');
+  if (!lines.length)
+    lines.push('No record anywhere the registry looks — the name appears free.');
+  out.innerHTML = '<div class="kv">' + lines.map(function(l){
+    return '<div class="kvrow"><span class="fv">' + l + '</span></div>'; }).join('') + '</div>';
+}
+nq.addEventListener('input', function(){
+  if (data){ render(); return; }
+  fetch('/names.json').then(function(r){ return r.json(); })
+    .then(function(j){ data = j; render(); });
+});
+"""
+    return _page("Component names · CAMP", body,
+                 description="Check whether a Moodle plugin component name "
+                             "is in use, was used historically, or is free.",
+                 extra_js=js)
+
+
+def _removed_page(removals: list[tuple[str, dict]]) -> str:
+    """Removed listings at /removed.html (camp-tools#28): the ledger's
+    opted-out records as a registry record-keeping surface — component,
+    date, reason. Rejections and collisions stay operator-facing, and
+    tombstone pages on the old component URLs stay deferred, both per the
+    #28 design."""
+    rows = "".join(
+        f'<tr><td class="mono">{escape(component)}</td>'
+        f'<td class="mono">{escape(record.get("repo", ""))}</td>'
+        f'<td style="white-space:nowrap">{escape(record.get("last-checked", ""))}</td>'
+        f'<td>{escape(record.get("detail", ""))}</td></tr>'
+        for component, record in removals)
+    body = f"""
+{_header()}
+<div class="detail">
+<main id="main-content" tabindex="-1">
+  <h1>Removed listings</h1>
+  <p class="dsummary">Listings removed at their maintainer's request
+  (RFC §4.4). The removal is permanent for the removed repository:
+  discovery will not re-list it. {len(removals)} on record.</p>
+  <div style="overflow-x:auto;margin-top:20px"><table style="border-collapse:collapse;width:100%;font-size:0.84375rem">
+  <thead><tr>
+    <th style="text-align:left;padding:6px 14px 6px 0">component</th>
+    <th style="text-align:left;padding:6px 14px 6px 0">repository</th>
+    <th style="text-align:left;padding:6px 14px 6px 0">removed</th>
+    <th style="text-align:left;padding:6px 14px 6px 0">record</th>
+  </tr></thead><tbody>{rows}</tbody></table></div>
+  <div class="attrib" style="margin-top:28px">Check any name at
+  <a href="/names.html">component names</a>.</div>
+</main></div>
+{_footer()}"""
+    return _page("Removed listings · CAMP", body,
+                 description="Plugin listings removed from the archive at "
+                             "their maintainer's request.")
+
+
 def _authors_page(md_text: str | None) -> str:
     """The rendered claim→publish guide at /authors.html (camp-tools#5),
     single-sourced from camp-docs AUTHORS.md — the publish workflow checks
@@ -2852,6 +2965,16 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
                             established=established,
                             declared_families=families_by_parent.get(component))
         (out / "plugin" / f"{component}.html").write_text(page)
+
+    # component-name lookup + removed listings (camp-tools#33, #28)
+    from . import names as names_mod
+    (out / "names.json").write_text(json.dumps(
+        names_mod.names_dataset(index_dir), separators=(",", ":")))
+    (out / "names.html").write_text(_names_page())
+    removals = sorted(names_mod.removals(Path(index_dir)).items(),
+                      key=lambda kv: kv[1].get("last-checked", ""),
+                      reverse=True)
+    (out / "removed.html").write_text(_removed_page(removals))
 
     browse_html, records = _browse_page(entries, today, established=established)
     (out / "index.html").write_text(browse_html)

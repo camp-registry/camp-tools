@@ -1078,3 +1078,55 @@ def test_scan_report_html_review_page(tmp_path):
     # bulk classes are counts, not tables
     assert "no-version-php 1" in html
     assert "moodle-junk</a>" not in html
+
+
+# --- namespace checker (camp-tools#33) ---------------------------------------
+
+def test_name_report_aggregates_authorities(tmp_path):
+    import camp.scan as scan
+    from camp import names
+    index = tmp_path / "index"
+    (index / "plugins" / "mod").mkdir(parents=True)
+    (index / "plugins" / "mod" / "mod_example.yml").write_text(
+        "component: mod_example\nsource: https://github.com/o/x\n"
+        "maintainers:\n- github: o\ntier: 1\nstatus: active\nreleases: []\n")
+    ledger = {}
+    scan.record_outcome(ledger, _candidate(full_name="gone/moodle-block_gone"),
+                        "opted-out",
+                        "listing removed at maintainer request (camp-index#999)",
+                        "2026-08-01", component="block_gone")
+    ledger["gone/moodle-block_gone"]["component"] = "block_gone"
+    scan.save_ledger(index, ledger)
+
+    listed = dict(names.name_report(index, "mod_example"))
+    assert "listed" in listed and "tier 1" in listed["listed"]
+
+    removed = dict(names.name_report(index, "block_gone"))
+    assert "removed" in removed and "camp-index#999" in removed["removed"]
+
+    core = dict(names.name_report(index, "mod_quiz"))
+    assert core["core"] == "ships with current Moodle"
+
+    directory = dict(names.name_report(index, "mod_attendance"))
+    assert "directory" in directory and "danmarsden" in directory["directory"]
+
+    junk = dict(names.name_report(index, "floreamui_thing"))
+    assert "unknown-type" in junk
+    assert names.name_report(index, "local_definitely_free_name_xyz") == []
+
+
+def test_names_dataset_and_site_pages(index_dir, tmp_path):
+    from camp import names
+    from camp.site import generate
+    data = names.names_dataset(index_dir)
+    assert data["names"]["mod_example"]["t"] == 2
+    assert data["names"]["mod_quiz"]["core"] == "ships with current Moodle"
+    assert "mod" in data["prefixes"]
+
+    out = tmp_path / "site"
+    generate(index_dir, "https://repo.test", out)
+    assert "names.json" in {p.name for p in out.iterdir()}
+    names_html = (out / "names.html").read_text()
+    assert "Component names" in names_html and "/names.json" in names_html
+    removed_html = (out / "removed.html").read_text()
+    assert "Removed listings" in removed_html

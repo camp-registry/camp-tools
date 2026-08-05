@@ -59,7 +59,38 @@ def _cmd_validate_listing(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _update_notice() -> None:
+    """One informational line on author-facing commands when this
+    camp-tools is behind the registry's published version (camp-tools#35).
+    Never fails, never blocks: short timeout, silent on any error,
+    skipped entirely by CAMP_NO_UPDATE_CHECK."""
+    import os
+    if os.environ.get("CAMP_NO_UPDATE_CHECK"):
+        return
+    try:
+        import urllib.request
+        from . import __version__
+        request = urllib.request.Request(
+            "https://camp-registry.org/version.json",
+            headers={"User-Agent": "camp-tools"})
+        with urllib.request.urlopen(request, timeout=3) as response:
+            current = json.load(response).get("camp-tools", "")
+
+        def parts(version: str) -> tuple:
+            return tuple(int(x) for x in version.split("."))
+
+        if current and parts(current) > parts(__version__):
+            print(f"note: camp-tools {__version__} is behind the current "
+                  f"release {current} — refresh with pip install "
+                  f"'git+https://github.com/camp-registry/camp-tools@v{current}'"
+                  f" (set CAMP_NO_UPDATE_CHECK=1 to silence this check)",
+                  file=sys.stderr)
+    except Exception:
+        pass
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
+    _update_notice()
     results = verify_entry(args.entry, source_override=args.source)
     failed = False
     for result in results:
@@ -128,6 +159,7 @@ def derive_supported_moodle(repo: str, commit: str) -> list[str]:
 
 def _cmd_release(args: argparse.Namespace) -> int:
     """Compute a new release record and append it to the entry file."""
+    _update_notice()
     entry_path = Path(args.entry)
     entry = load_entry(entry_path)
     component = entry["component"]
@@ -599,6 +631,19 @@ def _cmd_check_standard_plugins(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_check_name(args: argparse.Namespace) -> int:
+    from .names import name_report
+    for component in args.components:
+        facts = name_report(args.index_dir, component)
+        print(f"{component}:")
+        if not facts:
+            print("  free — no listing, no removal record, no directory "
+                  "history, not a core component")
+        for kind, text in facts:
+            print(f"  {kind:12s} {text}")
+    return 0
+
+
 def _cmd_build_directory_map(args: argparse.Namespace) -> int:
     from . import directorymap
     table = directorymap.build_map(args.pluglist)
@@ -1026,6 +1071,15 @@ def main(argv: list[str] | None = None) -> int:
                             "issue filing, camp-tools#16)")
     p.add_argument("index_dir")
     p.set_defaults(func=_cmd_unknown_type_families)
+
+    p = sub.add_parser("check-name",
+                       help="is this component name in use, or has it ever "
+                            "been — aggregated across listings, removals, "
+                            "the old directory, Moodle core and the "
+                            "plugin-type registry (camp-tools#33)")
+    p.add_argument("index_dir")
+    p.add_argument("components", nargs="+")
+    p.set_defaults(func=_cmd_check_name)
 
     p = sub.add_parser("build-directory-map",
                        help="regenerate the frozen component-to-repository "
