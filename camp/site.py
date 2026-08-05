@@ -1173,6 +1173,25 @@ document.addEventListener('DOMContentLoaded', function(){
                r.check.text.indexOf('0 errors') === 0 || r.check.text === 'clean'
                  ? 'ok' : 'bad');
           if (r.check.files) chip('files', r.check.files, 'dim');
+          // AMD build-output completeness (camp-tools#4, warn-only):
+          // an orphan build file is minified code with no reviewable
+          // source in the tree; a source without its build never loads.
+          if (r.check.amd){
+            var a = r.check.amd,
+                orphans = (a.build_without_src || []).length,
+                unbuilt = (a.src_without_build || []).length;
+            if (orphans)
+              chip('amd build', orphans + ' without source', 'warn',
+                   'Minified build file(s) with no source module in the tree: '
+                   + a.build_without_src.join(', '));
+            else if (unbuilt)
+              chip('amd build', unbuilt + ' not built', 'warn',
+                   'Source module(s) with no build output: '
+                   + a.src_without_build.join(', '));
+            else
+              chip('amd build', '✓', 'ok',
+                   'Every AMD source module has its build output and vice versa');
+          }
           var groups = {};
           Object.keys(r.check.rules || {}).forEach(function(k){
             var parts = k.split('.');
@@ -1374,6 +1393,27 @@ def _check_chips(vcheck: dict) -> str:
     if vcheck.get("files"):
         chips.append(f'<span class="cchip"><span class="l">files</span>'
                      f'<span class="r dim">{vcheck["files"]}</span></span>')
+    amd = vcheck.get("amd")
+    if amd:
+        orphans = amd.get("build_without_src") or []
+        unbuilt = amd.get("src_without_build") or []
+        if orphans:
+            chips.append(f'<span class="cchip"><span class="l">amd build</span>'
+                         f'<span class="r warn" aria-label="Minified build '
+                         f'file(s) with no source module in the tree: '
+                         f'{escape(", ".join(orphans))}">'
+                         f'{len(orphans)} without source</span></span>')
+        elif unbuilt:
+            chips.append(f'<span class="cchip"><span class="l">amd build</span>'
+                         f'<span class="r warn" aria-label="Source module(s) '
+                         f'with no build output: '
+                         f'{escape(", ".join(unbuilt))}">'
+                         f'{len(unbuilt)} not built</span></span>')
+        else:
+            chips.append(f'<span class="cchip"><span class="l">amd build</span>'
+                         f'<span class="r ok" aria-label="Every AMD source '
+                         f'module has its build output and vice versa">'
+                         f'<span aria-hidden="true">✓</span></span></span>')
     for name, n in _sniff_groups(vcheck.get("rules")):
         chips.append(f'<span class="cchip"><span class="l">{escape(name)}</span>'
                      f'<span class="r warn">×{n}</span></span>')
@@ -2147,7 +2187,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                                 "tag": vcheck["tag"],
                                 "phplint": vcheck.get("phplint", True),
                                 "files": vcheck.get("files", 0),
-                                "rules": vcheck.get("rules", {})}
+                                "rules": vcheck.get("rules", {}),
+                                "amd": vcheck.get("amd")}
             # The security review follows the selected release inside the
             # install card (prerendered so the server and the picker render
             # identically); absence renders nothing, per the feed's model.

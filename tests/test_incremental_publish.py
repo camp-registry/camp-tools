@@ -119,3 +119,51 @@ def test_ingest_all_reuse_rejects_pin_mismatch(index_dir, entry_path, plugin_rep
     assert reused == 0
     assert not (out2 / "mod_example.yml").exists()
     assert any("pin" in m or "clone failed" in m for m in logs)
+
+
+def test_amd_fileset_check(tmp_path):
+    """Build-output completeness (camp-tools#4 first slice): orphan build
+    files and unbuilt sources are named; complete sets pass; plugins
+    without AMD report nothing."""
+    from camp.checks import _amd_fileset
+    root = tmp_path / "plugin"
+    (root / "amd" / "src").mkdir(parents=True)
+    (root / "amd" / "build").mkdir()
+    (root / "amd" / "src" / "app.js").write_text("//")
+    (root / "amd" / "build" / "app.min.js").write_text("//")
+    (root / "amd" / "build" / "mywords.min.js").write_text("//")
+    (root / "amd" / "src" / "helper.js").write_text("//")
+    result = _amd_fileset(root)
+    assert result["src"] == 2 and result["build"] == 2
+    assert result["build_without_src"] == ["mywords"]
+    assert result["src_without_build"] == ["helper"]
+
+    clean = tmp_path / "clean"
+    (clean / "amd" / "src").mkdir(parents=True)
+    (clean / "amd" / "build").mkdir()
+    (clean / "amd" / "src" / "app.js").write_text("//")
+    (clean / "amd" / "build" / "app.min.js").write_text("//")
+    ok = _amd_fileset(clean)
+    assert ok["build_without_src"] == [] and ok["src_without_build"] == []
+
+    assert _amd_fileset(tmp_path / "noamd") is None
+
+
+def test_amd_chip_states():
+    """Warn-only display: orphans outrank unbuilt; complete sets show a
+    check mark; absent AMD renders no chip."""
+    from camp.site import _check_chips
+    base = {"phplint": True, "errors": 0, "warnings": 0}
+    orphan = _check_chips({**base, "amd": {"src": 1, "build": 2,
+                                           "src_without_build": [],
+                                           "build_without_src": ["mywords"]}})
+    assert "1 without source" in orphan and "mywords" in orphan
+    unbuilt = _check_chips({**base, "amd": {"src": 2, "build": 1,
+                                            "src_without_build": ["helper"],
+                                            "build_without_src": []}})
+    assert "1 not built" in unbuilt and "helper" in unbuilt
+    clean = _check_chips({**base, "amd": {"src": 1, "build": 1,
+                                          "src_without_build": [],
+                                          "build_without_src": []}})
+    assert "amd build" in clean and "Every AMD source module" in clean
+    assert "amd build" not in _check_chips(base)

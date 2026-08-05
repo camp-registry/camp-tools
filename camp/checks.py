@@ -34,7 +34,7 @@ from .verify import _clone
 # publish are reusable verbatim — unless the checking itself changed.
 # Bump this when the tools or standard change; prior summaries with a
 # different (or missing) value are recomputed.
-CHECKER_VERSION = 1
+CHECKER_VERSION = 2    # 2: AMD build-output file-set check (camp-tools#4)
 
 
 def _fetch_prior(reuse: str, component: str) -> dict | None:
@@ -115,6 +115,26 @@ def _phpcs_totals(root: Path) -> dict | None:
                 "files": files_hit, "rules": top}
     except (ValueError, KeyError):
         return None
+
+
+def _amd_fileset(root: Path) -> dict | None:
+    """Build-output completeness without a rebuild — the first slice of
+    the freshness check (camp-tools#4): every module in amd/src should
+    have its amd/build counterpart and vice versa. An orphan build file
+    is minified code with no reviewable source in the tree (the
+    mod_minilesson mywords case: arrived via a contributor merge, source
+    never committed); a source without its build is a module Moodle will
+    never load. None when the plugin has no AMD at all."""
+    src_dir, build_dir = root / "amd" / "src", root / "amd" / "build"
+    if not src_dir.is_dir() and not build_dir.is_dir():
+        return None
+    src = ({p.stem for p in src_dir.glob("*.js")}
+           if src_dir.is_dir() else set())
+    build = ({p.name[:-len(".min.js")] for p in build_dir.glob("*.min.js")}
+             if build_dir.is_dir() else set())
+    return {"src": len(src), "build": len(build),
+            "src_without_build": sorted(src - build),
+            "build_without_src": sorted(build - src)}
 
 
 def for_version(doc: dict | None, version: str) -> dict | None:
@@ -198,6 +218,9 @@ def run_checks(index_dir: str | Path, out_dir: str | Path, log=print,
                     continue
                 versions[version] = {"tag": r["tag"], "commit": r["commit"],
                                      "phplint": phplint, **totals}
+                amd = _amd_fileset(repo)
+                if amd is not None:
+                    versions[version]["amd"] = amd
                 written += 1
                 log(f"checks: {component}@{version}: "
                     f"{totals['errors']} errors, {totals['warnings']} warnings")
