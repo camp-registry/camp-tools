@@ -159,6 +159,20 @@ nav{display:flex;align-items:center;flex-wrap:wrap;gap:2px 22px;
   font-family:var(--mono);font-size:0.8125rem}
 nav a{color:var(--muted)}
 nav a:hover{color:var(--ink)}
+.navgroup{position:relative}
+.nav-disclosure{background:none;border:0;cursor:pointer;font:inherit;
+  color:var(--muted);display:inline-flex;align-items:center;gap:5px;padding:0}
+.nav-disclosure:hover{color:var(--ink)}
+.nav-disclosure svg{width:11px;height:11px;stroke:currentColor;fill:none;
+  stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.nav-disclosure[aria-expanded="true"] svg{transform:rotate(180deg)}
+.navmenu[hidden]{display:none}
+.navmenu{position:absolute;right:0;top:calc(100% + 12px);z-index:60;
+  background:var(--surface);border:1px solid var(--border-strong);
+  border-radius:4px;padding:6px;display:flex;flex-direction:column;
+  min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.14)}
+.navmenu a{padding:9px 12px;border-radius:3px;white-space:nowrap}
+.navmenu a:hover{background:var(--accent-soft);color:var(--ink)}
 .theme-toggle{background:none;border:0;cursor:pointer;line-height:0;
   color:var(--muted);display:inline-flex;align-items:center;justify-content:center;
   min-width:44px;min-height:44px;padding:8px;margin:-13px -8px}
@@ -589,6 +603,7 @@ a.adv:hover b,a.adv:focus-visible b{text-decoration:underline}
   .install-card select{font-size:1rem}
   /* touch targets on the most-used controls; desktop keeps its density */
   nav a{padding:8px 0}
+  .nav-disclosure{padding:8px 0}
   .theme-toggle{padding:10px;margin:-10px}
   .sortbtn{padding:9px 12px}
   .facet,.facet-more{padding:11px 10px}
@@ -677,6 +692,25 @@ THEME_JS = """
       try { localStorage.setItem('camp-theme', saved); } catch(e){}
       apply();
     });
+
+    // "Get involved" nav disclosure: click toggles, Escape closes and
+    // returns focus, clicking elsewhere closes.
+    var nb = document.getElementById('nav-involved'),
+        nm = document.getElementById('nav-involved-menu');
+    if (nb && nm){
+      function navClose(){ nm.hidden = true; nb.setAttribute('aria-expanded', 'false'); }
+      nb.addEventListener('click', function(){
+        var willOpen = nm.hidden;
+        nm.hidden = !willOpen;
+        nb.setAttribute('aria-expanded', String(willOpen));
+      });
+      document.addEventListener('click', function(e){
+        if (!nm.hidden && !e.target.closest('.navgroup')) navClose();
+      });
+      document.addEventListener('keydown', function(e){
+        if (e.key === 'Escape' && !nm.hidden){ navClose(); nb.focus(); }
+      });
+    }
   });
 })();
 """
@@ -820,6 +854,16 @@ BROWSE_JS = """
   var facets = [].slice.call(document.querySelectorAll('.facet')).map(function(f){
     return {el:f, g:f.dataset.facet, v:f.dataset.value, n:f.querySelector('.n')};
   });
+  // The grouped type list renders popular facets twice (top list and
+  // category position); count each (group, value) once and render the
+  // shared count into every element carrying it (camp-tools#36).
+  var seenFacetKeys = {};
+  var countFacets = facets.filter(function(f){
+    var key = f.g + '|' + f.v;
+    if (seenFacetKeys[key]) return false;
+    seenFacetKeys[key] = true;
+    return true;
+  });
 
   // The single place toggle state is rendered: the class and the ARIA
   // state can never diverge, whatever path (click, restore, clear) led here.
@@ -836,8 +880,8 @@ BROWSE_JS = """
     for (var k = 0; k < data.length; k++){
       var o = data[k], fl = passes(o);
       if (allPass(fl)) matched.push(o);
-      for (var j = 0; j < facets.length; j++){
-        var f = facets[j];
+      for (var j = 0; j < countFacets.length; j++){
+        var f = countFacets[j];
         var others = (f.g !== 'q' ? fl.q : true)
           && (f.g === 'group' ? true : fl.group)
           && (f.g === 'ver' ? true : fl.ver)
@@ -1494,13 +1538,21 @@ def _page(title: str, body: str, *, description: str = "", extra_js: str = "") -
 def _header() -> str:
     inner = f"""
   <a class="wordmark" href="/"><b>CAMP</b>
-    <small>Community Archive of Plugins for Moodle</small></a>
+    <small>Community Archive of Moodle Plugins</small></a>
   <nav aria-label="Primary">
     <a href="/">Browse</a>
     <a href="/how-it-works.html">How it works</a>
-    <a href="/authors.html">Publish<span class="nav-xtra"> your plugin</span></a>
-    <a href="/names.html">Names</a>
-    <a href="{MIRROR_URL}">Mirror<span class="nav-xtra"> this archive</span></a>
+    <div class="navgroup">
+      <button class="nav-disclosure" id="nav-involved" aria-expanded="false"
+        aria-controls="nav-involved-menu">Get involved
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="navmenu" id="nav-involved-menu" hidden>
+        <a href="/authors.html">Publish your plugin</a>
+        <a href="/names.html">Check a component name</a>
+        <a href="{MIRROR_URL}">Mirror this archive</a>
+      </div>
+    </div>
     <button class="theme-toggle" id="theme-toggle" aria-label="Switch theme">
       <svg class="ic-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
       <svg class="ic-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
