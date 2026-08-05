@@ -733,7 +733,7 @@ def _cmd_check_collisions(args: argparse.Namespace) -> int:
 
 
 def _cmd_scan_report(args: argparse.Namespace) -> int:
-    from .scan import load_ledger
+    from .scan import load_ledger, unknown_type_families
     ledger = load_ledger(args.index_dir)
     if not ledger:
         print("scan ledger is empty — run `camp scan` first")
@@ -744,10 +744,27 @@ def _cmd_scan_report(args: argparse.Namespace) -> int:
     print(f"{len(ledger)} repositories evaluated:")
     for outcome, records in sorted(by_outcome.items()):
         print(f"  {len(records):4d} {outcome}")
+    families = unknown_type_families(args.index_dir)
+    if families:
+        print(f"\n{len(families)} unknown plugin-type prefix(es) awaiting "
+              f"family establishment review (camp-tools#16):")
+        for prefix, members in families.items():
+            print(f"  {prefix} ({len(members)} member(s))")
+            for repo, record in members:
+                print(f"    {repo:<53} {record['detail']}")
     if args.outcome:
         print()
         for repo, record in sorted(by_outcome.get(args.outcome, [])):
             print(f"  {repo:<55} {record['detail']}  (last checked {record['last-checked']})")
+    return 0
+
+
+def _cmd_unknown_type_families(args: argparse.Namespace) -> int:
+    from .scan import unknown_type_families
+    for prefix, members in unknown_type_families(args.index_dir).items():
+        detail = members[0][1]["detail"]
+        repos = ",".join(repo for repo, _ in members)
+        print(f"{prefix}\t{len(members)}\t{repos}\t{detail}")
     return 0
 
 
@@ -976,6 +993,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--write", action="store_true",
                    help="rewrite camp/standardplugins.json from upstream")
     p.set_defaults(func=_cmd_check_standard_plugins)
+
+    p = sub.add_parser("unknown-type-families",
+                       help="TSV of unknown-plugin-type prefixes awaiting "
+                            "family establishment review, one line per "
+                            "prefix (drives the scan workflow's per-family "
+                            "issue filing, camp-tools#16)")
+    p.add_argument("index_dir")
+    p.set_defaults(func=_cmd_unknown_type_families)
 
     p = sub.add_parser("check-plugin-types",
                        help="check the committed plugin-type table against "

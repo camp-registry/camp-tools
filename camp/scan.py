@@ -35,7 +35,7 @@ from pathlib import Path
 
 import yaml
 
-from . import versionphp
+from . import plugintypes, versionphp
 
 USER_AGENT = "camp-seeding-scanner/0.1 (community Moodle plugin repository)"
 # Frankenstyle plugin-type prefixes, used to build targeted name searches.
@@ -165,10 +165,55 @@ def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
     }
     # Collision-class outcomes carry the component explicitly so the
     # claim-time check in index CI can grep the ledger without parsing
-    # detail strings.
-    if component and outcome in ("copy", "name-collision"):
+    # detail strings; unknown-type needs-review records carry it so the
+    # family report can group members by prefix (name-mismatch records
+    # pass no component and are unchanged).
+    if component and outcome in ("copy", "name-collision", "needs-review"):
         entry["component"] = component
     ledger[candidate.full_name] = entry
+
+
+def unknown_type_detail(index: Path, component: str, version_text: str | None,
+                        established: dict) -> str | None:
+    """The needs-review reason when the component's type prefix is neither
+    a core plugin type nor an established third-party family, else None
+    (camp-tools#16). Author intent decides whether a subplugin family
+    lists, so first contact with a new prefix stops here for one human
+    establishment review; once the family is recorded in the index's
+    subplugin-families file, members flow again on the recheck window. The
+    reason carries parent evidence when the candidate's version.php
+    declares a dependency on a listed component."""
+    prefix = component.partition("_")[0]
+    if prefix in plugintypes.known_prefixes(established):
+        return None
+    evidence = ""
+    for dep in versionphp.parse_dependencies(version_text or ""):
+        dep_type = dep.partition("_")[0]
+        if (index / "plugins" / dep_type / f"{dep}.yml").exists():
+            evidence = f"; declares dependency on listed {dep}"
+            break
+    return (f"unknown plugin type '{prefix}'{evidence}; family "
+            f"establishment review required before listing (camp-tools#16)")
+
+
+def unknown_type_families(index_dir: str | Path) -> dict[str, list[tuple[str, dict]]]:
+    """Ledger's unknown-type needs-review records grouped by type prefix:
+    the establishment review queue. Prefixes that became known since their
+    records were written (family established, or a new core type arrived
+    with a table refresh) drop out here — their members relist via the
+    recheck window without ledger surgery."""
+    index = Path(index_dir)
+    established = plugintypes.load_established(index)
+    known = plugintypes.known_prefixes(established)
+    families: dict[str, list[tuple[str, dict]]] = {}
+    for repo, record in load_ledger(index).items():
+        if (record.get("outcome") == "needs-review"
+                and record.get("detail", "").startswith("unknown plugin type")
+                and record.get("component")):
+            prefix = record["component"].partition("_")[0]
+            if prefix not in known:
+                families.setdefault(prefix, []).append((repo, record))
+    return {prefix: sorted(families[prefix]) for prefix in sorted(families)}
 
 
 def _request(url: str, token: str | None, retries: int = 3,
@@ -974,6 +1019,7 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
     index = Path(index_dir)
     today = datetime.date.today().isoformat()
     ledger = load_ledger(index)
+    established = plugintypes.load_established(index)
     results: list[ScanResult] = []
 
     targets = [name for name, record in ledger.items()
@@ -1041,6 +1087,13 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             record_outcome(ledger, candidate, outcome, detail, today,
                            component=component)
             results.append(ScanResult(candidate, outcome, component))
+            continue
+
+        unknown = unknown_type_detail(index, component, _version_text, established)
+        if unknown:
+            record_outcome(ledger, candidate, "needs-review", unknown, today,
+                           component=component)
+            results.append(ScanResult(candidate, "needs-review", component))
             continue
 
         if not dry_run:
@@ -1411,6 +1464,7 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
     index = Path(index_dir)
     today = datetime.date.today().isoformat()
     ledger = load_ledger(index)
+    established = plugintypes.load_established(index)
 
     seen_repos: set[str] = set()
     seen_components: set[str] = set()
@@ -1478,6 +1532,14 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 results.append(ScanResult(candidate, "needs-review", component))
                 continue
 
+            unknown = unknown_type_detail(index, component, version_text,
+                                          established)
+            if unknown:
+                record_outcome(ledger, candidate, "needs-review", unknown,
+                               today, component=component)
+                results.append(ScanResult(candidate, "needs-review", component))
+                continue
+
             if not dry_run:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(out_path, "w") as f:
@@ -1505,6 +1567,7 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
     index = Path(index_dir)
     today = datetime.date.today().isoformat()
     ledger = load_ledger(index)
+    established = plugintypes.load_established(index)
 
     seen_repos: set[str] = set()
     seen_components: set[str] = set()
@@ -1584,6 +1647,14 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                                component=component)
                 results.append(ScanResult(candidate, outcome, component))
                 seen_components.add(component)
+                continue
+
+            unknown = unknown_type_detail(index, component, version_text,
+                                          established)
+            if unknown:
+                record_outcome(ledger, candidate, "needs-review", unknown,
+                               today, component=component)
+                results.append(ScanResult(candidate, "needs-review", component))
                 continue
 
             if not dry_run:

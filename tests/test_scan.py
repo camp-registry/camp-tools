@@ -806,3 +806,94 @@ def test_site_depends_on_listed_and_unbundled_composes(index_dir, tmp_path):
     html = (out / "plugin" / "mod_example.html").read_text()
     assert ('<a class="mono" href="/plugin/mod_chat.html">mod_chat</a>'
             " · ships with Moodle up to 4.5 · separate install from 5.0") in html
+
+
+# --- unknown-plugin-type gate (camp-tools#16) --------------------------------
+
+CUSTOMCERT_PHP = ("<?php\n// GNU General Public License version 3\n"
+                  "$plugin->component = 'customcertelement_foo';\n"
+                  "$plugin->dependencies = ['mod_customcert' => 2024042200];\n")
+
+
+def _type_gate_index(tmp_path):
+    index = tmp_path / "index"
+    (index / "plugins" / "mod").mkdir(parents=True)
+    (index / "plugins" / "mod" / "mod_customcert.yml").write_text(
+        "component: mod_customcert\n")
+    return index
+
+
+def test_scan_parks_unknown_type_prefix(tmp_path, monkeypatch):
+    """First contact with an unknown subplugin family goes to needs-review
+    with parent evidence and no entry written; the ledger record carries
+    the component so the family report can group members by prefix."""
+    import camp.scan as scan
+    index = _type_gate_index(tmp_path)
+    candidate = _candidate(full_name="o/moodle-customcertelement_foo",
+                           html_url="https://github.com/o/moodle-customcertelement_foo")
+    monkeypatch.setattr(scan, "_search", lambda *a, **k: ([candidate], 1))
+    monkeypatch.setattr(scan, "_fetch_component",
+                        lambda c, t, log=None: ("ok", "customcertelement_foo",
+                                                CUSTOMCERT_PHP))
+
+    results = scan.scan(index, queries=["x"], limit=1, token="fake")
+    assert results[0].outcome == "needs-review"
+    assert not (index / "plugins" / "customcertelement").exists()
+    record = scan.load_ledger(index)["o/moodle-customcertelement_foo"]
+    assert record["component"] == "customcertelement_foo"
+    assert record["detail"].startswith("unknown plugin type 'customcertelement'")
+    assert "declares dependency on listed mod_customcert" in record["detail"]
+
+    from camp.scan import unknown_type_families
+    families = unknown_type_families(index)
+    assert list(families) == ["customcertelement"]
+    assert families["customcertelement"][0][0] == "o/moodle-customcertelement_foo"
+
+
+def test_scan_lists_established_family_member(tmp_path, monkeypatch):
+    """Once the family is recorded in discovery/subplugin-families.yml the
+    same member lists like any known type, and the family report is empty
+    even while old parked records remain in the ledger."""
+    import camp.scan as scan
+    index = _type_gate_index(tmp_path)
+    families_file = index / "discovery" / "subplugin-families.yml"
+    families_file.parent.mkdir(parents=True)
+    families_file.write_text(
+        "customcertelement:\n"
+        "  parent: mod_customcert\n"
+        "  name: Certificate elements\n")
+    candidate = _candidate(full_name="o/moodle-customcertelement_foo",
+                           html_url="https://github.com/o/moodle-customcertelement_foo")
+    monkeypatch.setattr(scan, "_search", lambda *a, **k: ([candidate], 1))
+    monkeypatch.setattr(scan, "_fetch_component",
+                        lambda c, t, log=None: ("ok", "customcertelement_foo",
+                                                CUSTOMCERT_PHP))
+
+    results = scan.scan(index, queries=["x"], limit=1, token="fake")
+    assert results[0].outcome == "written"
+    assert (index / "plugins" / "customcertelement"
+            / "customcertelement_foo.yml").exists()
+    from camp.scan import unknown_type_families
+    assert unknown_type_families(index) == {}
+
+
+def test_unknown_type_families_ignores_name_mismatch_records(tmp_path):
+    """Only unknown-type records feed the family queue; the long-standing
+    name-mismatch needs-review class carries no component and stays out."""
+    import camp.scan as scan
+    index = tmp_path / "index"
+    (index / "discovery").mkdir(parents=True)
+    ledger = {}
+    scan.record_outcome(ledger, _candidate(full_name="o/weird-name"),
+                        "needs-review",
+                        "declares mod_x but repo name does not correspond; "
+                        "human sign-off required before listing (RFC §8)",
+                        "2026-08-05")
+    scan.record_outcome(ledger, _candidate(full_name="o/moodle-floreamui_a"),
+                        "needs-review",
+                        "unknown plugin type 'floreamui'; family establishment "
+                        "review required before listing (camp-tools#16)",
+                        "2026-08-05", component="floreamui_a")
+    scan.save_ledger(index, ledger)
+    families = scan.unknown_type_families(index)
+    assert list(families) == ["floreamui"]
