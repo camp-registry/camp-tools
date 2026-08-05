@@ -172,6 +172,10 @@ def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
     if component and outcome in ("copy", "name-collision", "needs-review",
                                  "core-component"):
         entry["component"] = component
+    # non-GitHub rows carry their host so review surfaces can link them;
+    # GitHub is the default and stays implicit (camp-tools#31)
+    if candidate.platform == "gitlab":
+        entry["host"] = "gitlab.com"
     ledger[candidate.full_name] = entry
 
 

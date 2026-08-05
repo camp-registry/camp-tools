@@ -1041,3 +1041,40 @@ def test_scan_rejects_pure_core_component(tmp_path, monkeypatch):
     record = scan.load_ledger(index)["o/moodle-mod_quiz"]
     assert record["component"] == "mod_quiz"
     assert "ships with every supported Moodle" in record["detail"]
+
+
+def test_scan_report_html_review_page(tmp_path):
+    """The operator review page (camp-tools#31): reason-grouped queues,
+    host-aware repo links, bulk classes as counts only."""
+    import camp.scan as scan
+    from camp import scanreport
+    index = tmp_path / "index"
+    (index / "discovery").mkdir(parents=True)
+    (index / "plugins").mkdir()
+    ledger = {}
+    scan.record_outcome(ledger, _candidate(full_name="o/moodle-floreamui_a"),
+                        "needs-review",
+                        "unknown plugin type 'floreamui'; family establishment "
+                        "review required before listing (camp-tools#16)",
+                        "2026-08-05", component="floreamui_a")
+    scan.record_outcome(ledger, _candidate(full_name="grp/sub/moodle-mod_x",
+                                           platform="gitlab"),
+                        "needs-review",
+                        "the old moodle.org directory published "
+                        "https://github.com/o/x for mod_x; listing a different "
+                        "repository needs the repoint evidence standard first "
+                        "(camp-tools#30)", "2026-08-05", component="mod_x")
+    scan.record_outcome(ledger, _candidate(full_name="o/moodle-junk"),
+                        "no-version-php", "no parseable version.php",
+                        "2026-08-05")
+    scan.save_ledger(index, ledger)
+
+    html = scanreport.render(index)
+    assert "Unknown plugin types" in html and "floreamui_a" in html
+    assert "Directory-anchor mismatches" in html
+    # gitlab host marker drives the link; github rows default
+    assert 'href="https://gitlab.com/grp/sub/moodle-mod_x"' in html
+    assert 'href="https://github.com/o/moodle-floreamui_a"' in html
+    # bulk classes are counts, not tables
+    assert "no-version-php 1" in html
+    assert "moodle-junk</a>" not in html

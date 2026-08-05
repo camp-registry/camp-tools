@@ -743,6 +743,11 @@ def _cmd_check_collisions(args: argparse.Namespace) -> int:
 
 def _cmd_scan_report(args: argparse.Namespace) -> int:
     from .scan import listed_unknown_types, load_ledger, unknown_type_families
+    if args.html:
+        from . import scanreport
+        scanreport.write(args.index_dir, args.html)
+        print(f"review page written to {args.html}")
+        return 0
     ledger = load_ledger(args.index_dir)
     if not ledger:
         print("scan ledger is empty — run `camp scan` first")
@@ -1091,6 +1096,9 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=_cmd_check_collisions)
 
     p = sub.add_parser("scan-report", help="summarize the scan ledger (rejections and why)")
+    p.add_argument("--html", metavar="FILE",
+                   help="write a self-contained operator review page instead "
+                        "of the terminal summary (camp-tools#31)")
     p.add_argument("index_dir")
     p.add_argument("--outcome", help="list all repos with this outcome (e.g. bad-license)")
     p.set_defaults(func=_cmd_scan_report)
