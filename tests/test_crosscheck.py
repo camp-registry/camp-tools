@@ -188,3 +188,39 @@ def test_dependency_xref_standard_and_unbundled_classes(tmp_path):
     # newest unbundlings sort first
     branches = [b for _, b in xref["unbundled-unlisted"]]
     assert branches == sorted(branches, key=lambda b: -float(b))
+
+
+def test_reviewed_verdicts_suppress_and_self_invalidate(tmp_path):
+    """A recorded verdict for the exact pair classifies as reviewed and
+    skips the probes; a changed pair on either side resurfaces
+    (camp-tools#32)."""
+    import yaml
+    from camp.crosscheck import crosscheck
+
+    index = tmp_path / "index"
+    d = index / "plugins" / "mod"
+    d.mkdir(parents=True)
+    yaml.safe_dump({"component": "mod_kept", "source": "https://github.com/keeper/moodle-mod_kept",
+                    "maintainers": [{"github": "keeper"}], "tier": 0,
+                    "status": "active", "releases": []}, open(d / "mod_kept.yml", "w"))
+    yaml.safe_dump({"component": "mod_moved", "source": "https://github.com/newhome/moodle-mod_moved",
+                    "maintainers": [{"github": "newhome"}], "tier": 0,
+                    "status": "active", "releases": []}, open(d / "mod_moved.yml", "w"))
+    v = index / "discovery"
+    v.mkdir()
+    (v / "crosscheck-verdicts.yml").write_text(
+        "mod_kept:\n"
+        "  verdict: keep\n"
+        "  camp: https://github.com/keeper/moodle-mod_kept\n"
+        "  directory: https://github.com/origin/moodle-mod_kept\n"
+        "mod_moved:\n"
+        "  verdict: keep\n"
+        "  camp: https://github.com/oldhome/moodle-mod_moved\n"
+        "  directory: https://github.com/origin/moodle-mod_moved\n")
+
+    pluglist = {"mod_kept": "https://github.com/origin/moodle-mod_kept",
+                "mod_moved": "https://github.com/origin/moodle-mod_moved"}
+    classes = crosscheck(index, pluglist, probe=False, log=lambda *_: None)
+    assert [r[0] for r in classes["reviewed"]] == ["mod_kept"]
+    # mod_moved's camp source changed since the verdict: it resurfaces
+    assert [r[0] for r in classes["independent"]] == ["mod_moved"]

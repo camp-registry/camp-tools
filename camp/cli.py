@@ -660,9 +660,10 @@ def _cmd_crosscheck_directory(args: argparse.Namespace) -> int:
     classes = crosscheck(args.index_dir, pluglist, probe=not args.no_probe,
                          log=lambda m: print(m, file=sys.stderr))
     write_reports(classes, args.out)
-    for name in ("match", "same-owner", "owner-alias", "directory-dead",
-                 "shared-history", "independent", "probe-failed",
-                 "claimed-differs", "missing", "removed-by-request"):
+    for name in ("match", "reviewed", "same-owner", "owner-alias",
+                 "directory-dead", "shared-history", "independent",
+                 "probe-failed", "claimed-differs", "missing",
+                 "removed-by-request"):
         print(f"{len(classes[name]):5d} {name}")
     print(f"reports written to {args.out} (match omitted; exceptions only)")
     return 0

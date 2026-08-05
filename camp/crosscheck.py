@@ -71,6 +71,29 @@ def _repo_alive(url: str) -> bool | None:
     return probe.returncode == 0
 
 
+VERDICTS_PATH = "discovery/crosscheck-verdicts.yml"
+
+
+def load_verdicts(index_dir: str | Path) -> dict:
+    """Recorded review verdicts from the index tree (camp-tools#32):
+    {component: {verdict, camp, directory, decided, record}}. A verdict
+    pins the exact pair it was decided for; when either side changes the
+    pair stops matching and the row resurfaces on its own. Missing file
+    means none recorded; the registry's own data must parse."""
+    path = Path(index_dir) / VERDICTS_PATH
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        doc = yaml.safe_load(f) or {}
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path}: expected a mapping of component -> record")
+    for component, record in doc.items():
+        if not isinstance(record, dict) or not {"camp", "directory"} <= set(record):
+            raise ValueError(f"{path}: verdict for '{component}' needs a "
+                             "mapping with at least 'camp' and 'directory'")
+    return doc
+
+
 def crosscheck(index_dir: str | Path, pluglist: dict[str, str],
                token: str | None = None, probe: bool = True,
                log=print) -> dict[str, list]:
@@ -95,8 +118,9 @@ def crosscheck(index_dir: str | Path, pluglist: dict[str, str],
     opted_out = {key.lower() for key, rec in load_ledger(index).items()
                  if rec.get("outcome") == "opted-out"}
 
+    verdicts = load_verdicts(index)
     classes: dict[str, list] = {name: [] for name in (
-        "match", "claimed-differs", "same-owner", "owner-alias",
+        "match", "claimed-differs", "reviewed", "same-owner", "owner-alias",
         "directory-dead", "shared-history", "independent", "probe-failed",
         "missing", "removed-by-request")}
 
@@ -116,6 +140,15 @@ def crosscheck(index_dir: str | Path, pluglist: dict[str, str],
             continue
         if entry.get("tier", 0) >= 1:
             classes["claimed-differs"].append(row)
+            continue
+        # a recorded verdict for exactly this pair means a human already
+        # reviewed it (camp-tools#32): out of the queues, no probe spent;
+        # a changed pair falls through and resurfaces
+        verdict = verdicts.get(component)
+        if (verdict
+                and _norm(_repo_url(camp_url)) == _norm(verdict["camp"])
+                and _norm(_repo_url(dir_url)) == _norm(verdict["directory"])):
+            classes["reviewed"].append(row)
             continue
         camp_owner, dir_owner = _owner(camp_url), _owner(dir_url)
         if camp_owner == dir_owner:
