@@ -1548,6 +1548,7 @@ def _header() -> str:
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="navmenu" id="nav-involved-menu" hidden>
+        <a href="/contribute.html">Contribute</a>
         <a href="/authors.html">Publish your plugin</a>
         <a href="/names.html">Check a component name</a>
         <a href="{MIRROR_URL}">Mirror this archive</a>
@@ -2671,6 +2672,71 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
 # ---------------------------------------------------------------- how ------
 
 
+def _contribute_page() -> str:
+    """How to help run the registry (/contribute.html): unprivileged work
+    lanes that exist today, plus the private application channel for the
+    operations and review-board roles. Applications are confidential;
+    appointments are announced — the same private-intake/public-record
+    split the security process uses. No forms, no accounts: intake is
+    email or Matrix, contribution is showing up on the work itself."""
+    email = "volunteer@camp-registry.org"
+    body = f"""
+{_header()}
+<div class="detail">
+<main id="main-content" tabindex="-1">
+  <h1>Contribute</h1>
+  <p class="dsummary">CAMP is community-run. Everything below is real,
+  current work — pick something and show up; no sign-up, no forms.</p>
+
+  <h2 class="sect">Work anyone can pick up</h2>
+  <div class="kv">
+    <div class="kvrow"><span class="fk">Review queues</span>
+      <span class="fv">Help verify listings against their sources: the
+      <a href="https://github.com/camp-registry/camp-index/issues/21">name-mismatch
+      review queue</a> needs human eyes per entry, and the
+      <a href="https://github.com/camp-registry/camp-index/issues/204">seeding
+      worklist</a> needs candidates checked before admission. Evidence
+      posted on those issues is contribution.</span></div>
+    <div class="kvrow"><span class="fk">Words and docs</span>
+      <span class="fv">Plugin-type display names, documentation fixes,
+      and guide improvements — file or comment on
+      <a href="https://github.com/camp-registry/camp-tools/issues">camp-tools</a>
+      or <a href="https://github.com/camp-registry/camp-docs/issues">camp-docs</a>
+      issues.</span></div>
+    <div class="kvrow"><span class="fk">Test the client</span>
+      <span class="fv">The Moodle admin plugin that installs from this
+      archive: <a href="https://github.com/camp-registry/moodle-tool_camp">moodle-tool_camp</a>.
+      Trying it on your site and reporting what breaks is exactly the
+      help it needs.</span></div>
+    <div class="kvrow"><span class="fk">Run a mirror</span>
+      <span class="fv">The whole archive is a static tree built for
+      mirroring: <a href="{MIRROR_URL}">MIRRORING.md</a>.</span></div>
+  </div>
+
+  <h2 class="sect">Registry roles</h2>
+  <p class="dsummary" style="font-size:0.9375rem">Two standing roles are
+  being formalized. <b>Registry operations</b> helps run the day to day:
+  working claim and release pull requests, removal and seed requests,
+  and author questions, following the public
+  <a href="https://github.com/camp-registry/camp-docs/tree/main/runbooks">runbooks</a>.
+  The <b>review board</b> performs the code reviews behind the Reviewed
+  tier. Both admit from demonstrated contribution, and the governance
+  document defining them is being drafted in the open.</p>
+  <div class="kv">
+    <div class="kvrow"><span class="fk">Apply privately</span>
+      <span class="fv">Interested in either role? Write to
+      <a href="mailto:{email}">{email}</a> (reaches the registry lead
+      only) or message the lead in the CAMP Matrix room. Applications
+      are confidential and never published; appointments are announced
+      when someone accepts a role.</span></div>
+  </div>
+</main></div>
+{_footer()}"""
+    return _page("Contribute · CAMP", body,
+                 description="How to help run CAMP: review queues, docs, "
+                             "mirrors, and the registry's standing roles.")
+
+
 def _names_page() -> str:
     """Component-name lookup at /names.html (camp-tools#33): a client-side
     check against /names.json, which unions every authority the registry
@@ -3023,6 +3089,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     (out / "names.json").write_text(json.dumps(
         names_mod.names_dataset(index_dir), separators=(",", ":")))
     (out / "names.html").write_text(_names_page())
+    (out / "contribute.html").write_text(_contribute_page())
     removals = sorted(names_mod.removals(Path(index_dir)).items(),
                       key=lambda kv: kv[1].get("last-checked", ""),
                       reverse=True)
