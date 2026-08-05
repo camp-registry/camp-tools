@@ -1179,11 +1179,16 @@ document.addEventListener('DOMContentLoaded', function(){
           if (r.check.amd){
             var a = r.check.amd,
                 orphans = (a.build_without_src || []).length,
+                stale = (a.stale || []).length,
                 unbuilt = (a.src_without_build || []).length;
             if (orphans)
               chip('amd build', orphans + ' without source', 'warn',
                    'Minified build file(s) with no source module in the tree: '
                    + a.build_without_src.join(', '));
+            else if (stale)
+              chip('amd build', stale + ' stale', 'warn',
+                   'Source module(s) edited after their build output was last built: '
+                   + a.stale.join(', '));
             else if (unbuilt)
               chip('amd build', unbuilt + ' not built', 'warn',
                    'Source module(s) with no build output: '
@@ -1397,12 +1402,19 @@ def _check_chips(vcheck: dict) -> str:
     if amd:
         orphans = amd.get("build_without_src") or []
         unbuilt = amd.get("src_without_build") or []
+        stale = amd.get("stale") or []
         if orphans:
             chips.append(f'<span class="cchip"><span class="l">amd build</span>'
                          f'<span class="r warn" aria-label="Minified build '
                          f'file(s) with no source module in the tree: '
                          f'{escape(", ".join(orphans))}">'
                          f'{len(orphans)} without source</span></span>')
+        elif stale:
+            chips.append(f'<span class="cchip"><span class="l">amd build</span>'
+                         f'<span class="r warn" aria-label="Source module(s) '
+                         f'edited after their build output was last built: '
+                         f'{escape(", ".join(stale))}">'
+                         f'{len(stale)} stale</span></span>')
         elif unbuilt:
             chips.append(f'<span class="cchip"><span class="l">amd build</span>'
                          f'<span class="r warn" aria-label="Source module(s) '

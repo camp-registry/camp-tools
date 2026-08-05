@@ -34,7 +34,7 @@ from .verify import _clone
 # publish are reusable verbatim — unless the checking itself changed.
 # Bump this when the tools or standard change; prior summaries with a
 # different (or missing) value are recomputed.
-CHECKER_VERSION = 2    # 2: AMD build-output file-set check (camp-tools#4)
+CHECKER_VERSION = 3    # 3: AMD build staleness by git dates (camp-tools#4)
 
 
 def _fetch_prior(reuse: str, component: str) -> dict | None:
@@ -137,6 +137,36 @@ def _amd_fileset(root: Path) -> dict | None:
             "build_without_src": sorted(build - src)}
 
 
+def _amd_stale(repo: Path, fileset: dict) -> list[str]:
+    """Modules whose source was committed after their build output was
+    last built — the second slice of the freshness check (camp-tools#4).
+    Judged at the checked-out release commit from git history alone: the
+    tool_moodlebox case (source fixed in 2022, shipped build from 2017,
+    so installed sites never ran the fix) is exactly this shape. Modules
+    already flagged by the file-set check are excluded; a comment-only
+    source edit can flag a rebuild-clean module, which is why this
+    displays warn-only."""
+    def last_commit(path: str) -> int | None:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "log", "-1", "--format=%ct",
+             "HEAD", "--", path],
+            capture_output=True, text=True)
+        out = result.stdout.strip()
+        return int(out) if out else None
+
+    src_names = {p.stem for p in (repo / "amd" / "src").glob("*.js")} \
+        if (repo / "amd" / "src").is_dir() else set()
+    flagged = set(fileset.get("src_without_build", [])) \
+        | set(fileset.get("build_without_src", []))
+    stale = []
+    for name in sorted(src_names - flagged):
+        src_date = last_commit(f"amd/src/{name}.js")
+        build_date = last_commit(f"amd/build/{name}.min.js")
+        if src_date and build_date and src_date > build_date:
+            stale.append(name)
+    return stale
+
+
 def for_version(doc: dict | None, version: str) -> dict | None:
     if not doc:
         return None
@@ -220,6 +250,7 @@ def run_checks(index_dir: str | Path, out_dir: str | Path, log=print,
                                      "phplint": phplint, **totals}
                 amd = _amd_fileset(repo)
                 if amd is not None:
+                    amd["stale"] = _amd_stale(repo, amd)
                     versions[version]["amd"] = amd
                 written += 1
                 log(f"checks: {component}@{version}: "

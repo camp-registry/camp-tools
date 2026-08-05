@@ -167,3 +167,55 @@ def test_amd_chip_states():
                                           "build_without_src": []}})
     assert "amd build" in clean and "Every AMD source module" in clean
     assert "amd build" not in _check_chips(base)
+
+
+def test_amd_stale_by_git_dates(tmp_path):
+    """A source committed after its build output flags stale; a build
+    committed with or after its source does not; file-set-flagged
+    modules stay out of the stale list (camp-tools#4 slice two)."""
+    import subprocess
+    from camp.checks import _amd_fileset, _amd_stale
+
+    repo = tmp_path / "repo"
+    (repo / "amd" / "src").mkdir(parents=True)
+    (repo / "amd" / "build").mkdir()
+
+    def git(*args, env_time=None):
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+               "PATH": "/usr/bin:/bin"}
+        if env_time:
+            env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = env_time
+        subprocess.run(["git", "-C", str(repo), *args],
+                       check=True, capture_output=True, env=env)
+
+    git("init", "-q")
+    (repo / "amd" / "src" / "fresh.js").write_text("// v1")
+    (repo / "amd" / "build" / "fresh.min.js").write_text("//v1")
+    (repo / "amd" / "src" / "timediff.js").write_text("// v1")
+    (repo / "amd" / "build" / "timediff.min.js").write_text("//v1")
+    git("add", "-A")
+    git("commit", "-qm", "initial build", env_time="2017-04-14T12:00:00")
+    (repo / "amd" / "src" / "timediff.js").write_text("// v2 fix")
+    git("add", "-A")
+    git("commit", "-qm", "fix alignment", env_time="2022-08-04T12:00:00")
+
+    fileset = _amd_fileset(repo)
+    assert fileset["build_without_src"] == [] and fileset["src_without_build"] == []
+    assert _amd_stale(repo, fileset) == ["timediff"]
+
+
+def test_amd_stale_chip():
+    from camp.site import _check_chips
+    base = {"phplint": True, "errors": 0, "warnings": 0}
+    html = _check_chips({**base, "amd": {"src": 2, "build": 2,
+                                         "src_without_build": [],
+                                         "build_without_src": [],
+                                         "stale": ["timediff"]}})
+    assert "1 stale" in html and "timediff" in html
+    # orphans outrank stale
+    both = _check_chips({**base, "amd": {"src": 2, "build": 3,
+                                         "src_without_build": [],
+                                         "build_without_src": ["mywords"],
+                                         "stale": ["timediff"]}})
+    assert "without source" in both and "1 stale" not in both
