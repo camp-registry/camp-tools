@@ -919,3 +919,92 @@ def test_listed_unknown_types_hygiene_queue(tmp_path):
     queue = scan.listed_unknown_types(index)
     assert queue == {"archivingmod": [],
                      "floreamui": ["floreamui_bootstrap"]}
+
+
+# --- bundled-member shadowing probe (camp-tools#16) --------------------------
+
+def _shadow_index(tmp_path):
+    index = tmp_path / "index"
+    (index / "plugins" / "mod").mkdir(parents=True)
+    (index / "plugins" / "mod" / "mod_customcert.yml").write_text(
+        "component: mod_customcert\n"
+        "source: https://github.com/mdjnelson/moodle-mod_customcert\n")
+    return index
+
+
+SHADOW_ESTABLISHED = {"customcertelement": {"parent": "mod_customcert",
+                                            "name": "Certificate elements"}}
+RAW = "https://raw.githubusercontent.com/mdjnelson/moodle-mod_customcert/HEAD"
+
+
+def _shadow_fetch(url):
+    import json as _json
+    if url == f"{RAW}/db/subplugins.json":
+        return 200, _json.dumps({
+            "subplugintypes": {"customcertelement": "element"},
+            "plugintypes": {"customcertelement": "mod/customcert/element"}})
+    if url == f"{RAW}/element/date/version.php":
+        return 200, "<?php // bundled element"
+    return 404, ""
+
+
+def test_bundled_shadow_detected_and_clean_name_passes(tmp_path):
+    import camp.scan as scan
+    index = _shadow_index(tmp_path)
+    detail = scan.bundled_shadow_detail(index, "customcertelement_date",
+                                        SHADOW_ESTABLISHED, fetch=_shadow_fetch)
+    assert "bundles a subplugin of the same name" in detail
+    assert "element/date" in detail
+    assert scan.bundled_shadow_detail(index, "customcertelement_progressbar",
+                                      SHADOW_ESTABLISHED,
+                                      fetch=_shadow_fetch) is None
+    # non-family components and unknown prefixes are not probed
+    assert scan.bundled_shadow_detail(index, "block_x", SHADOW_ESTABLISHED,
+                                      fetch=_shadow_fetch) is None
+
+
+def test_bundled_shadow_legacy_php_and_fail_open(tmp_path):
+    import camp.scan as scan
+    index = _shadow_index(tmp_path)
+
+    def php_fetch(url):
+        if url.endswith("db/subplugins.json"):
+            return 404, ""
+        if url.endswith("db/subplugins.php"):
+            # moodle-tree path: the probe strips through the parent's dir
+            return 200, ("<?php $subplugins = array("
+                         "'customcertelement' => 'mod/customcert/element');")
+        if url.endswith("element/date/version.php"):
+            return 200, "<?php"
+        return 404, ""
+
+    detail = scan.bundled_shadow_detail(index, "customcertelement_date",
+                                        SHADOW_ESTABLISHED, fetch=php_fetch)
+    assert detail and "element/date" in detail
+    # unreachable parent declaration: no evidence, listing proceeds
+    assert scan.bundled_shadow_detail(index, "customcertelement_date",
+                                      SHADOW_ESTABLISHED,
+                                      fetch=lambda url: (500, "")) is None
+
+
+def test_scan_parks_shadowing_family_member(tmp_path, monkeypatch):
+    import camp.scan as scan
+    index = _shadow_index(tmp_path)
+    families = index / "discovery" / "subplugin-families.yml"
+    families.parent.mkdir(parents=True)
+    families.write_text("customcertelement:\n"
+                        "  parent: mod_customcert\n"
+                        "  name: Certificate elements\n")
+    candidate = _candidate(full_name="o/moodle-customcertelement_date",
+                           html_url="https://github.com/o/moodle-customcertelement_date")
+    monkeypatch.setattr(scan, "_search", lambda *a, **k: ([candidate], 1))
+    monkeypatch.setattr(scan, "_fetch_component",
+                        lambda c, t, log=None: ("ok", "customcertelement_date",
+                                                "<?php // GNU General Public License version 3"))
+    monkeypatch.setattr(scan, "_fetch_raw", _shadow_fetch)
+
+    results = scan.scan(index, queries=["x"], limit=1, token="fake")
+    assert results[0].outcome == "needs-review"
+    record = scan.load_ledger(index)["o/moodle-customcertelement_date"]
+    assert "bundles a subplugin of the same name" in record["detail"]
+    assert not (index / "plugins" / "customcertelement").exists()

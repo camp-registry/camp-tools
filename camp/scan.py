@@ -211,6 +211,95 @@ def listed_unknown_types(index_dir: str | Path) -> dict[str, list[str]]:
     return queue
 
 
+# 'prefix' => 'path' pairs in a legacy db/subplugins.php declaration.
+_PHP_SUBPLUGINS_RE = re.compile(
+    r"['\"]([a-z][a-z0-9]*)['\"]\s*=>\s*['\"]([^'\"]+)['\"]")
+
+
+def _raw_source_base(source: str) -> str | None:
+    """Raw-content base for a repo's default branch, or None for hosts
+    the probe does not speak."""
+    if source.startswith("https://github.com/"):
+        return (source.replace("https://github.com/",
+                               "https://raw.githubusercontent.com/")
+                .rstrip("/") + "/HEAD")
+    if source.startswith("https://gitlab.com/"):
+        return source.rstrip("/") + "/-/raw/HEAD"
+    return None
+
+
+def _fetch_raw(url: str) -> tuple[int, str]:
+    request = urllib.request.Request(url, headers={"User-Agent": "camp-tools"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, response.read().decode(errors="replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, ""
+
+
+def bundled_shadow_detail(index: Path, component: str, established: dict,
+                          fetch=None) -> str | None:
+    """The needs-review reason when a would-be member of an established
+    family carries the same name as a subplugin its parent BUNDLES in the
+    parent repository (camp-tools#16), else None. Bundled subplugins are
+    invisible to the registry by construction (the scanner sees
+    repositories, not subdirectories), so without this probe the arrival
+    would list cleanly and then collide with the parent's copy at install
+    time. Warn-only in spirit: any probe failure (unsupported host,
+    unreachable parent, unparseable declaration) returns None and the
+    listing proceeds — the check adds evidence, never a new way to fail."""
+    fetch = fetch or _fetch_raw     # late-bound so tests can monkeypatch
+    prefix, _, member = component.partition("_")
+    record = established.get(prefix)
+    if not record or not member:
+        return None
+    parent_component = record.get("parent") or ""
+    parent_path = (index / "plugins" / parent_component.partition("_")[0]
+                   / f"{parent_component}.yml")
+    if not parent_path.exists():
+        return None
+    try:
+        with open(parent_path) as f:
+            parent_source = (yaml.safe_load(f) or {}).get("source") or ""
+    except yaml.YAMLError:
+        return None
+    base = _raw_source_base(parent_source)
+    if base is None:
+        return None
+    subdir = None
+    for db_file in ("db/subplugins.json", "db/subplugins.php"):
+        status, body = fetch(f"{base}/{db_file}")
+        if status != 200:
+            continue
+        if db_file.endswith(".json"):
+            try:
+                doc = json.loads(body)
+            except json.JSONDecodeError:
+                return None
+            # subplugintypes values are repo-relative; legacy plugintypes
+            # values are moodle-tree paths — strip through the parent's
+            # own directory segment
+            rel = (doc.get("subplugintypes") or {}).get(prefix)
+            tree = (doc.get("plugintypes") or {}).get(prefix)
+        else:
+            pairs = dict(_PHP_SUBPLUGINS_RE.findall(body))
+            rel, tree = None, pairs.get(prefix)
+        if rel is None and tree:
+            parent_dir = parent_component.partition("_")[2] + "/"
+            rel = tree.split(parent_dir, 1)[1] if parent_dir in tree else None
+        subdir = rel
+        break
+    if not subdir:
+        return None
+    status, _body = fetch(f"{base}/{subdir}/{member}/version.php")
+    if status != 200:
+        return None
+    return (f"declares {component} but {parent_component} bundles a "
+            f"subplugin of the same name ({subdir}/{member} in the parent "
+            f"repository); shadowing review required before listing "
+            f"(camp-tools#16)")
+
+
 def unknown_type_families(index_dir: str | Path) -> dict[str, list[tuple[str, dict]]]:
     """Ledger's unknown-type needs-review records grouped by type prefix:
     the establishment review queue. Prefixes that became known since their
@@ -1104,7 +1193,8 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             results.append(ScanResult(candidate, outcome, component))
             continue
 
-        unknown = unknown_type_detail(index, component, _version_text, established)
+        unknown = (unknown_type_detail(index, component, _version_text, established)
+                   or bundled_shadow_detail(index, component, established))
         if unknown:
             record_outcome(ledger, candidate, "needs-review", unknown, today,
                            component=component)
@@ -1547,8 +1637,9 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 results.append(ScanResult(candidate, "needs-review", component))
                 continue
 
-            unknown = unknown_type_detail(index, component, version_text,
-                                          established)
+            unknown = (unknown_type_detail(index, component, version_text,
+                                           established)
+                       or bundled_shadow_detail(index, component, established))
             if unknown:
                 record_outcome(ledger, candidate, "needs-review", unknown,
                                today, component=component)
@@ -1664,8 +1755,9 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 seen_components.add(component)
                 continue
 
-            unknown = unknown_type_detail(index, component, version_text,
-                                          established)
+            unknown = (unknown_type_detail(index, component, version_text,
+                                           established)
+                       or bundled_shadow_detail(index, component, established))
             if unknown:
                 record_outcome(ledger, candidate, "needs-review", unknown,
                                today, component=component)
