@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import shutil
 from collections import Counter
 from html import escape
@@ -173,6 +174,18 @@ nav a:hover{color:var(--ink)}
   min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.14)}
 .navmenu a{padding:9px 12px;border-radius:3px;white-space:nowrap}
 .navmenu a:hover{background:var(--accent-soft);color:var(--ink)}
+.rlist{margin-top:10px}
+.ritem{padding:16px 0;border-bottom:1px solid var(--border)}
+.ritem:last-child{border-bottom:0}
+.rhead{display:flex;justify-content:space-between;align-items:baseline;
+  gap:8px 18px;flex-wrap:wrap}
+.rcomp{font-family:var(--mono);font-size:0.9375rem;color:var(--ink);
+  overflow-wrap:anywhere}
+.rdate{font-family:var(--mono);font-size:0.78125rem;color:var(--faint-label);
+  white-space:nowrap}
+.rrepo{margin-top:3px;font-family:var(--mono);font-size:0.8125rem;
+  overflow-wrap:anywhere}
+.rwhy{margin-top:5px;font-size:0.84375rem;color:var(--text);max-width:660px}
 .theme-toggle{background:none;border:0;cursor:pointer;line-height:0;
   color:var(--muted);display:inline-flex;align-items:center;justify-content:center;
   min-width:44px;min-height:44px;padding:8px;margin:-13px -8px}
@@ -2815,17 +2828,36 @@ nq.addEventListener('input', function(){
                  extra_js=js)
 
 
+_ISSUE_REF_RE = re.compile(r"(camp-index|camp-tools|camp-docs)#(\d+)")
+
+
+def _linkify_refs(escaped: str) -> str:
+    """Turn repo#N references in already-escaped text into issue links."""
+    return _ISSUE_REF_RE.sub(
+        r'<a href="https://github.com/camp-registry/\1/issues/\2">\1#\2</a>',
+        escaped)
+
+
 def _removed_page(removals: list[tuple[str, dict]]) -> str:
     """Removed listings at /removed.html (camp-tools#28): the ledger's
     opted-out records as a registry record-keeping surface — component,
     date, reason. Rejections and collisions stay operator-facing, and
     tombstone pages on the old component URLs stay deferred, both per the
     #28 design."""
+    def repo_link(record: dict) -> str:
+        repo = record.get("repo", "")
+        host = record.get("host") or (
+            "gitlab.com" if repo.count("/") > 1 else "github.com")
+        return (f'<a href="https://{host}/{escape(repo)}">{escape(repo)}</a>'
+                if repo else "")
+
     rows = "".join(
-        f'<tr><td class="mono">{escape(component)}</td>'
-        f'<td class="mono">{escape(record.get("repo", ""))}</td>'
-        f'<td style="white-space:nowrap">{escape(record.get("last-checked", ""))}</td>'
-        f'<td>{escape(record.get("detail", ""))}</td></tr>'
+        f'<div class="ritem">'
+        f'<div class="rhead"><span class="rcomp">{escape(component)}</span>'
+        f'<span class="rdate">removed {escape(record.get("last-checked", ""))}</span></div>'
+        f'<div class="rrepo">{repo_link(record)}</div>'
+        f'<div class="rwhy">{_linkify_refs(escape(record.get("detail", "")))}</div>'
+        f'</div>'
         for component, record in removals)
     body = f"""
 {_header()}
@@ -2835,13 +2867,7 @@ def _removed_page(removals: list[tuple[str, dict]]) -> str:
   <p class="dsummary">Listings removed at their maintainer's request
   (RFC §4.4). The removal is permanent for the removed repository:
   discovery will not re-list it. {len(removals)} on record.</p>
-  <div style="overflow-x:auto;margin-top:20px"><table style="border-collapse:collapse;width:100%;font-size:0.84375rem">
-  <thead><tr>
-    <th style="text-align:left;padding:6px 14px 6px 0">component</th>
-    <th style="text-align:left;padding:6px 14px 6px 0">repository</th>
-    <th style="text-align:left;padding:6px 14px 6px 0">removed</th>
-    <th style="text-align:left;padding:6px 14px 6px 0">record</th>
-  </tr></thead><tbody>{rows}</tbody></table></div>
+  <div class="rlist">{rows}</div>
   <div class="attrib" style="margin-top:28px">Check any name at
   <a href="/names.html">component names</a>.</div>
 </main></div>
