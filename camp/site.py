@@ -2721,7 +2721,9 @@ def _contribute_page() -> str:
   <a href="https://github.com/camp-registry/camp-docs/tree/main/runbooks">runbooks</a>.
   The <b>review board</b> performs the code reviews behind the Reviewed
   tier. Both admit from demonstrated contribution, and the governance
-  document defining them is being drafted in the open.</p>
+  document defining them is
+  <a href="https://github.com/camp-registry/camp-docs/pull/8">open for
+  comment</a> before adoption.</p>
   <div class="kv">
     <div class="kvrow"><span class="fk">Apply privately</span>
       <span class="fv">Interested in either role? Write to
