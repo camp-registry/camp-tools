@@ -599,6 +599,30 @@ def _cmd_check_standard_plugins(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_check_plugin_types(args: argparse.Namespace) -> int:
+    from . import plugintypes
+    fresh = plugintypes.build_table(log=lambda m: print(m, file=sys.stderr))
+    if args.write:
+        plugintypes.write_table(fresh)
+        print(f"wrote {plugintypes.DATA_PATH} "
+              f"({len(fresh['types'])} types, "
+              f"{len(fresh['branches'])} branches)")
+        return 0
+    committed = plugintypes.load()
+    if committed == fresh:
+        print("plugin-types table: current with upstream")
+        return 0
+    old, new = committed["types"], fresh["types"]
+    print("plugin-types table DRIFTED from upstream — review and refresh "
+          "with 'camp check-plugin-types --write':", file=sys.stderr)
+    for name in sorted(set(old) ^ set(new)):
+        print(f"  {'+' if name in new else '-'} {name}", file=sys.stderr)
+    for name in sorted(set(old) & set(new)):
+        if old[name] != new[name]:
+            print(f"  ~ {name}: {old[name]} -> {new[name]}", file=sys.stderr)
+    return 1
+
+
 def _cmd_enrich(args: argparse.Namespace) -> int:
     from .scan import enrich
     enrich(args.index_dir, limit=args.limit, force=args.force,
@@ -952,6 +976,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--write", action="store_true",
                    help="rewrite camp/standardplugins.json from upstream")
     p.set_defaults(func=_cmd_check_standard_plugins)
+
+    p = sub.add_parser("check-plugin-types",
+                       help="check the committed plugin-type table against "
+                            "upstream lib/components.json and core "
+                            "db/subplugins.json per branch (camp-tools#16); "
+                            "--write refreshes it")
+    p.add_argument("--write", action="store_true",
+                   help="rewrite camp/plugintypes.json from upstream")
+    p.set_defaults(func=_cmd_check_plugin_types)
 
     p = sub.add_parser("dependency-report",
                        help="cross-reference declared plugin dependencies "

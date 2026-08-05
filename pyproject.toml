@@ -29,4 +29,5 @@ version = {attr = "camp.__version__"}
 include = ["camp*"]
 
 [tool.setuptools.package-data]
-camp = ["schema/*.json", "fonts/*", "icons/*", "standardplugins.json"]
+camp = ["schema/*.json", "fonts/*", "icons/*", "standardplugins.json",
+        "plugintypes.json"]
