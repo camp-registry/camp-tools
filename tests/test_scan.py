@@ -897,3 +897,25 @@ def test_unknown_type_families_ignores_name_mismatch_records(tmp_path):
     scan.save_ledger(index, ledger)
     families = scan.unknown_type_families(index)
     assert list(families) == ["floreamui"]
+
+
+def test_listed_unknown_types_hygiene_queue(tmp_path):
+    """Pre-gate listings under unknown prefixes group by prefix; empty
+    type directories (removal leftovers) report with no members; known
+    and established prefixes stay out."""
+    import camp.scan as scan
+    index = tmp_path / "index"
+    for prefix, names in (("mod", ["mod_example"]),
+                          ("floreamui", ["floreamui_bootstrap"]),
+                          ("archivingmod", []),
+                          ("customcertelement", ["customcertelement_foo"])):
+        d = index / "plugins" / prefix
+        d.mkdir(parents=True)
+        for name in names:
+            (d / f"{name}.yml").write_text(f"component: {name}\n")
+    families = index / "discovery" / "subplugin-families.yml"
+    families.parent.mkdir(parents=True)
+    families.write_text("customcertelement:\n  parent: mod_customcert\n")
+    queue = scan.listed_unknown_types(index)
+    assert queue == {"archivingmod": [],
+                     "floreamui": ["floreamui_bootstrap"]}

@@ -196,6 +196,21 @@ def unknown_type_detail(index: Path, component: str, version_text: str | None,
             f"establishment review required before listing (camp-tools#16)")
 
 
+def listed_unknown_types(index_dir: str | Path) -> dict[str, list[str]]:
+    """Already-listed entries whose type prefix is neither core-derived
+    nor established, grouped by prefix — the junk-type hygiene queue for
+    entries that auto-listed before the type gate existed (camp-index#21).
+    Empty type directories (left behind by removals) report as an empty
+    member list."""
+    index = Path(index_dir)
+    known = plugintypes.known_prefixes(plugintypes.load_established(index))
+    queue: dict[str, list[str]] = {}
+    for type_dir in sorted((index / "plugins").iterdir()):
+        if type_dir.is_dir() and type_dir.name not in known:
+            queue[type_dir.name] = sorted(p.stem for p in type_dir.glob("*.yml"))
+    return queue
+
+
 def unknown_type_families(index_dir: str | Path) -> dict[str, list[tuple[str, dict]]]:
     """Ledger's unknown-type needs-review records grouped by type prefix:
     the establishment review queue. Prefixes that became known since their

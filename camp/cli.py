@@ -733,7 +733,7 @@ def _cmd_check_collisions(args: argparse.Namespace) -> int:
 
 
 def _cmd_scan_report(args: argparse.Namespace) -> int:
-    from .scan import load_ledger, unknown_type_families
+    from .scan import listed_unknown_types, load_ledger, unknown_type_families
     ledger = load_ledger(args.index_dir)
     if not ledger:
         print("scan ledger is empty — run `camp scan` first")
@@ -752,6 +752,16 @@ def _cmd_scan_report(args: argparse.Namespace) -> int:
             print(f"  {prefix} ({len(members)} member(s))")
             for repo, record in members:
                 print(f"    {repo:<53} {record['detail']}")
+    legacy = listed_unknown_types(args.index_dir)
+    if legacy:
+        print(f"\n{len(legacy)} unknown plugin-type prefix(es) ALREADY LISTED "
+              f"(pre-gate; hygiene queue, camp-index#21) — establish the "
+              f"family or route members through removal:")
+        for prefix, components in legacy.items():
+            if components:
+                print(f"  {prefix}: {', '.join(components)}")
+            else:
+                print(f"  {prefix}: (empty type directory, removable)")
     if args.outcome:
         print()
         for repo, record in sorted(by_outcome.get(args.outcome, [])):
