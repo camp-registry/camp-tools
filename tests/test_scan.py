@@ -1008,3 +1008,36 @@ def test_scan_parks_shadowing_family_member(tmp_path, monkeypatch):
     record = scan.load_ledger(index)["o/moodle-customcertelement_date"]
     assert "bundles a subplugin of the same name" in record["detail"]
     assert not (index / "plugins" / "customcertelement").exists()
+
+
+# --- core-component gate (camp-tools#29) -------------------------------------
+
+def test_core_component_outcome_classes():
+    """Judged against the committed standard-components table: bundled
+    everywhere is a recorded rejection, bundled mid-window is a human
+    call, dropped-from-core and ordinary components flow."""
+    import camp.scan as scan
+    outcome, detail = scan.core_component_outcome("mod_quiz")
+    assert outcome == "core-component" and "camp-tools#29" in detail
+    outcome, detail = scan.core_component_outcome("tool_mfa")
+    assert outcome == "needs-review" and "since 4.3" in detail
+    assert scan.core_component_outcome("mod_chat") is None      # standard-until
+    assert scan.core_component_outcome("block_xp") is None      # never core
+
+
+def test_scan_rejects_pure_core_component(tmp_path, monkeypatch):
+    import camp.scan as scan
+    index = tmp_path / "index"
+    (index / "plugins").mkdir(parents=True)
+    candidate = _candidate(full_name="o/moodle-mod_quiz",
+                           html_url="https://github.com/o/moodle-mod_quiz")
+    monkeypatch.setattr(scan, "_search", lambda *a, **k: ([candidate], 1))
+    monkeypatch.setattr(scan, "_fetch_component",
+                        lambda c, t, log=None: ("ok", "mod_quiz",
+                                                "<?php // GNU General Public License version 3"))
+    results = scan.scan(index, queries=["x"], limit=1, token="fake")
+    assert results[0].outcome == "core-component"
+    assert not (index / "plugins" / "mod" / "mod_quiz.yml").exists()
+    record = scan.load_ledger(index)["o/moodle-mod_quiz"]
+    assert record["component"] == "mod_quiz"
+    assert "ships with every supported Moodle" in record["detail"]

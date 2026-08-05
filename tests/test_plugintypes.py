@@ -223,3 +223,29 @@ def test_site_type_surfaces(index_dir, tmp_path):
 
     junk = (out / "plugin" / "floreamui_junk.html").read_text()
     assert '<a href="/?group=floreamui">floreamui</a>' in junk
+
+
+def test_site_moodle_core_row(index_dir, tmp_path):
+    """Standard-since upstreams say core bundles them now; standard-until
+    continuations say where core dropped them; ordinary plugins carry no
+    Moodle core row (camp-tools#29)."""
+    import yaml
+    from camp.site import generate
+
+    for component in ("tool_mfa", "mod_chat", "block_xp"):
+        prefix = component.partition("_")[0]
+        d = index_dir / "plugins" / prefix
+        d.mkdir(exist_ok=True)
+        with open(d / f"{component}.yml", "w") as f:
+            yaml.safe_dump(_minimal_entry(component), f, sort_keys=False)
+
+    out = tmp_path / "site"
+    generate(index_dir, "https://repo.test", out)
+
+    mfa = (out / "plugin" / "tool_mfa.html").read_text()
+    assert "Ships with Moodle since 4.3" in mfa
+    assert "serves Moodle versions before 4.3" in mfa
+    chat = (out / "plugin" / "mod_chat.html").read_text()
+    assert "Shipped with Moodle up to 4.5 · separate plugin from 5.0" in chat
+    xp = (out / "plugin" / "block_xp.html").read_text()
+    assert "Moodle core" not in xp

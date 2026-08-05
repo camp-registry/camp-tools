@@ -2445,6 +2445,33 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                           f'{escape(parent_component)}</span>{note}')
     kv_rows.append(f'<div class="kvrow"><span class="fk">Plugin type</span>'
                    f'<span class="fv">{type_bits}</span></div>')
+    # Moodle-core relationship (camp-tools#29): a standard-since upstream
+    # says core bundles it now and this listing serves older versions; a
+    # standard-until continuation says where core dropped it — the same
+    # judgments the scanner's core gate makes, worded like the deps row.
+    core_standard = set(standardplugins.standard_branches(component))
+    if core_standard:
+        core_order = standardplugins.load()["branches"]
+        if VORDER[-1] in core_standard:
+            since = min((b for b in core_standard if b in VORDER),
+                        key=core_order.index)
+            if since == VORDER[0]:
+                core_text, core_note = "Ships with Moodle", ""
+            else:
+                core_text = f"Ships with Moodle since {since}"
+                core_note = (f"this listing serves Moodle versions "
+                             f"before {since}")
+        else:
+            until = max(core_standard, key=core_order.index)
+            i = core_order.index(until)
+            removed = core_order[i + 1] if i + 1 < len(core_order) else None
+            core_text = (f"Shipped with Moodle up to {until}"
+                         + (f" · separate plugin from {removed}" if removed else ""))
+            core_note = ""
+        note_html = (f'<div class="attrib" style="margin-top:6px">{core_note}'
+                     f'</div>' if core_note else "")
+        kv_rows.append(f'<div class="kvrow"><span class="fk">Moodle core</span>'
+                       f'<span class="fv">{core_text}{note_html}</span></div>')
     if declared_families:
         family_bits = " · ".join(
             f'<a href="/?group={escape(prefix)}">'

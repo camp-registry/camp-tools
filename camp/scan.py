@@ -35,7 +35,8 @@ from pathlib import Path
 
 import yaml
 
-from . import plugintypes, versionphp
+from . import plugintypes, standardplugins, versionphp
+from .moodleversions import BRANCHES
 
 USER_AGENT = "camp-seeding-scanner/0.1 (community Moodle plugin repository)"
 # Frankenstyle plugin-type prefixes, used to build targeted name searches.
@@ -168,7 +169,8 @@ def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
     # detail strings; unknown-type needs-review records carry it so the
     # family report can group members by prefix (name-mismatch records
     # pass no component and are unchanged).
-    if component and outcome in ("copy", "name-collision", "needs-review"):
+    if component and outcome in ("copy", "name-collision", "needs-review",
+                                 "core-component"):
         entry["component"] = component
     ledger[candidate.full_name] = entry
 
@@ -235,6 +237,42 @@ def _fetch_raw(url: str) -> tuple[int, str]:
             return response.status, response.read().decode(errors="replace")
     except urllib.error.HTTPError as exc:
         return exc.code, ""
+
+
+def core_component_outcome(component: str) -> tuple[str, str] | None:
+    """How a new arrival's component relates to Moodle core, judged
+    against the standard-components table (camp-tools#29, #25):
+
+      None                          not core today — standard-until
+                                    continuations and ordinary plugins
+                                    flow unchanged
+      ('core-component', detail)    standard on every tracked branch —
+                                    bundled everywhere, nothing to review;
+                                    the ledger record re-evaluates on the
+                                    recheck window, so when a future core
+                                    drops the plugin the reviewed
+                                    check-standard-plugins refresh flips
+                                    the table and the repo re-enters with
+                                    no manual unblocking
+      ('needs-review', detail)      standard only from some mid-window
+                                    branch — the repo may be the canonical
+                                    pre-integration upstream serving older
+                                    Moodle versions, which is a human call
+    """
+    tracked = [name for _, name, _ in BRANCHES]
+    standard = set(standardplugins.standard_branches(component))
+    if tracked[-1] not in standard:
+        return None
+    if standard >= set(tracked):
+        return ("core-component",
+                f"{component} ships with every supported Moodle; bundled "
+                f"components are not listed (camp-tools#29)")
+    order = standardplugins.load()["branches"]
+    since = min((b for b in standard if b in tracked), key=order.index)
+    return ("needs-review",
+            f"declares {component}, bundled with Moodle since {since}; may "
+            f"list only as the canonical pre-integration source serving "
+            f"older Moodle versions — human sign-off required (camp-tools#29)")
 
 
 def bundled_shadow_detail(index: Path, component: str, established: dict,
@@ -1193,6 +1231,13 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             results.append(ScanResult(candidate, outcome, component))
             continue
 
+        core = core_component_outcome(component)
+        if core:
+            record_outcome(ledger, candidate, core[0], core[1], today,
+                           component=component)
+            results.append(ScanResult(candidate, core[0], component))
+            continue
+
         unknown = (unknown_type_detail(index, component, _version_text, established)
                    or bundled_shadow_detail(index, component, established))
         if unknown:
@@ -1637,6 +1682,13 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 results.append(ScanResult(candidate, "needs-review", component))
                 continue
 
+            core = core_component_outcome(component)
+            if core:
+                record_outcome(ledger, candidate, core[0], core[1], today,
+                               component=component)
+                results.append(ScanResult(candidate, core[0], component))
+                continue
+
             unknown = (unknown_type_detail(index, component, version_text,
                                            established)
                        or bundled_shadow_detail(index, component, established))
@@ -1753,6 +1805,13 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                                component=component)
                 results.append(ScanResult(candidate, outcome, component))
                 seen_components.add(component)
+                continue
+
+            core = core_component_outcome(component)
+            if core:
+                record_outcome(ledger, candidate, core[0], core[1], today,
+                               component=component)
+                results.append(ScanResult(candidate, core[0], component))
                 continue
 
             unknown = (unknown_type_detail(index, component, version_text,
