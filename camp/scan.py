@@ -35,7 +35,7 @@ from pathlib import Path
 
 import yaml
 
-from . import plugintypes, standardplugins, versionphp
+from . import directorymap, plugintypes, standardplugins, versionphp
 from .moodleversions import BRANCHES
 
 USER_AGENT = "camp-seeding-scanner/0.1 (community Moodle plugin repository)"
@@ -273,6 +273,37 @@ def core_component_outcome(component: str) -> tuple[str, str] | None:
             f"declares {component}, bundled with Moodle since {since}; may "
             f"list only as the canonical pre-integration source serving "
             f"older Moodle versions — human sign-off required (camp-tools#29)")
+
+
+def _resolve_github_canonical(url: str, token: str | None) -> str | None:
+    path = urllib.parse.urlparse(url).path.strip("/").removesuffix(".git")
+    status, body, _ = _request(f"https://api.github.com/repos/{path}", token)
+    if status != 200:
+        return None
+    return f"https://github.com/{json.loads(body)['full_name']}"
+
+
+def directory_anchor_detail(component: str, source_url: str,
+                            token: str | None = None,
+                            resolve=None) -> str | None:
+    """The needs-review reason when the old moodle.org directory mapped
+    `component` to a different repository than the candidate's
+    (camp-tools#30), else None. GitHub renames are tolerated: on a
+    mismatch, one API look resolves the mapped repository's canonical
+    current name before parking, so the mapped repository's own new home
+    flows. When that look fails the arrival still parks — the gate exists
+    because a mismatch here is exactly how copies displaced canonical
+    repositories, and needs-review is a pause, not a verdict."""
+    mapped = directorymap.directory_source(component)
+    if not mapped or directorymap.same_repo(source_url, mapped):
+        return None
+    if "github.com/" in mapped:
+        canonical = (resolve or _resolve_github_canonical)(mapped, token)
+        if canonical and directorymap.same_repo(source_url, canonical):
+            return None
+    return (f"the old moodle.org directory published {mapped} for "
+            f"{component}; listing a different repository needs the "
+            f"repoint evidence standard first (camp-tools#30)")
 
 
 def bundled_shadow_detail(index: Path, component: str, established: dict,
@@ -1238,7 +1269,8 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             results.append(ScanResult(candidate, core[0], component))
             continue
 
-        unknown = (unknown_type_detail(index, component, _version_text, established)
+        unknown = (directory_anchor_detail(component, candidate.html_url, token)
+                   or unknown_type_detail(index, component, _version_text, established)
                    or bundled_shadow_detail(index, component, established))
         if unknown:
             record_outcome(ledger, candidate, "needs-review", unknown, today,
@@ -1689,8 +1721,10 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 results.append(ScanResult(candidate, core[0], component))
                 continue
 
-            unknown = (unknown_type_detail(index, component, version_text,
-                                           established)
+            unknown = (directory_anchor_detail(component, candidate.html_url,
+                                               os.environ.get("GITHUB_TOKEN"))
+                       or unknown_type_detail(index, component, version_text,
+                                              established)
                        or bundled_shadow_detail(index, component, established))
             if unknown:
                 record_outcome(ledger, candidate, "needs-review", unknown,
@@ -1814,8 +1848,10 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 results.append(ScanResult(candidate, core[0], component))
                 continue
 
-            unknown = (unknown_type_detail(index, component, version_text,
-                                           established)
+            unknown = (directory_anchor_detail(component, candidate.html_url,
+                                               token)
+                       or unknown_type_detail(index, component, version_text,
+                                              established)
                        or bundled_shadow_detail(index, component, established))
             if unknown:
                 record_outcome(ledger, candidate, "needs-review", unknown,

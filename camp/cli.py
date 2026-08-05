@@ -599,6 +599,15 @@ def _cmd_check_standard_plugins(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_build_directory_map(args: argparse.Namespace) -> int:
+    from . import directorymap
+    table = directorymap.build_map(args.pluglist)
+    directorymap.write_map(table)
+    print(f"wrote {directorymap.DATA_PATH} "
+          f"({len(table['components'])} components)")
+    return 0
+
+
 def _cmd_check_plugin_types(args: argparse.Namespace) -> int:
     from . import plugintypes
     fresh = plugintypes.build_table(log=lambda m: print(m, file=sys.stderr))
@@ -1011,6 +1020,14 @@ def main(argv: list[str] | None = None) -> int:
                             "issue filing, camp-tools#16)")
     p.add_argument("index_dir")
     p.set_defaults(func=_cmd_unknown_type_families)
+
+    p = sub.add_parser("build-directory-map",
+                       help="regenerate the frozen component-to-repository "
+                            "map from a moodle.org pluglist snapshot "
+                            "(camp-tools#30); the committed JSON is the "
+                            "durable artifact")
+    p.add_argument("pluglist", help="pluglist JSON path or URL")
+    p.set_defaults(func=_cmd_build_directory_map)
 
     p = sub.add_parser("check-plugin-types",
                        help="check the committed plugin-type table against "

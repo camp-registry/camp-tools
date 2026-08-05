@@ -30,4 +30,4 @@ include = ["camp*"]
 
 [tool.setuptools.package-data]
 camp = ["schema/*.json", "fonts/*", "icons/*", "standardplugins.json",
-        "plugintypes.json"]
+        "plugintypes.json", "directorymap.json"]

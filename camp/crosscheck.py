@@ -33,27 +33,12 @@ import json
 import os
 import re
 import subprocess
-import urllib.request
 from pathlib import Path
 
 import yaml
 
-from .scan import USER_AGENT, _repo_host_path, _shares_history
-
-VCS_HOSTS = ("github.com/", "gitlab.com/", "bitbucket.org/")
-
-
-def _norm(url: str) -> str:
-    u = (url or "").strip().lower().rstrip("/")
-    u = re.sub(r"^https?://(www\.)?", "", u)
-    return u.removesuffix(".git")
-
-
-def _repo_url(url: str) -> str:
-    """https URL trimmed to host/owner/repo (drops deep paths like
-    bitbucket /src/... suffixes)."""
-    parts = _norm(url).split("/")
-    return "https://" + "/".join(parts[:3]) if len(parts) >= 3 else "https://" + _norm(url)
+from .directorymap import VCS_HOSTS, _norm, _repo_url, load_pluglist
+from .scan import _repo_host_path, _shares_history
 
 
 def _owner(url: str) -> str:
@@ -84,23 +69,6 @@ def _repo_alive(url: str) -> bool | None:
     except subprocess.TimeoutExpired:
         return None
     return probe.returncode == 0
-
-
-def load_pluglist(source: str) -> dict[str, str]:
-    """component -> VCS URL map from a pluglist.php JSON document (local
-    path or URL). Components without a usable VCS-host URL are dropped."""
-    if source.startswith(("http://", "https://")):
-        req = urllib.request.Request(source, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.load(resp)
-    else:
-        data = json.load(open(source))
-    out = {}
-    for plugin in data.get("plugins", []):
-        component, url = plugin.get("component"), plugin.get("source")
-        if component and url and _norm(url).startswith(VCS_HOSTS):
-            out[component] = url
-    return out
 
 
 def crosscheck(index_dir: str | Path, pluglist: dict[str, str],
