@@ -1179,7 +1179,8 @@ document.addEventListener('DOMContentLoaded', function(){
           if (r.check.amd){
             var a = r.check.amd,
                 orphans = (a.build_without_src || []).length,
-                stale = (a.stale || []).length,
+                rebuildClean = a.rebuild && !(a.rebuild.differs || []).length,
+                stale = rebuildClean ? 0 : (a.stale || []).length,
                 unbuilt = (a.src_without_build || []).length;
             if (orphans)
               chip('amd build', orphans + ' without source', 'warn',
@@ -1411,7 +1412,14 @@ def _check_chips(vcheck: dict) -> str:
     if amd:
         orphans = amd.get("build_without_src") or []
         unbuilt = amd.get("src_without_build") or []
-        stale = amd.get("stale") or []
+        rebuild = amd.get("rebuild")
+        # a byte-matching rebuild refutes date-based staleness: the
+        # current source demonstrably produces the committed bytes, so
+        # the stronger evidence wins the chip (first production run
+        # showed exactly this: date flags on releases that rebuild
+        # byte-perfect)
+        rebuild_clean = bool(rebuild) and not rebuild.get("differs")
+        stale = [] if rebuild_clean else (amd.get("stale") or [])
         if orphans:
             chips.append(f'<span class="cchip"><span class="l">amd build</span>'
                          f'<span class="r warn" aria-label="Minified build '

@@ -283,3 +283,19 @@ def test_amd_rebuild_chip_states():
     # no rig verdict: the plain file-set check mark stands
     html = _check_chips(base)
     assert "rebuilt" not in html and "aria-hidden" in html
+
+
+def test_clean_rebuild_refutes_stale_flags():
+    """Date-based staleness displays only when the rebuild does not
+    byte-match: a clean rebuild is stronger evidence (the block_xp 20.0
+    production case — 12 date flags, 21 of 21 files rebuilt identical)."""
+    from camp.site import _check_chips
+    base = {"phplint": True, "errors": 0, "warnings": 0}
+    amd = {"src": 21, "build": 21, "src_without_build": [],
+           "build_without_src": [], "stale": ["launcher", "modal"]}
+    refuted = _check_chips({**base, "amd": {**amd, "rebuild": {"checked": 21, "differs": []}}})
+    assert "stale" not in refuted and "byte for byte" in refuted
+    confirmed = _check_chips({**base, "amd": {**amd, "rebuild": {"checked": 1, "differs": ["launcher"]}}})
+    assert "2 stale" in confirmed
+    no_rig = _check_chips({**base, "amd": amd})
+    assert "2 stale" in no_rig
