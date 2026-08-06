@@ -1130,3 +1130,63 @@ def test_names_dataset_and_site_pages(index_dir, tmp_path):
     assert "Component names" in names_html and "/names.json" in names_html
     removed_html = (out / "removed.html").read_text()
     assert "Removed listings" in removed_html
+
+
+# --- moodle-plugin-ci observable (camp-tools#4) ------------------------------
+
+def test_detect_ci_github_and_gitlab(monkeypatch):
+    import json as _json
+    import camp.scan as scan
+
+    def fake_request(url, token, log=print, **kwargs):
+        if url.endswith("/contents/.github/workflows"):
+            return 200, _json.dumps([
+                {"name": "ci.yml", "download_url": "https://raw.test/ci.yml"},
+                {"name": "notes.md", "download_url": "https://raw.test/notes.md"},
+            ]).encode(), {}
+        if url == "https://raw.test/ci.yml":
+            return 200, b"uses: moodlehq/moodle-plugin-ci@v4", {}
+        if "gitlab.com/api" in url and "gl-yes" in url:
+            return 200, b"script:\n  - moodle-plugin-ci phplint", {}
+        if "gitlab.com/api" in url:
+            return 404, b"", {}
+        return 404, b"", {}
+
+    monkeypatch.setattr(scan, "_request", fake_request)
+    assert scan._detect_ci("https://github.com/o/moodle-mod_x", None) == \
+        "moodle-plugin-ci"
+    assert scan._detect_ci("https://gitlab.com/gl-yes/moodle-mod_x", None) == \
+        "moodle-plugin-ci"
+    assert scan._detect_ci("https://gitlab.com/gl-no/moodle-mod_x", None) is None
+    assert scan._detect_ci("https://bitbucket.org/o/x", None) is None
+
+
+def test_refresh_metrics_records_ci_for_claimed_only(tmp_path, monkeypatch):
+    """The observable is fetched for tier 1+ entries and lands in
+    metrics.ci; tier 0 entries never trigger the extra calls."""
+    import yaml
+    import camp.scan as scan
+    index = tmp_path / "index"
+    d = index / "plugins" / "mod"
+    d.mkdir(parents=True)
+    for comp, tier in (("mod_claimed", 1), ("mod_discovered", 0)):
+        yaml.safe_dump({"component": comp, "tier": tier, "status": "active",
+                        "maintainers": [{"github": "o"}], "releases": [],
+                        "source": f"https://github.com/o/moodle-{comp}"},
+                       open(d / f"{comp}.yml", "w"))
+    calls = []
+    monkeypatch.setattr(scan, "_fetch_metrics",
+                        lambda source, token, checked, log: (
+                            "ok", {"stars": 1, "checked": checked}, None))
+    monkeypatch.setattr(scan, "_fetch_repo_id",
+                        lambda source, token, log: ("error", None))
+    monkeypatch.setattr(scan, "_detect_ci",
+                        lambda source, token: calls.append(source) or "moodle-plugin-ci")
+    failed = scan.refresh_metrics(index, ["mod_claimed", "mod_discovered"],
+                                  token="fake", log=lambda *_: None)
+    assert failed == []
+    claimed = yaml.safe_load((d / "mod_claimed.yml").read_text())
+    discovered = yaml.safe_load((d / "mod_discovered.yml").read_text())
+    assert claimed["metrics"]["ci"] == "moodle-plugin-ci"
+    assert "ci" not in discovered["metrics"]
+    assert calls == ["https://github.com/o/moodle-mod_claimed"]

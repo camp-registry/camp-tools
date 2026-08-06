@@ -163,6 +163,10 @@
           "description": "True when the maintainer has archived the source repository (upstream is frozen/dead).",
           "type": "boolean"
         },
+        "ci": {
+          "description": "The repository's own CI runs this tool, detected from its workflow files (.github/workflows on GitHub, .gitlab-ci.yml on GitLab). An observed fact about the repository, not an author claim and not a registry assertion about the results; fetched for tier 1+ entries by `camp enrich`.",
+          "enum": ["moodle-plugin-ci"]
+        },
         "checked": {
           "description": "Date these metrics were last fetched from the source platform.",
           "type": "string",

@@ -815,6 +815,50 @@ def _entry_for(candidate: Candidate, component: str, today: str,
 # so a repo that has gone 404 or a transient error simply leaves the entry
 # unenriched rather than failing the run.
 
+def _detect_ci(source: str, token: str | None) -> str | None:
+    """'moodle-plugin-ci' when the repository's own CI references it
+    (camp-tools#4): workflow files on GitHub, .gitlab-ci.yml on GitLab.
+    An observed fact about the repository, not an author claim and not a
+    registry assertion about results. None on any error or absence —
+    never guessed. Fetched only for tier 1+ entries (the enrich sweep
+    over the full tier-0 catalog would double its API budget for a
+    signal nobody reads there)."""
+    parsed = urllib.parse.urlparse(source)
+    host = parsed.netloc
+    path = parsed.path.strip("/").removesuffix(".git")
+    try:
+        if host == "github.com":
+            status, body, _ = _request(
+                f"https://api.github.com/repos/{path}/contents/.github/workflows",
+                token)
+            if status != 200:
+                return None
+            listing = json.loads(body)
+            for item in listing if isinstance(listing, list) else []:
+                if not item.get("name", "").endswith((".yml", ".yaml")):
+                    continue
+                url = item.get("download_url")
+                if not url:
+                    continue
+                fstatus, fbody, _ = _request(url, token)
+                text = fbody.decode(errors="replace") \
+                    if isinstance(fbody, bytes) else str(fbody)
+                if fstatus == 200 and "moodle-plugin-ci" in text:
+                    return "moodle-plugin-ci"
+        elif "gitlab" in host:
+            project = urllib.parse.quote(path, safe="")
+            fstatus, fbody, _ = _request(
+                f"https://gitlab.com/api/v4/projects/{project}"
+                f"/repository/files/.gitlab-ci.yml/raw", None)
+            text = fbody.decode(errors="replace") \
+                if isinstance(fbody, bytes) else str(fbody)
+            if fstatus == 200 and "moodle-plugin-ci" in text:
+                return "moodle-plugin-ci"
+    except Exception:
+        return None
+    return None
+
+
 def _fetch_metrics(source: str, token: str | None, checked: str,
                    log) -> tuple[str, dict | None, str | None]:
     """Fetch upstream metrics for one source repo. Returns
@@ -1119,6 +1163,10 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
                 entry["source"], token, today, log)
             if status == "ok":
                 entry["metrics"] = metrics
+                if entry.get("tier", 0) >= 1:
+                    ci = _detect_ci(entry["source"], token)
+                    if ci:
+                        entry["metrics"]["ci"] = ci
                 stats["metrics"] += 1
                 changed = True
                 if canonical:
@@ -1405,6 +1453,10 @@ def refresh_metrics(index_dir: str | Path, components: list[str],
             failed.append(component)
             continue
         entry["metrics"] = metrics
+        if entry.get("tier", 0) >= 1:
+            ci = _detect_ci(entry["source"], token)
+            if ci:
+                entry["metrics"]["ci"] = ci
         if canonical:
             if entry.get("tier", 0) == 0:
                 entry["source"] = canonical
