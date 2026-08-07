@@ -2531,7 +2531,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         # an observed fact about the repo's own CI, not a registry claim
         # about its results (camp-tools#4)
         dev_bits.append(f'<span aria-label="The repository\'s own CI runs '
-                        f'{escape(metrics["ci"])}">CI: '
+                        f'{escape(metrics["ci"])}">Tested with '
                         f'{escape(metrics["ci"])}</span>')
 
     badge_chips = []
