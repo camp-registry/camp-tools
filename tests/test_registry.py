@@ -51,6 +51,21 @@ def test_tier1_up_requires_labels_and_contact(entry_path):
     assert any("security-contact" in p for p in problems)
 
 
+def test_security_contact_rejects_placeholders(entry_path):
+    # "none" satisfied the old minLength floor but is not a contact;
+    # the field must be an email address or an http(s) URL.
+    for bad in ("none", "n/a", "ask in the forum"):
+        _mutate(entry_path, lambda e, b=bad: e.update({"security-contact": b}))
+        assert any("security-contact" in p for p in validate_entry(entry_path)), bad
+
+
+def test_security_contact_accepts_email_and_url(entry_path):
+    for good in ("security@example.org",
+                 "https://github.com/o/r/security/advisories/new"):
+        _mutate(entry_path, lambda e, g=good: e.update({"security-contact": g}))
+        assert validate_entry(entry_path) == [], good
+
+
 def test_tier0_needs_no_labels(entry_path):
     def make_tier0(entry):
         entry["tier"] = 0

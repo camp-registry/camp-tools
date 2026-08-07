@@ -71,9 +71,10 @@
       }
     },
     "security-contact": {
-      "description": "Email or private vulnerability-reporting URL (RFC §5.1). CI validates presence; preference is the source platform's private reporting channel.",
+      "description": "Email address or private vulnerability-reporting URL (RFC §5.1); placeholders like 'none' are not a contact. Preference is the source platform's private reporting channel.",
       "type": "string",
-      "minLength": 3
+      "minLength": 3,
+      "pattern": "^(https?://\\S+|[^@\\s]+@[^@\\s]+\\.[^@\\s]+)$"
     },
     "tier": {
       "description": "Trust tier (RFC §4.4). 0 = discovered (metadata only), 1 = claimed (author accountable, no verified releases yet), 2 = source-verified, 3 = human-reviewed. Releases may only be listed from tier 2 up.",
