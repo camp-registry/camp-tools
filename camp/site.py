@@ -2858,11 +2858,31 @@ def _utility_page(entry: dict, today: datetime.date) -> str:
     category = UTILITY_CATEGORIES.get(entry.get("category", ""),
                                       entry.get("category", ""))
     metrics = entry.get("metrics") or {}
-
-    claim_invite = ("" if entry.get("claimed") else
-                    " Are you the maintainer? Claim this listing to keep "
-                    "its details current.")
     closed = bool(entry.get("closed-source"))
+
+    # Health, same formula as plugins, from metrics.updated — which for
+    # closed-source entries enrich derives from the channel's latest
+    # release date (the only observable activity), so the line says
+    # "released" rather than "updated" there.
+    health = _health({"metrics": metrics}, today)
+    health_line = ""
+    if health:
+        color, label = health
+        verb = "released" if closed else "updated"
+        when = (f' · {verb} {_rel_time(metrics["updated"], today)}'
+                if metrics.get("updated") else "")
+        health_line = (
+            f'<div class="health-line"><span style="color:{color}">'
+            f'<span class="hdot" aria-hidden="true" '
+            f'style="background:{color}"></span>{label}</span>{when}</div>')
+
+    claim_url = f"{AUTHORS_GUIDE_URL}#claim-a-utility-listing"
+    edit_url = f"{INDEX_REPO_URL}/edit/main/utilities/{slug}.yml"
+    claim_invite = ("" if entry.get("claimed") else
+                    f' Are you the maintainer? <a href="{escape(claim_url)}">'
+                    f'Claim this listing</a> to keep its details current '
+                    f'(<a href="{escape(edit_url)}">edit your entry '
+                    f'directly</a>).')
     closed_note = (" This tool’s source code is not public; the listing "
                    "exists because of its established community use, with "
                    "the commercial facts disclosed below." if closed else "")
@@ -2938,7 +2958,8 @@ def _utility_page(entry: dict, today: datetime.date) -> str:
     if metrics.get("stars") is not None:
         dev_bits.append(f'★ {metrics["stars"]}')
     if metrics.get("updated"):
-        dev_bits.append(f'updated {_rel_time(metrics["updated"], today)}')
+        verb = "released" if closed else "updated"
+        dev_bits.append(f'{verb} {_rel_time(metrics["updated"], today)}')
     if dev_bits:
         kv_rows.append('<div class="kvrow"><span class="fk">Development</span>'
                        f'<span class="fv">{" · ".join(dev_bits)}</span></div>')
@@ -2956,6 +2977,7 @@ def _utility_page(entry: dict, today: datetime.date) -> str:
   <h1>{escape(name)}</h1>
   {f'<div class="mono" style="color:var(--faint-label);font-size:0.8125rem;margin-top:4px">{escape(slug)}</div>' if name != slug else ''}
   <div class="strip">{_utility_status_badge(entry)}</div>
+  {health_line}
   {labels_row}
   {f'<p class="dsummary">{escape(summary)}</p>' if summary else ''}
   {banners}

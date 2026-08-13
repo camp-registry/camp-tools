@@ -35,6 +35,10 @@ MOOSH = {
                 "checked": "2026-08-13"},
 }
 
+import datetime
+
+_RECENT = (datetime.date.today() - datetime.timedelta(days=5)).isoformat()
+
 MDLCODE = {
     "name": "mdlcode",
     "display-name": "MDLCode",
@@ -48,9 +52,11 @@ MDLCODE = {
     "closed-source": True,
     "labels": ["freemium"],
     "first-seen": "2026-08-13",
+    # as enrich writes it: the channel release date doubles as updated
     "metrics": {"checked": "2026-08-13",
+                "updated": _RECENT,
                 "latest-release": {
-                    "tag": "1.6.4",
+                    "tag": "1.6.4", "date": _RECENT,
                     "url": "https://open-vsx.org/extension/LMSCloud/mdlcode"}},
 }
 
@@ -101,10 +107,15 @@ def test_closed_source_disclosure(index_dir, tmp_path):
     assert "source code itself is not published" in page
     assert "Proprietary · closed source" in page
     assert "open-vsx.org/extension/LMSCloud/mdlcode" in page  # url override
-    # no repo metrics rendered for closed-source entries
+    # no repo metrics rendered for closed-source entries, but health
+    # and recency come from the channel release date, worded honestly
     assert "★" not in page
+    assert "Actively maintained" in page
+    assert "released 5 d ago" in page
+    assert "updated 5 d ago" not in page
     record = json.loads((out / "index.json").read_text())["utilities"][0]
-    assert record["h"] == -1 and record["s"] == 0
+    assert record["h"] == 1 and record["s"] == 0
+    assert record["u"] == _RECENT
 
 
 def test_utility_page_landmarks(index_dir, tmp_path):

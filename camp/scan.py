@@ -1341,14 +1341,18 @@ def enrich_utilities(index_dir: str | Path, token: str | None = None,
 
         if channel:
             release = fetch_channel_release(channel, token)
-            if release:
-                metrics["latest-release"] = release
-            else:
+            if not release:
                 # Keep the last known release rather than dropping the
                 # row on a transient channel error.
-                previous = (entry.get("metrics") or {}).get("latest-release")
-                if previous:
-                    metrics["latest-release"] = previous
+                release = (entry.get("metrics") or {}).get("latest-release")
+            if release:
+                metrics["latest-release"] = release
+                # For closed-source entries the channel is the only
+                # observable activity, so the release date doubles as
+                # `updated` — health and recency then render honestly
+                # (the site says "released", not "updated", there).
+                if closed and release.get("date"):
+                    metrics["updated"] = release["date"]
 
         entry["metrics"] = metrics
         stats["metrics"] += 1

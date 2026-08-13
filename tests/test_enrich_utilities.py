@@ -56,7 +56,8 @@ def test_closed_source_gets_no_repo_metrics(tmp_path, monkeypatch):
     monkeypatch.setattr(scan, "_fetch_metrics", boom)
     monkeypatch.setattr(scan, "fetch_channel_release",
                         lambda channel, token=None: {"tag": "1.6.4",
-                                                     "url": "https://x"})
+                                                     "url": "https://x",
+                                                     "date": "2026-08-04"})
     index = _index(tmp_path, _entry(
         name="mdlcode", **{"closed-source": True,
                            "release-channel": "openvsx:ns/ext"}))
@@ -65,6 +66,9 @@ def test_closed_source_gets_no_repo_metrics(tmp_path, monkeypatch):
     assert "stars" not in metrics
     assert metrics["latest-release"]["tag"] == "1.6.4"
     assert metrics["checked"]
+    # release date doubles as `updated`: the only observable activity,
+    # so health and recency render for closed-source entries too
+    assert metrics["updated"] == "2026-08-04"
 
 
 def test_channel_error_keeps_last_known_release(tmp_path, monkeypatch):
