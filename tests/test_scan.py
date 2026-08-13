@@ -1190,3 +1190,63 @@ def test_refresh_metrics_records_ci_for_claimed_only(tmp_path, monkeypatch):
     assert claimed["metrics"]["ci"] == "moodle-plugin-ci"
     assert "ci" not in discovered["metrics"]
     assert calls == ["https://github.com/o/moodle-mod_claimed"]
+
+
+# ---- release-channel adapters (camp-docs#4 utilities fence) ----
+
+
+def _openvsx_response(monkeypatch, status, doc=None):
+    import json as _json
+    from camp import scan as scan_mod
+
+    def fake_request(url, token, **kwargs):
+        assert url.startswith("https://open-vsx.org/api/")
+        return status, _json.dumps(doc or {}), {}
+    monkeypatch.setattr(scan_mod, "_request", fake_request)
+
+
+def test_openvsx_release_ok(monkeypatch):
+    from camp.scan import _fetch_openvsx_release
+    _openvsx_response(monkeypatch, 200, {
+        "version": "1.6.4", "timestamp": "2026-08-04T17:07:26.188512Z"})
+    rel = _fetch_openvsx_release("LMSCloud/mdlcode")
+    assert rel == {"tag": "1.6.4",
+                   "url": "https://open-vsx.org/extension/LMSCloud/mdlcode",
+                   "date": "2026-08-04T17:07:26.188512Z"}
+
+
+def test_openvsx_release_no_timestamp(monkeypatch):
+    from camp.scan import _fetch_openvsx_release
+    _openvsx_response(monkeypatch, 200, {"version": "2.0"})
+    rel = _fetch_openvsx_release("ns/ext")
+    assert rel == {"tag": "2.0", "url": "https://open-vsx.org/extension/ns/ext"}
+
+
+def test_openvsx_release_gone_or_malformed(monkeypatch):
+    from camp.scan import _fetch_openvsx_release
+    _openvsx_response(monkeypatch, 404)
+    assert _fetch_openvsx_release("ns/ext") is None
+    _openvsx_response(monkeypatch, 200, {"name": "no version key"})
+    assert _fetch_openvsx_release("ns/ext") is None
+
+
+def test_openvsx_release_bad_ref():
+    from camp.scan import _fetch_openvsx_release
+    assert _fetch_openvsx_release("noslash") is None
+    assert _fetch_openvsx_release("too/many/parts") is None
+    assert _fetch_openvsx_release("/") is None
+
+
+def test_channel_release_dispatch(monkeypatch):
+    from camp.scan import fetch_channel_release
+    _openvsx_response(monkeypatch, 200, {"version": "1.6.4"})
+    rel = fetch_channel_release("openvsx:LMSCloud/mdlcode")
+    assert rel and rel["tag"] == "1.6.4"
+
+
+def test_channel_release_unknown_scheme_and_malformed():
+    from camp.scan import fetch_channel_release
+    # Unknown scheme = outside the admission fence: None, never a guess.
+    assert fetch_channel_release("chrome-store:whatever/thing") is None
+    assert fetch_channel_release("openvsx") is None
+    assert fetch_channel_release("openvsx:") is None

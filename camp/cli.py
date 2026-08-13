@@ -27,14 +27,19 @@ from . import build as build_mod
 from . import composer as composer_mod
 from . import versionphp
 from .validate import (load_entry, validate_entry, validate_listing,
-                       validate_listing_bytes)
+                       validate_listing_bytes, validate_utility)
 from .verify import verify_entry
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
     failed = False
     for path in args.entries:
-        problems = validate_entry(path)
+        # utilities/ listings validate against their own schema and
+        # invariants (camp-docs#4); everything else is a plugin entry.
+        if Path(path).resolve().parent.name == "utilities":
+            problems = validate_utility(path)
+        else:
+            problems = validate_entry(path)
         if problems:
             failed = True
             print(f"FAIL {path}")

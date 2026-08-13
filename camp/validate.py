@@ -78,6 +78,59 @@ def validate_entry(path: str | Path) -> list[str]:
     return problems
 
 
+def validate_utility(path: str | Path) -> list[str]:
+    """Validate one utilities/ listing file (camp-docs#4). Returns a list
+    of problems (empty = valid)."""
+    problems: list[str] = []
+    try:
+        entry = load_entry(path)
+    except (ValidationError, yaml.YAMLError) as exc:
+        return [str(exc)]
+
+    validator = jsonschema.Draft202012Validator(_schema("utility.schema.json"))
+    for error in sorted(validator.iter_errors(entry), key=str):
+        location = "/".join(str(p) for p in error.absolute_path) or "(root)"
+        problems.append(f"{location}: {error.message}")
+    if problems:
+        return problems
+
+    # Invariants the schema language can't express.
+    name = entry["name"]
+    actual = Path(path).resolve()
+    if actual.parts[-2:] != ("utilities", f"{name}.yml"):
+        problems.append(
+            f"file is at {Path(path)} but utility {name} belongs at "
+            f"utilities/{name}.yml")
+
+    # The monitorability fence (camp-docs#4): the canonical distribution
+    # channel must be one the registry's tooling observes — the source
+    # host enrich monitors natively, or a declared release-channel whose
+    # scheme camp-tools implements. The adapter table IS the fence;
+    # widening it is a camp-tools change, not an entry-side assertion.
+    import urllib.parse
+    host = urllib.parse.urlparse(entry["source"]).netloc
+    monitored_host = host == "github.com" or "gitlab" in host
+    channel = entry.get("release-channel")
+    if channel:
+        scheme = channel.partition(":")[0]
+        from .scan import RELEASE_CHANNELS
+        if scheme not in RELEASE_CHANNELS:
+            problems.append(
+                f"release-channel scheme '{scheme}' is not implemented by "
+                f"camp-tools — admission requires a machine-monitorable "
+                f"distribution channel")
+    elif not monitored_host:
+        problems.append(
+            f"source host {host} is not monitored by enrich and no "
+            f"release-channel is declared — admission requires a "
+            f"machine-monitorable distribution channel")
+
+    if entry.get("claimed") and not entry.get("maintainers"):
+        problems.append("claimed entries must list maintainers")
+
+    return problems
+
+
 def validate_listing(path: str | Path) -> list[str]:
     """Validate a .camp/listing.yml manifest. Returns a list of problems."""
     try:
