@@ -780,6 +780,54 @@ def _fetch_latest_release(host: str, path: str, token: str | None) -> dict | Non
     return None
 
 
+def _fetch_openvsx_release(ref: str, token: str | None = None) -> dict | None:
+    """Latest published version of a VS Code extension from the Open VSX
+    registry (public API; mirrors the VS Code Marketplace versions), or
+    None. `ref` is "namespace/name". The returned url points at the
+    extension's public listing — off-repo channels have no
+    /releases/latest to derive."""
+    namespace, _, name = ref.partition("/")
+    if not namespace or not name or "/" in name:
+        return None
+    # Plain JSON accept: Open VSX 406es the GitHub media type _request
+    # sends by default (live-caught).
+    status, body, _ = _request(
+        f"https://open-vsx.org/api/{namespace}/{name}", None,
+        accept="application/json")
+    if status != 200:
+        return None
+    doc = json.loads(body)
+    version = doc.get("version")
+    if not version:
+        return None
+    out = {"tag": str(version),
+           "url": f"https://open-vsx.org/extension/{namespace}/{name}"}
+    if doc.get("timestamp"):
+        out["date"] = doc["timestamp"]
+    return out
+
+
+# Release-channel adapters for utilities (camp-docs#4). The scheme set
+# IS the admission fence: a utility qualifies only when its canonical
+# distribution channel is a source host enrich already monitors or a
+# scheme listed here — extending this table is the deliberate registry
+# act that widens the fence.
+RELEASE_CHANNELS = {
+    "openvsx": _fetch_openvsx_release,
+}
+
+
+def fetch_channel_release(channel: str, token: str | None = None) -> dict | None:
+    """Latest release from a declared release channel ("scheme:ref"),
+    or None. Unknown schemes and malformed refs return None — a stale
+    row over invented data; admission should have refused the entry."""
+    scheme, sep, ref = channel.partition(":")
+    if not sep or not ref:
+        return None
+    fetcher = RELEASE_CHANNELS.get(scheme)
+    return fetcher(ref, token) if fetcher else None
+
+
 def _entry_for(candidate: Candidate, component: str, today: str,
                version_text: str = "") -> dict:
     maintainer = {("gitlab" if candidate.platform == "gitlab" else "github"): candidate.owner}
@@ -991,15 +1039,22 @@ def fill_repo_ids(index_dir: str | Path, components: list[str] | None = None,
             if entry.get("tier", 0) >= 1 and "source-repo-id" not in entry:
                 targets.append(entry["component"])
     for component in targets:
-        path = (index / "plugins" / component.partition("_")[0]
-                / f"{component}.yml")
+        # A name with no underscore can only be a utility slug
+        # (camp-docs#4): utilities are admitted deliberately, so the
+        # anchor is always recordable — no tier gate applies.
+        is_utility = "_" not in component
+        if is_utility:
+            path = index / "utilities" / f"{component}.yml"
+        else:
+            path = (index / "plugins" / component.partition("_")[0]
+                    / f"{component}.yml")
         if not path.exists():
             log(f"  ! {component}: no listing file")
             failed.append(component)
             continue
         with open(path) as f:
             entry = yaml.safe_load(f) or {}
-        if entry.get("tier", 0) < 1:
+        if not is_utility and entry.get("tier", 0) < 1:
             log(f"  ! {component}: tier 0 (unclaimed); nothing to anchor")
             failed.append(component)
             continue
@@ -1232,6 +1287,79 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
         f"{stats['dependencies']} dependency observations; "
         f"skipped {stats['skipped']}, gone {stats['gone']}, errors {stats['error']}; "
         f"{stats['renamed']} renames fixed, {stats['flagged-renames']} flagged")
+    # Utilities ride the same daily cycle (camp-docs#4); absent tree = no-op.
+    if (Path(index_dir) / "utilities").is_dir():
+        stats["utilities"] = enrich_utilities(index_dir, token, log=log)["metrics"]
+    return stats
+
+
+def enrich_utilities(index_dir: str | Path, token: str | None = None,
+                     log=print) -> dict:
+    """Refresh utilities/ listings' metrics (camp-docs#4). The tree is
+    small, so every entry refreshes on every run.
+
+    Open tools get the full repo metrics via _fetch_metrics, with the
+    same rename semantics as plugin entries: curated (unclaimed)
+    listings auto-canonicalize, claimed ones get flagged. Closed-source
+    tools get NO repo metrics — the anchored repo is docs/issues, so
+    its stars would describe the wrong thing — only a checked stamp
+    and the channel release. A declared release-channel overrides the
+    source host's release lookup in both cases."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    today = datetime.date.today().isoformat()
+    stats = {"metrics": 0, "gone": 0, "error": 0,
+             "renamed": 0, "flagged-renames": 0}
+    for path in sorted((Path(index_dir) / "utilities").glob("*.yml")):
+        with open(path) as f:
+            entry = yaml.safe_load(f)
+        closed = bool(entry.get("closed-source"))
+        channel = entry.get("release-channel")
+
+        if closed:
+            metrics = {"checked": today}
+        else:
+            status, metrics, canonical = _fetch_metrics(
+                entry["source"], token, today, log)
+            if status == "gone":
+                stats["gone"] += 1
+                log(f"  gone: {entry['source']}")
+                continue
+            if status != "ok":
+                stats["error"] += 1
+                continue
+            if canonical:
+                if entry.get("claimed"):
+                    log(f"  RENAMED (claimed): {entry['source']} -> "
+                        f"{canonical} — flagged in metrics")
+                    metrics["renamed-to"] = canonical
+                    stats["flagged-renames"] += 1
+                else:
+                    log(f"  renamed: {entry['source']} -> {canonical} "
+                        "(curated, source updated)")
+                    entry["source"] = canonical
+                    stats["renamed"] += 1
+
+        if channel:
+            release = fetch_channel_release(channel, token)
+            if release:
+                metrics["latest-release"] = release
+            else:
+                # Keep the last known release rather than dropping the
+                # row on a transient channel error.
+                previous = (entry.get("metrics") or {}).get("latest-release")
+                if previous:
+                    metrics["latest-release"] = previous
+
+        entry["metrics"] = metrics
+        stats["metrics"] += 1
+        with open(path, "w") as f:
+            yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
+
+    if stats["metrics"] or stats["gone"] or stats["error"]:
+        log(f"utilities enriched: {stats['metrics']} refreshed, "
+            f"gone {stats['gone']}, errors {stats['error']}; "
+            f"{stats['renamed']} renames fixed, "
+            f"{stats['flagged-renames']} flagged")
     return stats
 
 

@@ -306,6 +306,7 @@ legend.facet-label{padding:0}
   border-radius:2px;white-space:nowrap}
 .tb-0{background:transparent;color:var(--text-subtle);border:1px dashed var(--border-strong)}
 .tb-1{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
+.tb-u{background:var(--surface);color:var(--text-subtle);border:1px solid var(--border-strong)}
 .tb-2{background:transparent;color:var(--green-text);border:1px solid var(--green)}
 .tb-3{background:var(--ok-fill);color:#fff;font-weight:500;border:1px solid var(--ok-fill)}
 
@@ -563,6 +564,7 @@ a.adv:hover b,a.adv:focus-visible b{text-decoration:underline}
   border-radius:2px;white-space:nowrap}
 .tb-0{background:transparent;color:var(--text-subtle);border:1px dashed var(--border-strong)}
 .tb-1{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong)}
+.tb-u{background:var(--surface);color:var(--text-subtle);border:1px solid var(--border-strong)}
 .tb-2{background:transparent;color:var(--green-text);border:1px solid var(--green)}
 .tb-3{background:var(--ok-fill);color:#fff;font-weight:500;border:1px solid var(--ok-fill)}
 
@@ -790,7 +792,9 @@ BROWSE_JS = """
       group: !state.group || o.g === state.group,
       ver: !state.ver || (o.a >= 0 && (function(){
         var i = VORDER.indexOf(state.ver); return i >= o.a && i <= o.b; })()),
-      tier: state.tier === '' || o.t === +state.tier,
+      // "t" on a utility is claimed-ness (sort key), never a tier —
+      // tier filters are plugin questions and exclude utilities.
+      tier: state.tier === '' || (o.k !== 'u' && o.t === +state.tier),
       cost: !state.cost || o.l.indexOf(state.cost) !== -1,
       health: state.health === '' || o.h === +state.health
     };
@@ -814,14 +818,20 @@ BROWSE_JS = """
     return e;
   }
   function rowNode(o){
+    var isUtil = o.k === 'u';
     var a = el('a', 'row-item');
-    a.href = '/plugin/' + o.c + '.html';
+    a.href = (isUtil ? '/utility/' : '/plugin/') + o.c + '.html';
     var main = el('div', 'row-main');
     var l1 = el('div', 'row-line1');
-    l1.appendChild(el('span', 'row-name', o.c));
-    var tb = el('span', 'tb tb-' + o.t, 'Tier ' + o.t + ' \u00b7 ' + TIERS[o.t]);
+    l1.appendChild(el('span', 'row-name', isUtil ? (o.d || o.c) : o.c));
+    // Kind marker only (own solid style, never a tier rung \u2014
+    // dashed tb-0 reads as "unclaimed", which a utility is not);
+    // claimed-vs-curated is detail-page nuance.
+    var tb = isUtil
+      ? el('span', 'tb tb-u', 'Utility')
+      : el('span', 'tb tb-' + o.t, 'Tier ' + o.t + ' \u00b7 ' + TIERS[o.t]);
     l1.appendChild(tb);
-    if (o.t >= 2 && o.p){
+    if (!isUtil && o.t >= 2 && o.p){
       var vp = el('span', 'vpill');
       var vc = el('span', 'c', '\u2713');
       vc.setAttribute('aria-hidden', 'true');
@@ -909,7 +919,7 @@ BROWSE_JS = """
           var i = VORDER.indexOf(f.v);
           hit = o.a >= 0 && i >= o.a && i <= o.b;
         }
-        else if (f.g === 'tier') hit = o.t === +f.v;
+        else if (f.g === 'tier') hit = o.k !== 'u' && o.t === +f.v;
         else if (f.g === 'health') hit = o.h === +f.v;
         else hit = o.l.indexOf(f.v) !== -1;
         if (hit) counts[f.g + '|' + f.v]++;
@@ -927,9 +937,9 @@ BROWSE_JS = """
 
     var n = matched.length;
     if (!n){
-      countEl.textContent = 'No plugins match the selected filters.';
+      countEl.textContent = 'No listings match the selected filters.';
     } else {
-      var msg = n.toLocaleString() + ' plugin' + (n === 1 ? '' : 's') +
+      var msg = n.toLocaleString() + ' listing' + (n === 1 ? '' : 's') +
         (state.q ? ' match' + (n === 1 ? 'es' : '') +
           ' \u201c' + state.q + '\u201d.' : ' found.');
       if (n > shown) msg += ' First ' + shown.toLocaleString() + ' shown.';
@@ -1040,7 +1050,9 @@ BROWSE_JS = """
   restore();
   countEl.textContent = 'Loading plugins\u2026';
   fetch('/index.json').then(function(r){ return r.json(); }).then(function(j){
-    data = j.plugins.map(function(o){
+    // Utilities ride a sibling array (the plugins array is unchanged
+    // for existing consumers) and merge into one result list here.
+    data = j.plugins.concat(j.utilities || []).map(function(o){
       o.blob = (o.c + ' ' + (o.m || '') + ' ' + (o.n || '')).toLowerCase();
       o.l = o.l || [];
       return o;
@@ -1523,7 +1535,13 @@ def _health(entry: dict, today: datetime.date) -> tuple[str, str] | None:
     return ("var(--bad-text)", "Dormant")
 
 
+# Health label -> the numeric code browse records carry in "h" (the
+# facet values on the browse page use the same codes).
+HEALTH_CODE = {"Archived upstream": 0, "Actively maintained": 1,
+               "Maintained": 2, "Slowing down": 3, "Dormant": 4}
+
 LABEL_NAMES = {
+    "closed-source": "Closed source",
     "fully-free": "Fully free",
     "freemium": "Freemium",
     "paid-service": "Paid service",
@@ -1690,8 +1708,33 @@ def _facet(group: str, value: str, text: str, *, dot: str = "") -> str:
 
 
 def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
-                 established: dict | None = None) -> str:
+                 established: dict | None = None,
+                 utilities: list[dict] | None = None) -> str:
     total = len(entries)
+
+    # Utilities as first-class rows in the main browse (camp-docs#4):
+    # they ride a sibling `utilities` array in index.json (the
+    # `plugins` array stays byte-identical for existing consumers)
+    # and merge into the client-side list. Kind flag "k":"u" lets the
+    # tier filter exclude them; version filters exclude them via the
+    # (-1,-1) range like releaseless plugins; health and labels apply
+    # for real. "t" is claimed-ness, a sort key only — never a tier.
+    util_records = []
+    for u in sorted(utilities or [], key=lambda u: u["name"]):
+        umetrics = u.get("metrics") or {}
+        uhealth = _health({"metrics": umetrics}, today)
+        util_records.append({
+            "k": "u", "c": u["name"], "g": "utility",
+            "d": u.get("display-name") or u["name"],
+            "t": 1 if u.get("claimed") else 0,
+            "s": umetrics.get("stars", 0), "f": umetrics.get("forks", 0),
+            "o": umetrics.get("open-issues", 0),
+            "u": umetrics.get("updated", ""),
+            "h": HEALTH_CODE.get(uhealth[1], -1) if uhealth else -1,
+            "l": u.get("labels", []),
+            "m": (u.get("summary") or "").strip(),
+            "n": (u.get("display-name") or "").lower(),
+            "a": -1, "b": -1})
 
     type_counts = Counter(e["component"].partition("_")[0] for e, _ in entries)
     top_types = [t for t, _ in type_counts.most_common()][:6]
@@ -1740,6 +1783,11 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
                 rows.append(_facet("group", fam, label(fam)))
         sections.append(f'<div class="facet-cat">{escape(cat)}</div>'
                         + "".join(rows))
+    # Utilities: one facet value under its own category header — the
+    # only browse surface the section has (no separate listing page).
+    if util_records:
+        sections.append('<div class="facet-cat">Ecosystem</div>'
+                        + _facet("group", "utility", "Utilities"))
     more_html = (f'<div id="more-types" hidden>{"".join(sections)}</div>'
                  f'<button class="facet-more" data-target="more-types" '
                  f'aria-expanded="false" aria-controls="more-types" '
@@ -1782,8 +1830,6 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         + _facet("health", "4", "Dormant", dot="var(--bad-text)")
         + _facet("health", "0", "Archived upstream", dot="var(--text-subtle)"))
 
-    HEALTH_CODE = {"Archived upstream": 0, "Actively maintained": 1,
-                   "Maintained": 2, "Slowing down": 3, "Dormant": 4}
     records = []
     for entry, listing in entries:
         component = entry["component"]
@@ -1950,7 +1996,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         the searchable list — or browse the
         <a href="/all.html">complete plain index</a>.</p></noscript>
       <div class="empty" id="empty" style="display:none">
-        No plugins match these filters.
+        No listings match these filters.
         <button class="sortbtn outline" id="clear-empty">Clear all filters</button>
       </div>
     </div>
@@ -1963,7 +2009,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
                  description="An independent, mirrorable archive of Moodle "
                  "plugins, source-verified byte for byte.",
                  extra_js=browse_js)
-    return page, records
+    return page, records, util_records
 
 
 # ------------------------------------------------------------- detail ------
@@ -2772,6 +2818,156 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                  extra_js=COPY_JS + LIGHTBOX_JS)
 
 
+# ---------------------------------------------------------- utilities ------
+# Pointer-only listings for ecosystem tools that are not Moodle plugins
+# (camp-docs#4): no component, no version.php, no releases, no downloads.
+# The registry records identity and metadata; distribution stays upstream.
+
+UTILITY_CATEGORIES = {
+    "cli": "Command-line tool",
+    "ci": "Continuous integration",
+    "docker": "Development environment",
+    "desktop": "Desktop application",
+    "ide": "IDE extension",
+}
+
+UTILITY_INSTALL = {
+    "composer": "Composer",
+    "phar": "phar",
+    "git": "git clone",
+    "pip": "pip",
+    "vscode-marketplace": "VS Code Marketplace",
+    "jetbrains-marketplace": "JetBrains Marketplace",
+}
+
+# Utilities carry no tiers: admission is curated and consent-first, so
+# the untrusted tier-0 start never exists, and with no releases the
+# ladder would have no top. The one real distinction is who vouches
+# for the entry's contents — the registry, or the maintainer who
+# claimed it (a `claimed:` date, set by the claim PR).
+def _utility_status_badge(entry: dict) -> str:
+    if entry.get("claimed"):
+        return '<span class="tb tb-1">Claimed by maintainer</span>'
+    return '<span class="tb tb-u">Curated listing</span>'
+
+
+def _utility_page(entry: dict, today: datetime.date) -> str:
+    slug = entry["name"]
+    name = entry.get("display-name") or slug
+    summary = (entry.get("summary") or "").strip()
+    category = UTILITY_CATEGORIES.get(entry.get("category", ""),
+                                      entry.get("category", ""))
+    metrics = entry.get("metrics") or {}
+
+    claim_invite = ("" if entry.get("claimed") else
+                    " Are you the maintainer? Claim this listing to keep "
+                    "its details current.")
+    closed = bool(entry.get("closed-source"))
+    closed_note = (" This tool’s source code is not public; the listing "
+                   "exists because of its established community use, with "
+                   "the commercial facts disclosed below." if closed else "")
+    banners = f"""
+  <div class="banner"><b>Utility listing.</b> This is a tool for operating
+  or developing Moodle, not an installable plugin — it has no component
+  name and nothing here is hosted or verified by the registry. This entry
+  records the canonical source and basic facts; installation and releases
+  happen at the project’s own home.{closed_note}{claim_invite}</div>"""
+
+    pills = []
+    if closed:
+        pills.append('<span class="lbl-pill">Closed source</span>')
+    pills += [f'<span class="lbl-pill">{escape(LABEL_NAMES[lab])}</span>'
+              for lab in entry.get("labels") or [] if lab in LABEL_NAMES]
+    labels_row = f'<div class="labels">{"".join(pills)}</div>' if pills else ""
+
+    kv_rows = []
+    maintainers = entry.get("maintainers") or []
+    if maintainers:
+        m = maintainers[0]
+        mt_name = m.get("name") or m.get("github") or m.get("gitlab") or "maintainer"
+        kv_rows.append(
+            f'<div class="kvrow"><span class="fk">Maintainer</span>'
+            f'<span class="fv"><div class="mt-name">{escape(mt_name)}</div>'
+            f'</span></div>')
+    repo_label = "Project repository" if closed else "Source repository"
+    repo_attrib = ('<div class="attrib" style="margin-top:6px">documentation '
+                   'and issue tracking — the source code itself is not '
+                   'published</div>' if closed else '')
+    kv_rows.append(f'<div class="kvrow"><span class="fk">{repo_label}</span>'
+                   f'<span class="fv"><span class="mono" '
+                   f'style="font-size:0.78125rem;word-break:break-all">'
+                   f'<a href="{escape(entry["source"])}">'
+                   f'{escape(entry["source"].removeprefix("https://"))}</a></span>'
+                   f'{repo_attrib}</span></div>')
+    kv_rows.append(f'<div class="kvrow"><span class="fk">Category</span>'
+                   f'<span class="fv">{escape(category)}</span></div>')
+    if entry.get("license"):
+        lic = escape(entry["license"])
+        lic_note = " · closed source" if closed else ""
+        kv_rows.append(f'<div class="kvrow"><span class="fk">License</span>'
+                       f'<span class="fv">{lic}{lic_note}</span></div>')
+    install_methods = [UTILITY_INSTALL.get(i, i) for i in entry.get("install") or []]
+    if install_methods:
+        kv_rows.append(
+            '<div class="kvrow"><span class="fk">Installed via</span>'
+            f'<span class="fv">{escape(" · ".join(install_methods))}'
+            '<div class="attrib" style="margin-top:6px">distributed by the '
+            'project itself — the registry hosts no artifacts for utilities'
+            '</div></span></div>')
+    upstream = metrics.get("latest-release") or {}
+    if upstream.get("tag"):
+        when = (f' · {_rel_time(upstream["date"], today)}'
+                if upstream.get("date") else "")
+        release_url = upstream.get("url") or f'{entry["source"]}/releases/latest'
+        kv_rows.append(
+            '<div class="kvrow"><span class="fk">Latest release</span>'
+            f'<span class="fv"><a class="mono" '
+            f'href="{escape(release_url)}">'
+            f'{escape(str(upstream["tag"]))}</a>{when}'
+            '<div class="attrib" style="margin-top:6px">reported by the '
+            'source platform · not verified or archived by the registry'
+            '</div></span></div>')
+    if entry.get("homepage"):
+        kv_rows.append('<div class="kvrow"><span class="fk">Links</span>'
+                       f'<span class="fv"><a href="{escape(entry["homepage"])}">'
+                       'Project homepage</a></span></div>')
+    kv_rows.append('<div class="kvrow"><span class="fk">Issues</span>'
+                   f'<span class="fv"><a href="{escape(entry["source"])}/issues">'
+                   'Browse known issues or report a problem</a></span></div>')
+    dev_bits = []
+    if metrics.get("stars") is not None:
+        dev_bits.append(f'★ {metrics["stars"]}')
+    if metrics.get("updated"):
+        dev_bits.append(f'updated {_rel_time(metrics["updated"], today)}')
+    if dev_bits:
+        kv_rows.append('<div class="kvrow"><span class="fk">Development</span>'
+                       f'<span class="fv">{" · ".join(dev_bits)}</span></div>')
+    kv_rows.append('<div class="kvrow"><span class="fk">Security advisories</span>'
+                   '<span class="fv">None published</span></div>')
+    project = ('<h2 class="sect">Project</h2><div class="kv">'
+               + "".join(kv_rows) + '</div>')
+
+    body = f"""
+{_header()}
+<div class="detail">
+<main id="main-content" tabindex="-1">
+  <a class="backlink" href="/">← Back to archive</a>
+  <div class="crumb"><a href="/?group=utility">Utilities</a></div>
+  <h1>{escape(name)}</h1>
+  {f'<div class="mono" style="color:var(--faint-label);font-size:0.8125rem;margin-top:4px">{escape(slug)}</div>' if name != slug else ''}
+  <div class="strip">{_utility_status_badge(entry)}</div>
+  {labels_row}
+  {f'<p class="dsummary">{escape(summary)}</p>' if summary else ''}
+  {banners}
+  {project}
+</main>
+{_footer(wrap=False)}
+</div>
+"""
+    return _page(f"{name} — CAMP", body,
+                 description=summary[:200] if summary else "")
+
+
 # ---------------------------------------------------------------- how ------
 
 
@@ -3213,9 +3409,27 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
                       reverse=True)
     (out / "removed.html").write_text(_removed_page(removals))
 
-    browse_html, records = _browse_page(entries, today, established=established)
+    # Utilities: pointer-only ecosystem-tool listings (camp-docs#4).
+    # Absent tree = no pages, an empty search strip, and no nav
+    # impact beyond the static link.
+    utilities: list[dict] = []
+    utilities_dir = Path(index_dir) / "utilities"
+    if utilities_dir.is_dir():
+        utilities = [yaml.safe_load(p.read_text())
+                     for p in sorted(utilities_dir.glob("*.yml"))]
+        if utilities:
+            (out / "utility").mkdir(exist_ok=True)
+            for u in utilities:
+                (out / "utility" / f'{u["name"]}.html').write_text(
+                    _utility_page(u, today))
+
+    browse_html, records, util_records = _browse_page(
+        entries, today, established=established, utilities=utilities)
     (out / "index.html").write_text(browse_html)
-    (out / "index.json").write_text(json.dumps({"plugins": records},
+    index_data: dict = {"plugins": records}
+    if util_records:
+        index_data["utilities"] = util_records
+    (out / "index.json").write_text(json.dumps(index_data,
                                                separators=(",", ":")))
     (out / "version.json").write_text(json.dumps({
         "camp-tools": TOOLS_VERSION,
