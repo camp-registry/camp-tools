@@ -55,7 +55,7 @@ def test_scan_parks_directory_mismatch(tmp_path, monkeypatch):
     """A candidate declaring a directory-mapped component from a different
     repository parks in needs-review instead of listing (camp-tools#30)."""
     import camp.scan as scan
-    from tests.test_scan import _candidate
+    from helpers import _candidate
     index = tmp_path / "index"
     (index / "plugins").mkdir(parents=True)
     candidate = _candidate(full_name="copyfarm/moodle-mod_attendance",

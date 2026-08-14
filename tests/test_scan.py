@@ -4,12 +4,7 @@ import yaml
 
 from camp.scan import COMPONENT_RE, Candidate, _entry_for, _is_gpl
 
-
-def _candidate(**overrides):
-    defaults = dict(full_name="o/moodle-mod_x", html_url="https://github.com/o/moodle-mod_x",
-                    owner="o", description="A plugin", license_spdx="GPL-3.0",
-                    stars=1, default_branch="main", archived=False)
-    return Candidate(**{**defaults, **overrides})
+from helpers import _candidate
 
 
 def test_component_regex():
