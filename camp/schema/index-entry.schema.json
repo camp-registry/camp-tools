@@ -28,6 +28,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "org-claim": {
+      "description": "The GitHub organization login whose camp-claim manifest claimed this entry (`camp org-claim`). The stamp scopes what the scheduled watch sweep may update: stamped entries' maintainers, security-contact and labels follow the org's manifest; entries claimed individually (no stamp) are never touched by a sweep. Removed by an individual claim PR taking the entry over.",
+      "type": "string",
+      "minLength": 1
+    },
     "maintainers": {
       "type": "array",
       "minItems": 1,

@@ -759,6 +759,52 @@ def _cmd_dependency_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_org_claim(args: argparse.Namespace) -> int:
+    from .orgclaim import ManifestError, load_enrolled, org_claim
+    if args.all_enrolled:
+        orgs = load_enrolled(args.index_dir)
+        if not orgs:
+            print("no enrolled organizations")
+            return 0
+    elif args.org:
+        orgs = [args.org]
+    else:
+        print("error: give an org or --all-enrolled")
+        return 2
+    exit_code = 0
+    for org in orgs:
+        try:
+            report = org_claim(args.index_dir, org,
+                               manifest_repo=args.manifest_repo,
+                               dry_run=args.dry_run)
+        except ManifestError as exc:
+            # An enrolled org's broken/vanished manifest must not block the
+            # other orgs' sweep; nothing was changed for this org.
+            print(f"{org}: manifest error: {exc}")
+            exit_code = 1
+            continue
+        would = "would " if args.dry_run else ""
+        print(f"{org}: {would}claimed {len(report.claimed)}, "
+              f"{would}updated {len(report.updated)}"
+              + (f": {', '.join(report.claimed + report.updated)}"
+                 if report.claimed or report.updated else ""))
+        for kind, items in (
+                ("NEEDS HUMAN — individually claimed, untouched", report.conflicts),
+                ("NEEDS HUMAN — stamped but now excluded, untouched",
+                 report.excluded_claimed),
+                ("excluded by manifest", report.excluded),
+                ("skipped (non-active status)", report.skipped)):
+            if items:
+                print(f"{org}: {kind}: {', '.join(items)}")
+        if report.claimed and not args.dry_run:
+            from .scan import fill_repo_ids
+            failed = fill_repo_ids(args.index_dir, report.claimed)
+            if failed:
+                print(f"{org}: source-repo-id failed for: {', '.join(failed)}")
+                exit_code = 1
+    return exit_code
+
+
 def _cmd_fill_repo_ids(args: argparse.Namespace) -> int:
     from .scan import fill_repo_ids
     failed = fill_repo_ids(args.index_dir, args.components or None)
@@ -1125,6 +1171,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("components", nargs="+",
                    help="frankenstyle component names to refresh")
     p.set_defaults(func=_cmd_refresh_metrics)
+
+    p = sub.add_parser("org-claim",
+                       help="claim an organization's unclaimed listed entries "
+                            "from its <org>/camp-claim manifest; "
+                            "already-claimed entries are reported, never touched")
+    p.add_argument("index_dir")
+    p.add_argument("org", nargs="?", help="GitHub organization login")
+    p.add_argument("--all-enrolled", action="store_true",
+                   help="sweep every org in discovery/org-claims.yml "
+                        "(the watch workflow's mode)")
+    p.add_argument("--manifest-repo", default="camp-claim",
+                   help="manifest repository name (default: camp-claim)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="report what would change without writing")
+    p.set_defaults(func=_cmd_org_claim)
 
     p = sub.add_parser("fill-repo-ids",
                        help="record claimed entries' permanent numeric source "
