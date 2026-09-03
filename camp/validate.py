@@ -60,7 +60,7 @@ def validate_entry(path: str | Path) -> list[str]:
     actual = Path(path)
     if actual.parts[-2:] != expected_rel.parts:
         problems.append(
-            f"file is at {actual.name} under '{actual.parts[-2]}/' but component "
+            f"file is at {actual.name} under '{Path(*actual.parts[:-2])}/' but component "
             f"{component} belongs at plugins/{expected_rel}"
         )
 
