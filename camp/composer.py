@@ -15,6 +15,8 @@ pipeline and are not generated here yet.
 from __future__ import annotations
 
 import json
+import re
+import sys
 from pathlib import Path
 
 from .advisory import AdvisorySet
@@ -22,6 +24,44 @@ from .moodleversions import branch_names, branches_known_at, next_branch
 from .validate import load_entry
 
 PLUGIN_TYPE_PREFIX = "moodle-"
+INSTALLER_PACKAGE = "moodle/composer-installer"
+
+# composer/semver VersionParser::normalize, ported. Composer refuses any
+# version string outside this grammar, so a release whose author-chosen
+# version doesn't fit is either rewritten (below) or left out of
+# packages.json; the release ledger is untouched either way.
+_MODIFIER = r"[._-]?(?:(?:stable|beta|b|RC|alpha|a|patch|pl|p)(?:(?:[.-]?\d+)*)?)?(?:[.-]?dev)?"
+_COMPOSER_VERSION = re.compile(
+    r"^v?\d{1,5}(?:\.\d+){0,3}" + _MODIFIER + r"$"
+    r"|^v?\d{4}(?:[.:-]?\d{2}){1,6}(?:[.:-]?\d{1,3}){0,2}" + _MODIFIER + r"$",
+    re.IGNORECASE)
+# The Moodle-community "-rN" scheme (v5.2-r1 = first release for 5.2) is
+# not a Composer stability suffix; "patch" is the one with the same
+# meaning and ordering (5.2-patch1 < 5.2-patch2, both above 5.2).
+_RELEASE_SUFFIX = re.compile(r"[._-]r(\d+)$", re.IGNORECASE)
+
+
+def composer_version(version: str) -> str | None:
+    """Composer-parseable form of a release version, or None when there is
+    no faithful rewrite. Build metadata (+...) is dropped as Composer does."""
+    candidate = version.split("+", 1)[0]
+    if _COMPOSER_VERSION.match(candidate):
+        return candidate
+    rewritten = _RELEASE_SUFFIX.sub(lambda m: f"-patch{m.group(1)}", candidate)
+    if rewritten != candidate and _COMPOSER_VERSION.match(rewritten):
+        return rewritten
+    return None
+
+
+_CONSTRAINT_VERSION = re.compile(r"v?\d[\w.+-]*", re.IGNORECASE)
+
+
+def composer_constraint(constraint: str) -> str:
+    """An advisory's affected-versions range with each version rewritten the
+    way packages.json rewrites it, so `composer audit` matches what it
+    installed. Operators and separators pass through untouched."""
+    return _CONSTRAINT_VERSION.sub(
+        lambda m: composer_version(m.group(0)) or m.group(0), constraint)
 
 
 def _vendor(entry: dict) -> str:
@@ -42,10 +82,12 @@ def _composer_type(component: str) -> str:
 
 def package_definition(entry: dict, base_url: str,
                        advisories: AdvisorySet | None = None,
-                       artifacts_base: str | None = None) -> tuple[str, dict]:
+                       artifacts_base: str | None = None,
+                       skipped: list[str] | None = None) -> tuple[str, dict]:
     """(package name, {version: definition}) for one index entry. Versions
     revoked by a security advisory (RFC §5.3) are omitted from installation
-    metadata; the release ledger and archive are untouched."""
+    metadata; the release ledger and archive are untouched. Versions Composer
+    cannot parse are omitted too and reported via `skipped`."""
     component = entry["component"]
     name = _package_name(entry)
     versions: dict[str, dict] = {}
@@ -54,16 +96,22 @@ def package_definition(entry: dict, base_url: str,
         version = release["version"].split(" ")[0]
         if advisories is not None and advisories.is_revoked(component, version):
             continue
-        versions[version] = {
+        pkg_version = composer_version(version)
+        if pkg_version is None:
+            if skipped is not None:
+                skipped.append(f"{component} {version}")
+            continue
+        # Composer verifies dist.shasum with SHA-1 only, so the SHA-256 the
+        # ledger holds cannot go there; it rides in extra.camp instead.
+        versions[pkg_version] = {
             "name": name,
-            "version": version,
+            "version": pkg_version,
             "type": _composer_type(component),
             "license": [entry.get("license", "GPL-3.0-or-later")],
             "dist": {
                 "type": "zip",
                 "url": (f"{artifacts_base or base_url + '/artifacts'}/"
                         f"{component}/{component}-{version}.zip"),
-                "shasum": release["zip-sha256"],
             },
             "source": {
                 "type": "git",
@@ -71,7 +119,7 @@ def package_definition(entry: dict, base_url: str,
                 "reference": release["commit"],
             },
             "require": {
-                "moodle/moodle-composer-installer": "*",
+                INSTALLER_PACKAGE: "*",
                 "php": f">={release.get('php-min', '7.4')}",
             },
             # Branch compatibility as resolver-visible constraints. conflict
@@ -84,6 +132,8 @@ def package_definition(entry: dict, base_url: str,
             "extra": {
                 "camp": {
                     "component": component,
+                    "version": version,
+                    "zip-sha256": release["zip-sha256"],
                     "tier": entry["tier"],
                     "labels": entry["labels"],
                     "supported-moodle": release["supported-moodle"],
@@ -97,8 +147,8 @@ def package_definition(entry: dict, base_url: str,
             # Composer's native abandoned-with-replacement signal: composer
             # warns "package is abandoned, use <moved-to> instead" without
             # any camp-specific tooling (RFC §6.3).
-            versions[version]["abandoned"] = entry["moved-to"]
-            versions[version]["extra"]["camp"]["moved-to"] = entry["moved-to"]
+            versions[pkg_version]["abandoned"] = entry["moved-to"]
+            versions[pkg_version]["extra"]["camp"]["moved-to"] = entry["moved-to"]
 
     return name, versions
 
@@ -118,7 +168,8 @@ def _core_conflict(release: dict) -> dict:
 
 
 def generate(index_dir: str | Path, base_url: str,
-             artifacts_base: str | None = None) -> dict:
+             artifacts_base: str | None = None,
+             skipped: list[str] | None = None) -> dict:
     """Build the full packages.json document from an index tree."""
     advisories = AdvisorySet.load(index_dir)
     packages: dict[str, dict] = {}
@@ -129,7 +180,8 @@ def generate(index_dir: str | Path, base_url: str,
         if entry.get("status", "active") == "delisted" or entry["tier"] < 2:
             continue
         name, versions = package_definition(entry, base_url, advisories,
-                                            artifacts_base=artifacts_base)
+                                            artifacts_base=artifacts_base,
+                                            skipped=skipped)
         if versions:
             packages[name] = versions
     return {"packages": packages}
@@ -155,7 +207,7 @@ def generate_advisories(index_dir: str | Path, base_url: str) -> dict:
             "packageName": name,
             "title": advisory["title"],
             "severity": advisory["severity"],
-            "affectedVersions": advisory["affected-versions"],
+            "affectedVersions": composer_constraint(advisory["affected-versions"]),
             "link": f"{base_url}/advisories/{advisory['id']}.html",
             "cve": advisory.get("cve"),
             "reportedAt": advisory["published"],
@@ -166,7 +218,12 @@ def generate_advisories(index_dir: str | Path, base_url: str) -> dict:
 
 def write(index_dir: str | Path, base_url: str, out_path: str | Path,
           artifacts_base: str | None = None) -> int:
-    document = generate(index_dir, base_url, artifacts_base=artifacts_base)
+    skipped: list[str] = []
+    document = generate(index_dir, base_url, artifacts_base=artifacts_base,
+                        skipped=skipped)
+    for item in skipped:
+        print(f"warning: {item}: version not expressible in Composer's "
+              f"grammar; left out of packages.json", file=sys.stderr)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:

@@ -409,8 +409,10 @@ def test_moved_page_shows_successor_notice(index_dir, entry_path, tmp_path):
 def test_composer_excludes_below_tier2_and_delisted(index_dir, entry_path):
     doc = composer_generate(index_dir, "https://repo.test")
     assert list(doc["packages"]) == ["tester/moodle-mod_example"]
-    dist = doc["packages"]["tester/moodle-mod_example"]["1.0.0"]["dist"]
-    assert dist["shasum"] == yaml.safe_load(entry_path.read_text())["releases"][0]["zip-sha256"]
+    definition = doc["packages"]["tester/moodle-mod_example"]["1.0.0"]
+    assert definition["extra"]["camp"]["zip-sha256"] == \
+        yaml.safe_load(entry_path.read_text())["releases"][0]["zip-sha256"]
+    assert "shasum" not in definition["dist"]
 
     original = entry_path.read_text()
     _mutate(entry_path, lambda e: e.update(status="delisted"))
