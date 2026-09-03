@@ -406,6 +406,27 @@ def test_moved_page_shows_successor_notice(index_dir, entry_path, tmp_path):
     assert "https://marketplace.example/mod_example" in html
 
 
+def test_validate_bare_filename_reports_misplacement(entry_path, tmp_path, monkeypatch):
+    # camp-tools#37: a bare filename has no parent parts and used to crash
+    # the misplacement message with IndexError instead of reporting it
+    (tmp_path / "mod_example.yml").write_text(entry_path.read_text())
+    monkeypatch.chdir(tmp_path)
+    problems = validate_entry("mod_example.yml")
+    assert problems == [
+        "file is at mod_example.yml under './' but component mod_example "
+        "belongs at plugins/mod/mod_example.yml"
+    ]
+
+
+def test_validate_misplaced_file_names_the_actual_directory(entry_path, tmp_path):
+    wrong = tmp_path / "plugins" / "wrongdir" / "mod_example.yml"
+    wrong.parent.mkdir(parents=True)
+    wrong.write_text(entry_path.read_text())
+    (problem,) = validate_entry(wrong)
+    assert f"under '{wrong.parent}/'" in problem
+    assert "belongs at plugins/mod/mod_example.yml" in problem
+
+
 def test_composer_excludes_below_tier2_and_delisted(index_dir, entry_path):
     doc = composer_generate(index_dir, "https://repo.test")
     assert list(doc["packages"]) == ["tester/moodle-mod_example"]
