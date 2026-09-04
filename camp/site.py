@@ -1587,6 +1587,67 @@ def _zip_url(artifacts_base: str, component: str, version: str) -> str:
     return f"{artifacts_base}/{component}/{component}-{version}.zip"
 
 
+PLUGINS_JSON_SCHEMA = 1
+
+
+def plugins_dataset(entries: list[tuple[dict, dict]], base_url: str,
+                    artifacts_base: str, advisories: AdvisorySet,
+                    built: str) -> dict:
+    """One machine-readable record per listed plugin for /plugins.json
+    (camp-index#219): identity, tier, source, license, labels, page URL
+    and every installable release with its download URL and hash. The
+    consumer-facing counterpart of the browse index.json, whose keys are
+    abbreviated for the page's own use. Versions withdrawn by advisory are
+    omitted from the release list, as in packages.json; the release ledger
+    in the entry file stays complete."""
+    plugins = []
+    for entry, listing in sorted(entries, key=lambda pair: pair[0]["component"]):
+        component = entry["component"]
+        releases = []
+        for release in entry.get("releases") or []:
+            version = release["version"].split(" ")[0]
+            if advisories.is_revoked(component, version):
+                continue
+            record = {
+                "version": version,
+                "tag": release["tag"],
+                "moodle-version": release["moodle-version"],
+                "supported-moodle": release["supported-moodle"],
+                "published": release["published"],
+                "download": _zip_url(artifacts_base, component, version),
+                "zip-sha256": release["zip-sha256"],
+            }
+            if release.get("php-min"):
+                record["php-min"] = release["php-min"]
+            releases.append(record)
+        plugin = {
+            "component": component,
+            "type": component.partition("_")[0],
+            "name": listing.get("name") or None,
+            "summary": entry.get("summary") or listing.get("summary") or None,
+            "tier": entry["tier"],
+            "status": entry.get("status", "active"),
+            "source": entry["source"],
+            "license": entry.get("license"),
+            "labels": entry.get("labels") or [],
+            "maintainers": entry.get("maintainers") or [],
+            "security-contact": entry.get("security-contact"),
+            "page": f"{base_url}/plugin/{component}.html",
+            "latest": releases[-1]["version"] if releases else None,
+            "releases": releases,
+        }
+        if entry.get("moved-to"):
+            plugin["moved-to"] = entry["moved-to"]
+        plugins.append(plugin)
+    return {
+        "schema": PLUGINS_JSON_SCHEMA,
+        "generated": built,
+        "camp-tools": TOOLS_VERSION,
+        "base-url": base_url,
+        "plugins": plugins,
+    }
+
+
 def _load_listing(listings_dir: Path | None, component: str) -> dict:
     if listings_dir:
         path = listings_dir / f"{component}.yml"
@@ -3453,10 +3514,18 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
         index_data["utilities"] = util_records
     (out / "index.json").write_text(json.dumps(index_data,
                                                separators=(",", ":")))
+    built = _BUILT.strftime("%Y-%m-%dT%H:%M:%SZ")
     (out / "version.json").write_text(json.dumps({
         "camp-tools": TOOLS_VERSION,
-        "built": _BUILT.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "built": built,
         "plugins": len(entries)}) + "\n")
+    # consolidated consumer file (camp-index#219): full keys, all
+    # releases with download URLs; sorted by component for stable diffs
+    (out / "plugins.json").write_text(json.dumps(
+        plugins_dataset(entries, base_url,
+                        artifacts_base or f"{base_url}/artifacts",
+                        advisories, built),
+        separators=(",", ":"), sort_keys=False) + "\n")
 
     all_rows = "".join(
         f'<li><a class="mono" href="/plugin/{e["component"]}.html">'

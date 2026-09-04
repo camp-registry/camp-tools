@@ -334,6 +334,54 @@ def test_maintainer_and_ledger_on_detail_page(index_dir, tmp_path):
     assert "exactly what the\n      maintainer published" in html or "exactly what the" in html
 
 
+def test_plugins_json_is_the_consolidated_consumer_file(index_dir, entry_path, tmp_path):
+    # camp-index#219: one file, full keys, every release with a download URL
+    import json
+    from camp.site import generate as site_generate
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out,
+                  artifacts_base="https://artifacts.test")
+    doc = json.loads((out / "plugins.json").read_text())
+    assert doc["schema"] == 1 and doc["base-url"] == "https://repo.test"
+    assert doc["generated"] == json.loads((out / "version.json").read_text())["built"]
+    (plugin,) = doc["plugins"]
+    assert plugin["component"] == "mod_example" and plugin["type"] == "mod"
+    assert plugin["tier"] == 2 and plugin["status"] == "active"
+    assert plugin["source"] == "https://example.org/mod_example"
+    assert plugin["maintainers"] == [{"github": "tester"}]
+    assert plugin["page"] == "https://repo.test/plugin/mod_example.html"
+    assert plugin["latest"] == "1.0.0"
+    (release,) = plugin["releases"]
+    assert release["download"] == "https://artifacts.test/mod_example/mod_example-1.0.0.zip"
+    assert len(release["zip-sha256"]) == 64
+    assert release["supported-moodle"] == ["4.5", "5.0"]
+    assert release["php-min"] == "8.1.0"
+
+    # a discovered (tier 0) listing is present with an empty release list
+    _mutate(entry_path, lambda e: e.update(tier=0, releases=[]))
+    site_generate(index_dir, "https://repo.test", out)
+    (plugin,) = json.loads((out / "plugins.json").read_text())["plugins"]
+    assert plugin["tier"] == 0 and plugin["releases"] == [] and plugin["latest"] is None
+    assert plugin["releases"] == []
+
+
+def test_plugins_json_omits_revoked_versions(index_dir, tmp_path):
+    import json
+    from camp.site import generate as site_generate
+    advisories = index_dir / "advisories"
+    advisories.mkdir()
+    (advisories / "CAMP-2026-0001.yml").write_text(yaml.safe_dump({
+        "id": "CAMP-2026-0001", "component": "mod_example",
+        "title": "Withdrawn", "severity": "low",
+        "affected-versions": "=1.0.0", "revoke": True,
+        "published": "2026-07-27T00:00:00Z", "description": "test",
+    }, sort_keys=False))
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    (plugin,) = json.loads((out / "plugins.json").read_text())["plugins"]
+    assert plugin["releases"] == [] and plugin["latest"] is None
+
+
 def test_browse_ships_shell_plus_json(index_dir, tmp_path):
     import json
     from camp.site import generate as site_generate
