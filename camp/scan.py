@@ -35,7 +35,7 @@ from pathlib import Path
 
 import yaml
 
-from . import directorymap, plugintypes, standardplugins, versionphp
+from . import apptoken, directorymap, plugintypes, standardplugins, versionphp
 from .moodleversions import BRANCHES
 
 USER_AGENT = "camp-seeding-scanner/0.1 (community Moodle plugin repository)"
@@ -393,18 +393,26 @@ def unknown_type_families(index_dir: str | Path) -> dict[str, list[tuple[str, di
     return {prefix: sorted(families[prefix]) for prefix in sorted(families)}
 
 
-def _request(url: str, token: str | None, retries: int = 3,
+def _request(url: str, token, retries: int = 3,
              accept: str = "application/vnd.github+json") -> tuple[int, bytes, dict]:
-    req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT,
-        "Accept": accept,
-        **({"Authorization": f"Bearer {token}"} if token else {}),
-    })
+    """`token` is a fixed string or an apptoken.AppTokenSource; the header
+    value is resolved per request so a source can rotate underneath a
+    multi-hour sweep, and a 401 against a source mints once and retries."""
+    retried_auth = False
     for attempt in range(retries):
+        bearer = apptoken.resolve(token)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": USER_AGENT,
+            "Accept": accept,
+            **({"Authorization": f"Bearer {bearer}"} if bearer else {}),
+        })
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return resp.status, resp.read(), dict(resp.headers)
         except urllib.error.HTTPError as exc:
+            if exc.code == 401 and not retried_auth and apptoken.invalidate(token):
+                retried_auth = True
+                continue
             return exc.code, exc.read(), dict(exc.headers)
         except (urllib.error.URLError, TimeoutError, OSError):
             # Network blip (DNS, connection reset, SSL/read timeout): retry a
@@ -519,25 +527,33 @@ def _fetch_component(candidate: Candidate, token: str | None,
     if token:
         url = (f"https://api.github.com/repos/{candidate.full_name}/contents/"
                f"version.php?ref={ref}")
-        req_token = token
     else:
         url = (f"https://raw.githubusercontent.com/{candidate.full_name}/"
                f"{ref}/version.php")
-        req_token = None
     headers_accept = {"Accept": "application/vnd.github.raw+json"} if token else {}
-    request = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT, **headers_accept,
-        **({"Authorization": f"Bearer {req_token}"} if req_token else {}),
-    })
+
+    def build_request():
+        bearer = apptoken.resolve(token)
+        return urllib.request.Request(url, headers={
+            "User-Agent": USER_AGENT, **headers_accept,
+            **({"Authorization": f"Bearer {bearer}"} if bearer else {}),
+        })
+
     net_errors = 0
+    retried_auth = False
     while True:
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(build_request(), timeout=30) as response:
                 body = response.read()
             break
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return ("missing", None, "")
+            if exc.code == 401 and not retried_auth and apptoken.invalidate(token):
+                # an App source rotates and the fetch goes again; a fixed
+                # token that went bad stays transient as before
+                retried_auth = True
+                continue
             if exc.code in (403, 429) and exc.headers.get("X-RateLimit-Remaining") == "0":
                 reset = int(exc.headers.get("X-RateLimit-Reset", "0"))
                 wait = min(max(0, reset - int(time.time())) + 1, 3600)
@@ -1830,6 +1846,9 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 recheck_days: int = DEFAULT_RECHECK_DAYS) -> list[ScanResult]:
     """Discover Moodle plugins on GitLab.com and write Tier 0 entries."""
     token = token or os.environ.get("GITLAB_TOKEN")
+    # GitHub-side probes (collision classifier) take the same self-refreshing
+    # source as the GitHub sweep; GITLAB_TOKEN above is GitLab-only
+    github_token = apptoken.token_from_env(log=log)
     terms = terms or GITLAB_DEFAULT_TERMS
     index = Path(index_dir)
     today = datetime.date.today().isoformat()
@@ -1889,7 +1908,7 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 # holder lives there; the GitLab token would be rejected.
                 outcome, detail = classify_existing(
                     index, candidate.html_url, component,
-                    os.environ.get("GITHUB_TOKEN"))
+                    github_token)
                 record_outcome(ledger, candidate, outcome, detail, today,
                                component=component)
                 results.append(ScanResult(candidate, outcome, component))
@@ -1910,7 +1929,7 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 continue
 
             unknown = (directory_anchor_detail(component, candidate.html_url,
-                                               os.environ.get("GITHUB_TOKEN"))
+                                               github_token)
                        or unknown_type_detail(index, component, version_text,
                                               established)
                        or bundled_shadow_detail(index, component, established))
@@ -1940,7 +1959,9 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
          token: str | None = None, dry_run: bool = False, log=print,
          recheck_days: int = DEFAULT_RECHECK_DAYS) -> list[ScanResult]:
     """Run discovery and write Tier 0 entries into the index tree."""
-    token = token or os.environ.get("GITHUB_TOKEN")
+    # App credentials in the environment give a self-refreshing token source;
+    # a sweep runs for hours and a fixed installation token dies after one.
+    token = token or apptoken.token_from_env(log=log)
     # Explicit --query overrides use stars sort; the default set pairs each
     # query with the sort that best surfaces its long tail.
     specs = [(q, "stars") for q in queries] if queries else DEFAULT_QUERY_SPECS

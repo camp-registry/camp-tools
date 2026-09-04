@@ -182,7 +182,10 @@ def test_gitlab_scan_probe_uses_github_token_not_gitlab(monkeypatch):
     # every github.com probe and turn every copy into "inconclusive".
     import inspect
     src = inspect.getsource(scan.scan_gitlab)
-    assert 'os.environ.get("GITHUB_TOKEN")' in src
+    # the GitHub side comes from the self-refreshing App source (or the
+    # GITHUB_TOKEN fallback inside it), never from the GitLab `token`
+    assert "github_token = apptoken.token_from_env(" in src
+    assert "candidate.html_url, component,\n                    token)" not in src
 
 
 def test_reclassify_matches_same_run_duplicate_wording(tmp_path, monkeypatch):
