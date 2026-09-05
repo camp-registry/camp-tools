@@ -141,18 +141,36 @@ PERMANENT_OUTCOMES = frozenset({"opted-out"})
 
 
 def should_skip(ledger: dict, full_name: str, today: str,
-                recheck_days: int = DEFAULT_RECHECK_DAYS) -> bool:
+                recheck_days: int = DEFAULT_RECHECK_DAYS,
+                established: dict | None = None) -> bool:
     """Skip repos already evaluated within the recheck window. 'written'
     entries are never skipped by the ledger (the index itself is the
-    authority for those); PERMANENT_OUTCOMES are always skipped."""
+    authority for those); PERMANENT_OUTCOMES are always skipped. A repo
+    parked only because its plugin-type prefix was unknown is re-evaluated
+    as soon as that family is established (camp-tools#16), not when its
+    record ages out: the review is the event the record was waiting for."""
     record = ledger.get(full_name)
     if record is None or record.get("outcome") == "written":
         return False
     if record.get("outcome") in PERMANENT_OUTCOMES:
         return True
+    if established and parked_for_unknown_type(record) in established:
+        return False
     last = datetime.date.fromisoformat(record["last-checked"])
     age = (datetime.date.fromisoformat(today) - last).days
     return age < recheck_days
+
+
+_UNKNOWN_TYPE_DETAIL = re.compile(r"^unknown plugin type '([a-z][a-z0-9]*)'")
+
+
+def parked_for_unknown_type(record: dict) -> str | None:
+    """The prefix a needs-review record is parked on, or None when the
+    record is anything else (name mismatch, shadowing, collision...)."""
+    if record.get("outcome") != "needs-review":
+        return None
+    match = _UNKNOWN_TYPE_DETAIL.match(record.get("detail") or "")
+    return match.group(1) if match else None
 
 
 def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
@@ -1867,7 +1885,7 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 continue
             seen_repos.add(ledger_key)
 
-            if should_skip(ledger, ledger_key, today, recheck_days):
+            if should_skip(ledger, ledger_key, today, recheck_days, established):
                 results.append(ScanResult(candidate, "skipped-known"))
                 continue
 
@@ -1993,7 +2011,7 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 continue
             seen_repos.add(candidate.full_name)
 
-            if should_skip(ledger, candidate.full_name, today, recheck_days):
+            if should_skip(ledger, candidate.full_name, today, recheck_days, established):
                 results.append(ScanResult(candidate, "skipped-known"))
                 continue
 
