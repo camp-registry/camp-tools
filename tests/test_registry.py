@@ -223,6 +223,39 @@ def test_upstream_release_and_drift_shown(index_dir, entry_path, tmp_path):
     assert "Upstream release" in html and "v9.9.9" in html
     # fixture ledger tag is v1.0.0, upstream v9.9.9 -> drift banner
     assert "not yet verified" in html
+    # the newest upstream tag is its own row, not part of the Development run
+    assert '<span class="fk">Upstream release</span><span class="fv">v9.9.9' in html
+
+
+def test_repository_facts_name_their_host(index_dir, entry_path, tmp_path):
+    # "★ 3 · 5 forks" read as a 3-of-5 rating; the line now says whose
+    # numbers these are and spells out "stars" (GitHub counts PRs among
+    # open issues, GitLab does not)
+    from camp.site import generate as site_generate
+    metrics = {"updated": "2026-07-01T00:00:00Z", "stars": 3, "forks": 5,
+               "open-issues": 8, "archived": False, "checked": "2026-07-15"}
+    _mutate(entry_path, lambda e: e.update(
+        source="https://github.com/tester/moodle-mod_example", metrics=metrics))
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "On GitHub: 3 stars · 5 forks · 8 open issues &amp; PRs" in html
+    assert "★" not in html
+    assert 'aria-label="On GitHub: 3 stars, 5 forks, 8 open issues and pull requests"' in html
+    browse = (out / "index.html").read_text()
+    assert "On GitHub: 3 stars · 5 forks · 8 open issues &amp; PRs" in browse
+    import json
+    rec = json.loads((out / "index.json").read_text())["plugins"][0]
+    assert rec["r"] ==1
+
+    _mutate(entry_path, lambda e: e.update(
+        source="https://gitlab.com/tester/moodle-mod_example", metrics=metrics))
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "On GitLab: 3 stars · 5 forks · 8 open issues</span>" in html
+    assert "PRs" not in html.split("Development")[1].split("</div>")[0]
+    rec = json.loads((out / "index.json").read_text())["plugins"][0]
+    assert rec["r"] ==2
 
     # An OLDER upstream formal release must not warn (tags can outpace
     # releases; only genuinely newer upstream versions are drift).

@@ -853,14 +853,16 @@ BROWSE_JS = """
     }
     if (o.u) meta.appendChild(el('span', null, 'updated ' + relTime(o.u)));
     if (o.h !== -1){
-      var stars = el('span', null);
-      stars.setAttribute('aria-label', o.s + ' GitHub stars, ' + o.f +
-        ' forks, ' + o.o + ' open issues and pull requests');
-      var glyph = el('span', null, '\u2605');
-      glyph.setAttribute('aria-hidden', 'true');
-      stars.appendChild(glyph);
-      stars.appendChild(document.createTextNode(' ' + o.s + ' \u00b7 ' + o.f +
-        ' forks \u00b7 ' + o.o + ' open issues & PRs'));
+      // o.r: 1 = GitHub, 2 = GitLab, 0 = other host. GitHub's open-issues
+      // count includes pull requests; GitLab's counts issues only.
+      var hostName = o.r === 1 ? 'GitHub' : (o.r === 2 ? 'GitLab' : '');
+      var prefix = hostName ? 'On ' + hostName + ': ' : '';
+      var issues = o.r === 1 ? 'open issues & PRs' : 'open issues';
+      var issuesLong = o.r === 1 ? 'open issues and pull requests' : 'open issues';
+      var stars = el('span', null, prefix + o.s + ' stars \u00b7 ' + o.f +
+        ' forks \u00b7 ' + o.o + ' ' + issues);
+      stars.setAttribute('aria-label', prefix + o.s + ' stars, ' + o.f +
+        ' forks, ' + o.o + ' ' + issuesLong);
       meta.appendChild(stars);
     }
     main.appendChild(meta);
@@ -1587,6 +1589,39 @@ def _zip_url(artifacts_base: str, component: str, version: str) -> str:
     return f"{artifacts_base}/{component}/{component}-{version}.zip"
 
 
+# Repository facts name their host so a bare number next to a star glyph
+# is never read as a rating ("3 of 5"), and so the wording follows the
+# host's own vocabulary: GitHub's open-issues count includes pull
+# requests, GitLab's counts issues only (merge requests are not fetched).
+_HOST_LABELS = {"github.com": "GitHub", "gitlab.com": "GitLab"}
+_HOST_CODES = {"github.com": 1, "gitlab.com": 2}   # compact key for index.json
+
+
+def _repo_host(source: str) -> str | None:
+    host = (source or "").split("//", 1)[-1].split("/", 1)[0].lower()
+    return _HOST_LABELS.get(host)
+
+
+def _repo_host_code(source: str) -> int:
+    host = (source or "").split("//", 1)[-1].split("/", 1)[0].lower()
+    return _HOST_CODES.get(host, 0)
+
+
+def _repo_facts(metrics: dict, source: str) -> tuple[str, str]:
+    """(visible text, accessible label) for the repository-facts line."""
+    host = _repo_host(source)
+    stars = metrics.get("stars", 0)
+    forks = metrics.get("forks", 0)
+    openi = metrics.get("open-issues", 0)
+    issues = "open issues & PRs" if host == "GitHub" else "open issues"
+    issues_long = ("open issues and pull requests" if host == "GitHub"
+                   else "open issues")
+    prefix = f"On {host}: " if host else ""
+    text = f"{prefix}{stars} stars · {forks} forks · {openi} {issues}"
+    label = f"{prefix}{stars} stars, {forks} forks, {openi} {issues_long}"
+    return text, label
+
+
 PLUGINS_JSON_SCHEMA = 1
 
 
@@ -1791,6 +1826,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
             "s": umetrics.get("stars", 0), "f": umetrics.get("forks", 0),
             "o": umetrics.get("open-issues", 0),
             "u": umetrics.get("updated", ""),
+            "r": _repo_host_code(u.get("source", "")),
             "h": HEALTH_CODE.get(uhealth[1], -1) if uhealth else -1,
             "l": u.get("labels", []),
             "m": (u.get("summary") or "").strip(),
@@ -1906,6 +1942,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
                "t": entry["tier"], "s": metrics.get("stars", 0),
                "f": metrics.get("forks", 0), "o": metrics.get("open-issues", 0),
                "u": metrics.get("updated", ""),
+               "r": _repo_host_code(entry.get("source", "")),
                "h": HEALTH_CODE.get(health[1], -1) if health else -1,
                "l": entry.get("labels", []),
                "m": (listing.get("summary") or entry.get("summary") or "").strip(),
@@ -1954,11 +1991,9 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         if updated:
             meta_bits.append(f'updated {_rel_time(updated, today)}')
         if metrics:
-            meta_bits.append(
-                f'<span aria-label="{stars} GitHub stars, {forks} forks, '
-                f'{openi} open issues and pull requests">'
-                f'<span aria-hidden="true">★</span> {stars} · {forks} forks '
-                f'· {openi} open issues &amp; PRs</span>')
+            facts_text, facts_label = _repo_facts(metrics, entry.get("source", ""))
+            meta_bits.append(f'<span aria-label="{escape(facts_label)}">'
+                             f'{escape(facts_text)}</span>')
 
         # Search blob: component, display name (when a manifest provides
         # one), summary, and maintainer names/handles.
@@ -2626,14 +2661,16 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     # ---- project facts: one full-width row per field -----------------------
     dev_bits = []
     if metrics:
-        dev_bits.append(f'<span aria-label="{metrics.get("stars", 0)} GitHub stars">'
-                        f'<span aria-hidden="true">★</span> '
-                        f'{metrics.get("stars", 0)}</span> · '
-                        f'{metrics.get("forks", 0)} forks · '
-                        f'{metrics.get("open-issues", 0)} open issues & PRs')
+        facts_text, facts_label = _repo_facts(metrics, entry.get("source", ""))
+        dev_bits.append(f'<span aria-label="{escape(facts_label)}">'
+                        f'{escape(facts_text)}</span>')
+    # the newest tag on the source repository gets its own row: it is a
+    # host-reported fact, distinct from the verified releases below
+    upstream_row = ""
     if upstream.get("tag"):
         when = f' · {_fmt_date(upstream["date"])}' if upstream.get("date") else ""
-        dev_bits.append(f'Upstream release {escape(upstream["tag"])}{when}')
+        upstream_row = (f'<div class="kvrow"><span class="fk">Upstream release</span>'
+                        f'<span class="fv">{escape(upstream["tag"])}{when}</span></div>')
     if metrics.get("ci"):
         # an observed fact about the repo's own CI, not a registry claim
         # about its results (camp-tools#4)
@@ -2809,6 +2846,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     if dev_bits:
         kv_rows.append('<div class="kvrow"><span class="fk">Development</span>'
                        f'<span class="fv">{" · ".join(dev_bits)}</span></div>')
+    if upstream_row:
+        kv_rows.append(upstream_row)
     if not advisory_items:
         kv_rows.append('<div class="kvrow"><span class="fk">Security advisories</span>'
                        '<span class="fv">None published</span></div>')
@@ -3017,7 +3056,9 @@ def _utility_page(entry: dict, today: datetime.date) -> str:
                    'Browse known issues or report a problem</a></span></div>')
     dev_bits = []
     if metrics.get("stars") is not None:
-        dev_bits.append(f'★ {metrics["stars"]}')
+        facts_text, facts_label = _repo_facts(metrics, entry.get("source", ""))
+        dev_bits.append(f'<span aria-label="{escape(facts_label)}">'
+                        f'{escape(facts_text)}</span>')
     if metrics.get("updated"):
         verb = "released" if closed else "updated"
         dev_bits.append(f'{verb} {_rel_time(metrics["updated"], today)}')
