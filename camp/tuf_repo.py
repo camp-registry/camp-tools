@@ -79,12 +79,14 @@ def init_keys(keys_dir: str | Path, root_keys: int = 1, threshold: int = 1) -> l
 
 
 def _load_all(keys_dir: Path) -> tuple[list[CryptoSigner], dict[str, CryptoSigner], int]:
+    """Dev/staging layout: root private keys live beside the online ones.
+    In production there are no root-*.pem files — the root is the
+    steward-signed metadata already in the metadata directory (see
+    sign_repository) — so an empty root list is not an error here."""
     root_signers = [_load_signer(path) for path in sorted(keys_dir.glob("root-*.pem"))]
     online = {role: _load_signer(keys_dir / f"{role}.pem") for role in ONLINE_ROLES}
     threshold_file = keys_dir / "THRESHOLD"
     threshold = int(threshold_file.read_text()) if threshold_file.exists() else 1
-    if not root_signers:
-        raise FileNotFoundError(f"no root-*.pem keys in {keys_dir} — run `camp tuf init`")
     return root_signers, online, threshold
 
 
@@ -109,12 +111,29 @@ def sign_repository(targets_dir: str | Path, keys_dir: str | Path,
             name = path.relative_to(targets_path).as_posix()
             targets.targets[name] = TargetFile.from_file(name, str(path))
 
-    root = Root(expires=_expires("root"), version=_next_version(out, "root"))
-    for signer in root_signers:
-        root.add_key(signer.public_key, "root")
-    for role, signer in online.items():
-        root.add_key(signer.public_key, role)
-    root.roles["root"].threshold = threshold
+    ceremony_root: Metadata | None = None
+    if root_signers:
+        root = Root(expires=_expires("root"), version=_next_version(out, "root"))
+        for signer in root_signers:
+            root.add_key(signer.public_key, "root")
+        for role, signer in online.items():
+            root.add_key(signer.public_key, role)
+        root.roles["root"].threshold = threshold
+    else:
+        # Production: the root was signed by the stewards (camp tuf root
+        # assemble) and is never regenerated here; this run only signs the
+        # online roles, whose keys must be the ones that root lists.
+        root_path = out / "root.json"
+        if not root_path.exists():
+            raise FileNotFoundError(
+                f"no root-*.pem keys in {keys_dir} and no steward-signed "
+                f"{root_path}; run `camp tuf init` (dev) or the root ceremony")
+        ceremony_root = Metadata.from_file(str(root_path))
+        root = ceremony_root.signed
+        for role, signer in online.items():
+            if signer.public_key.keyid not in root.roles[role].keyids:
+                raise ValueError(f"{role}.pem in {keys_dir} is not the {role} key "
+                                 f"listed in {root_path}")
 
     md_targets = Metadata(targets)
     for signer in [online["targets"]]:
@@ -138,9 +157,12 @@ def sign_repository(targets_dir: str | Path, keys_dir: str | Path,
     md_timestamp = Metadata(timestamp)
     md_timestamp.sign(online["timestamp"])
 
-    md_root = Metadata(root)
-    for signer in root_signers:
-        md_root.sign(signer, append=True)
+    if ceremony_root is not None:
+        md_root = ceremony_root          # steward signatures, untouched
+    else:
+        md_root = Metadata(root)
+        for signer in root_signers:
+            md_root.sign(signer, append=True)
 
     for role, md in [("root", md_root), ("targets", md_targets),
                      ("snapshot", md_snapshot), ("timestamp", md_timestamp)]:

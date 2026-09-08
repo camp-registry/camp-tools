@@ -338,6 +338,39 @@ def _cmd_tuf(args: argparse.Namespace) -> int:
             return 1
         print("ok: signature chain valid, all targets match signed hashes")
         return 0
+    if args.tuf_command == "root":
+        from . import tuf_root
+
+        def pairs(items):
+            out = {}
+            for item in items:
+                name, sep, path = item.partition("=")
+                if not sep or not name or not path:
+                    raise SystemExit(f"expected NAME=PATH, got {item!r}")
+                out[name] = path
+            return out
+
+        try:
+            if args.root_command == "build":
+                summary = tuf_root.build_root(args.out_dir, pairs(args.steward),
+                                              args.online_keys, args.threshold,
+                                              expires_days=args.expires_days,
+                                              previous=args.previous)
+                print(tuf_root.format_summary(summary))
+                print(f"wrote {args.out_dir}/root.json, root-payload.bin, stewards.json")
+                return 0
+            if args.root_command == "check":
+                print(tuf_root.format_summary(
+                    tuf_root.describe(args.root_json, args.stewards, args.previous)))
+                return 0
+            if args.root_command == "assemble":
+                report = tuf_root.assemble_root(args.out_dir, pairs(args.sig),
+                                                previous=args.previous)
+                print(tuf_root.format_report(report))
+                return 0 if report["complete"] else 1
+        except tuf_root.CeremonyError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     raise AssertionError(args.tuf_command)
 
 
@@ -981,6 +1014,29 @@ def main(argv: list[str] | None = None) -> int:
     q = tuf_sub.add_parser("verify", help="client-style verification of metadata + targets")
     q.add_argument("metadata_dir")
     q.add_argument("targets_dir")
+    q.set_defaults(func=_cmd_tuf)
+    # root ceremony (host side); stewards sign with pkcs11-tool, not camp
+    r = tuf_sub.add_parser("root", help="root ceremony: build, check and assemble the steward-signed root")
+    root_sub = r.add_subparsers(dest="root_command", required=True)
+    q = root_sub.add_parser("build", help="write the unsigned root, its canonical payload and the steward map")
+    q.add_argument("out_dir")
+    q.add_argument("--steward", action="append", required=True, metavar="NAME=PUB.pem",
+                   help="a steward's public key (repeat per steward)")
+    q.add_argument("--online-keys", required=True, metavar="DIR",
+                   help="directory holding targets/snapshot/timestamp keys (.pub or .pem)")
+    q.add_argument("--threshold", type=int, required=True)
+    q.add_argument("--expires-days", type=int, default=365)
+    q.add_argument("--previous", metavar="ROOT.json", help="previous root: makes this a rotation")
+    q.set_defaults(func=_cmd_tuf)
+    q = root_sub.add_parser("check", help="print what a signer confirms before signing")
+    q.add_argument("root_json")
+    q.add_argument("--stewards", metavar="STEWARDS.json")
+    q.add_argument("--previous", metavar="ROOT.json")
+    q.set_defaults(func=_cmd_tuf)
+    q = root_sub.add_parser("assemble", help="attach steward DER signatures and verify the threshold")
+    q.add_argument("out_dir")
+    q.add_argument("--sig", action="append", required=True, metavar="NAME=FILE.sig")
+    q.add_argument("--previous", metavar="ROOT.json", help="previous root: its threshold must hold too")
     q.set_defaults(func=_cmd_tuf)
 
     p = sub.add_parser("scan-malware", help="malware-scan an artifact or an entry's latest release")
