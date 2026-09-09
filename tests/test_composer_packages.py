@@ -1,10 +1,12 @@
 """packages.json must be consumable by a real Composer (camp-index#281-283)."""
 
+import json
+
 import pytest
 import yaml
 
 from camp.composer import (INSTALLER_PACKAGE, composer_constraint, composer_version,
-                           generate, generate_advisories)
+                           generate, generate_advisories, package_metadata, write)
 
 
 def _only_version(index_dir, **kwargs):
@@ -102,3 +104,56 @@ def test_composer_constraint_rewrite(constraint, expected):
 ])
 def test_composer_version_grammar(version, expected):
     assert composer_version(version) == expected
+
+
+def _write_advisory(index_dir, **overrides):
+    advisories = index_dir / "advisories"
+    advisories.mkdir(exist_ok=True)
+    doc = {
+        "id": "CAMP-2026-0002", "component": "mod_example",
+        "title": "Stored XSS in the example view", "severity": "high",
+        "affected-versions": "<1.0.1", "fixed-in": "1.0.1",
+        "published": "2026-08-01T00:00:00Z", "description": "test",
+    }
+    doc.update(overrides)
+    (advisories / f"{doc['id']}.yml").write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def test_advisories_reach_composer_audit_through_v2_metadata(index_dir):
+    """Composer reads a repository's advisories only under the v2 protocol,
+    and a static host cannot answer the POST api-url, so packages.json
+    declares metadata-url + available-packages + security-advisories.metadata
+    and each package gets a /p2/ file carrying its advisories."""
+    _write_advisory(index_dir)
+    doc = generate(index_dir, "https://repo.test")
+    (name,) = doc["packages"]
+    assert doc["metadata-url"] == "/p2/%package%.json"
+    assert doc["available-packages"] == [name]
+    assert doc["security-advisories"] == {"metadata": True}
+
+    files = package_metadata(doc, generate_advisories(index_dir, "https://repo.test"))
+    metadata = files[f"p2/{name}.json"]
+    assert isinstance(metadata["packages"][name], list)          # v2 shape
+    assert metadata["packages"][name][0]["version"] == "1.0.0"
+    # v2 loading keys versions by uid: present, integral, stable
+    uid = doc["packages"][name]["1.0.0"]["uid"]
+    assert isinstance(uid, int) and uid > 0
+    assert generate(index_dir, "https://repo.test")["packages"][name]["1.0.0"]["uid"] == uid
+    (advisory,) = metadata["security-advisories"]
+    assert advisory["advisoryId"] == "CAMP-2026-0002"
+    assert advisory["packageName"] == name
+    assert advisory["affectedVersions"] == "<1.0.1"
+    assert {"title", "sources", "reportedAt"} <= set(advisory)  # full advisory
+
+
+def test_every_package_gets_a_metadata_file_even_without_advisories(index_dir, tmp_path):
+    out = tmp_path / "dist" / "packages.json"
+    assert write(index_dir, "https://repo.test", out) == 1
+    doc = json.loads(out.read_text())
+    (name,) = doc["packages"]
+    per_package = json.loads((out.parent / "p2" / f"{name}.json").read_text())
+    assert per_package["security-advisories"] == []
+    assert [v["version"] for v in per_package["packages"][name]] == ["1.0.0"]
+    # the whole-feed file tool_camp consumes is still written
+    assert json.loads((out.parent / "security-advisories.json").read_text()) == \
+        {"advisories": {}}

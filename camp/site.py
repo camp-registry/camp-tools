@@ -368,6 +368,7 @@ footer .build{display:block;margin-top:4px}
 .cmdline button{flex:none;background:var(--bg);color:var(--ink);border:0;
   border-radius:2px;padding:6px 10px;font:600 0.75rem var(--mono);cursor:pointer;
   min-height:24px}
+.cmdnote{margin-top:7px;font-size:0.78125rem;color:var(--muted);max-width:520px}
 .ledger{position:relative;padding-left:26px;margin-top:10px}
 .ledger::before{content:"";position:absolute;left:8px;top:10px;bottom:10px;
   width:1px;background:var(--border)}
@@ -1751,6 +1752,7 @@ def _header() -> str:
     <small>Community Archive of Moodle Plugins</small></a>
   <nav aria-label="Primary">
     <a href="/">Browse</a>
+    <a href="/install.html">Install</a>
     <a href="/how-it-works.html">How it works</a>
     <div class="navgroup">
       <button class="nav-disclosure" id="nav-involved" aria-expanded="false"
@@ -2485,6 +2487,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       <div class="cmdline"><code id="cmd-text" tabindex="0" role="region"
         aria-label="Install command">{escape(cmd)}</code>
         <button id="copy-install" data-cmd="{escape(cmd)}">Copy</button></div>
+      <div class="cmdnote">First time? <a href="/install.html">One-time Composer
+        setup</a>, or download the ZIP and install it through Moodle.</div>
       <div id="copy-status" class="visually-hidden" role="status"></div>
       <div id="ver-status" class="visually-hidden" role="status"></div>
     </div>
@@ -3287,42 +3291,61 @@ def _removed_page(removals: list[tuple[str, dict]]) -> str:
                              "their maintainer's request.")
 
 
-def _authors_page(md_text: str | None) -> str:
-    """The rendered claim→publish guide at /authors.html (camp-tools#5),
-    single-sourced from camp-docs AUTHORS.md — the publish workflow checks
-    that repo out and passes the file via --authors-md, so edits there
+def _doc_page(md_text: str | None, *, doc: str, title: str, heading: str,
+              blurb: str, description: str) -> str:
+    """A camp-docs file rendered as a site page, single-sourced: the publish
+    workflow checks camp-docs out and passes the file in, so edits there
     appear here at the next publish and nothing is vendored to drift.
 
-    Without the flag (local builds, tests) a stub page keeps the nav link
+    Without the file (local builds, tests) a stub page keeps the nav link
     from 404ing and points at the canonical file on GitHub.
 
     Unlike author-supplied listing descriptions, this content is
     registry-authored, so images stay enabled (the badge example is
     self-hosted); raw HTML stays off as belt-and-braces.
     """
-    canonical = ("https://github.com/camp-registry/camp-docs/blob/main/"
-                 "AUTHORS.md")
+    canonical = f"https://github.com/camp-registry/camp-docs/blob/main/{doc}"
     if md_text:
         from markdown_it import MarkdownIt
         md = MarkdownIt("commonmark", {"html": False})
         body = (f'<div class="prose">{md.render(md_text)}</div>'
                 f'<div class="attrib" style="margin-top:28px">This page is '
-                f'rendered from <a href="{canonical}">AUTHORS.md in '
+                f'rendered from <a href="{canonical}">{doc} in '
                 f'camp-docs</a> — the canonical source. Edits there appear '
                 f'here at the next publish.</div>')
     else:
         body = (f'<h1 style="font-family:var(--serif);color:var(--ink)">'
-                f'Publish your plugin</h1>'
-                f'<div class="prose"><p>The claim-to-publish guide lives at '
-                f'<a href="{canonical}">AUTHORS.md in camp-docs</a>. (This '
+                f'{heading}</h1>'
+                f'<div class="prose"><p>{blurb} lives at '
+                f'<a href="{canonical}">{doc} in camp-docs</a>. (This '
                 f'build was generated without the rendered copy — the '
                 f'production site carries it inline.)</p></div>')
     return _page(
-        "Publish your plugin — CAMP",
+        title,
         f'{_header()}<div class="narrow"><main id="main-content" '
         f'tabindex="-1">{body}</main>{_footer(wrap=False)}</div>',
+        description=description)
+
+
+def _authors_page(md_text: str | None) -> str:
+    """The claim→publish guide at /authors.html (camp-tools#5), from
+    camp-docs AUTHORS.md via --authors-md."""
+    return _doc_page(
+        md_text, doc="AUTHORS.md", title="Publish your plugin — CAMP",
+        heading="Publish your plugin", blurb="The claim-to-publish guide",
         description="How to claim your plugin, publish verified releases, "
                     "and maintain your listing on CAMP.")
+
+
+def _install_page(md_text: str | None) -> str:
+    """The administrator's install guide at /install.html, from camp-docs
+    INSTALLING.md via --installing-md: the one-time Composer setup the
+    plugin pages' install command assumes, and the non-Composer paths."""
+    return _doc_page(
+        md_text, doc="INSTALLING.md", title="Install plugins from CAMP — CAMP",
+        heading="Install plugins from CAMP", blurb="The administrator's guide",
+        description="How to install verified Moodle plugins from CAMP with "
+                    "Composer, the tool_camp client, or a ZIP download.")
 
 
 def _how_page() -> str:
@@ -3432,7 +3455,8 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
              checks_dir: str | Path | None = None,
              reviews_source: str | None = None,
              artifacts_base: str | None = None,
-             authors_md: str | Path | None = None) -> int:
+             authors_md: str | Path | None = None,
+             installing_md: str | Path | None = None) -> int:
     out = Path(out_dir)
     (out / "plugin").mkdir(parents=True, exist_ok=True)
     listings = Path(listings_dir) if listings_dir else None
@@ -3583,6 +3607,8 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     (out / "how-it-works.html").write_text(_how_page())
     (out / "authors.html").write_text(_authors_page(
         Path(authors_md).read_text() if authors_md else None))
+    (out / "install.html").write_text(_install_page(
+        Path(installing_md).read_text() if installing_md else None))
 
     (out / "advisories").mkdir(exist_ok=True)
     (out / "advisories" / "index.html").write_text(

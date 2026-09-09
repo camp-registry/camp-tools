@@ -23,7 +23,7 @@ from camp.site import generate as site_generate
 from camp.site import _fg_for
 
 PAGES = ["index.html", "plugin/mod_example.html", "how-it-works.html",
-         "all.html"]
+         "all.html", "install.html"]
 
 
 @pytest.fixture
@@ -327,6 +327,35 @@ def test_authors_page(index_dir, tmp_path):
 
     # the nav on every page points at the authors page
     assert 'href="/authors.html"' in (out2 / "index.html").read_text()
+
+
+def test_install_page(index_dir, tmp_path):
+    """/install.html: the administrator's guide rendered from camp-docs
+    INSTALLING.md, stub otherwise; reachable from the primary nav and from
+    the install command on every verified plugin page (the one-time
+    Composer setup the command assumes)."""
+    src = tmp_path / "INSTALLING.md"
+    src.write_text("# Installing plugins from camp\n\n## Composer\n\n"
+                   "```\ncomposer config repositories.camp composer "
+                   "https://camp-registry.org\n```\n")
+    out = tmp_path / "site-install"
+    site_generate(index_dir, "https://repo.test", out, installing_md=src)
+    html = (out / "install.html").read_text()
+    assert "Installing plugins from camp" in html
+    assert "composer config repositories.camp" in html
+    assert "INSTALLING.md in camp-docs" in html
+    elems = scan(html)
+    assert [a for t, a in elems if t == "main"][0].get("id") == "main-content"
+    levels = [int(t[1]) for t, _ in elems if re.fullmatch(r"h[1-6]", t)]
+    assert levels[0] == 1
+
+    stub = tmp_path / "site-install-stub"
+    site_generate(index_dir, "https://repo.test", stub)
+    assert "camp-docs/blob/main/INSTALLING.md" in (stub / "install.html").read_text()
+    assert 'href="/install.html"' in (stub / "index.html").read_text()
+    plugin = (stub / "plugin" / "mod_example.html").read_text()
+    assert "composer require" in plugin
+    assert 'href="/install.html"' in plugin
 
 
 def test_advisory_pages_structure(index_dir, tmp_path):

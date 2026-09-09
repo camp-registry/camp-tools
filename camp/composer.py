@@ -7,13 +7,15 @@ Composer-managed Moodle 5.2+ sites can:
     composer require <vendor>/moodle-<component>
 
 Dist URLs point at camp's source-verified artifacts. Moodle-branch support
-and review tier are carried as extra metadata. Security advisories in
-Composer's advisory format (for `composer audit`) belong to the advisory
-pipeline and are not generated here yet.
+and review tier are carried as extra metadata. Security advisories go out
+twice in Composer's advisory format: the whole feed as
+security-advisories.json (what tool_camp matches locally) and per package
+under p2/, which is where `composer audit` actually looks.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -25,6 +27,8 @@ from .validate import load_entry
 
 PLUGIN_TYPE_PREFIX = "moodle-"
 INSTALLER_PACKAGE = "moodle/composer-installer"
+# Per-package metadata directory (Composer v2 protocol), beside packages.json.
+METADATA_DIR = "p2"
 
 # composer/semver VersionParser::normalize, ported. Composer refuses any
 # version string outside this grammar, so a release whose author-chosen
@@ -75,6 +79,11 @@ def _package_name(entry: dict) -> str:
     return f"{_vendor(entry)}/{PLUGIN_TYPE_PREFIX}{entry['component']}"
 
 
+def _uid(name: str, version: str) -> int:
+    digest = hashlib.sha256(f"{name}@{version}".encode()).hexdigest()
+    return int(digest[:12], 16)  # 48 bits: a PHP int on every platform
+
+
 def _composer_type(component: str) -> str:
     plugintype = component.partition("_")[0]
     return f"moodle-{plugintype}"
@@ -106,6 +115,10 @@ def package_definition(entry: dict, base_url: str,
         versions[pkg_version] = {
             "name": name,
             "version": pkg_version,
+            # Under the v2 protocol Composer keys every version by `uid`
+            # (undefined key "uid" otherwise); derived from the name and
+            # version so it is stable across publishes with no state.
+            "uid": _uid(name, pkg_version),
             "type": _composer_type(component),
             "license": [entry.get("license", "GPL-3.0-or-later")],
             "dist": {
@@ -170,7 +183,16 @@ def _core_conflict(release: dict) -> dict:
 def generate(index_dir: str | Path, base_url: str,
              artifacts_base: str | None = None,
              skipped: list[str] | None = None) -> dict:
-    """Build the full packages.json document from an index tree."""
+    """Build the full packages.json document from an index tree.
+
+    Packages ride inline (Composer's "partial packages": resolution never
+    fetches anything else), and the document also declares the v2 protocol
+    (`metadata-url` + `available-packages`) with
+    `security-advisories.metadata`. Composer only consults a repository's
+    advisories at all under the v2 protocol, and the static alternative to
+    a POST api-url is per-package metadata: `composer audit` fetches
+    /p2/<name>.json for each installed package this repository lists and
+    reads its `security-advisories` (camp-tools#46)."""
     advisories = AdvisorySet.load(index_dir)
     packages: dict[str, dict] = {}
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
@@ -184,7 +206,29 @@ def generate(index_dir: str | Path, base_url: str,
                                             skipped=skipped)
         if versions:
             packages[name] = versions
-    return {"packages": packages}
+    return {
+        "packages": packages,
+        # Host-relative on purpose: a mirror serving the same tree answers
+        # its own metadata requests (MIRRORING.md) instead of sending
+        # clients back to the origin.
+        "metadata-url": f"/{METADATA_DIR}/%package%.json",
+        "available-packages": sorted(packages),
+        "security-advisories": {"metadata": True},
+    }
+
+
+def package_metadata(document: dict, advisories_doc: dict) -> dict[str, dict]:
+    """The per-package v2 metadata files, keyed by path relative to
+    packages.json: {"p2/<vendor>/moodle-<component>.json": {...}}. Each
+    carries the package's versions (as a list, the v2 shape) and its
+    advisories, empty list included, so an audit never meets a 404."""
+    files: dict[str, dict] = {}
+    for name, versions in document["packages"].items():
+        files[f"{METADATA_DIR}/{name}.json"] = {
+            "packages": {name: list(versions.values())},
+            "security-advisories": advisories_doc["advisories"].get(name, []),
+        }
+    return files
 
 
 def generate_advisories(index_dir: str | Path, base_url: str) -> dict:
@@ -230,9 +274,18 @@ def write(index_dir: str | Path, base_url: str, out_path: str | Path,
         json.dump(document, f, indent=2, sort_keys=True)
         f.write("\n")
 
+    # The whole-feed file stays: tool_camp downloads it and matches locally
+    # (RFC §5.3). Composer itself reads the per-package files below.
     advisories_doc = generate_advisories(index_dir, base_url)
     advisories_path = out.parent / "security-advisories.json"
     with open(advisories_path, "w") as f:
         json.dump(advisories_doc, f, indent=2, sort_keys=True)
         f.write("\n")
+
+    for rel_path, metadata in package_metadata(document, advisories_doc).items():
+        path = out.parent / rel_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(metadata, f, indent=2, sort_keys=True)
+            f.write("\n")
     return len(document["packages"])
