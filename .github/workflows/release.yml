@@ -1,0 +1,70 @@
+# A GitHub Release for every version tag, created when the tag is pushed.
+#
+# The release train (camp-docs runbooks/release-train.md) is bump, tag,
+# push, then re-pin camp-index; the pins install from the tag, so nothing
+# ever broke when the Release was forgotten, and it was forgotten for
+# v0.2.56 through v0.2.60. This makes the Release a consequence of the
+# tag rather than a separate chore.
+#
+# Notes are the commit messages since the previous tag, minus the bare
+# version-bump commit, so the Release says what the commits say. The
+# title is the tag plus the first substantive subject.
+
+name: Release on tag
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compose notes from the commits since the previous tag
+        id: notes
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          prev=$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)
+          range="${prev:+${prev}..}${tag}"
+          {
+            git rev-list --reverse "$range" | while read -r sha; do
+              subject=$(git log -1 --format=%s "$sha")
+              # the bump commit carries only the version number
+              if printf '%s' "$subject" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+                continue
+              fi
+              # merge commits restate the PR that follows them
+              if [ "$(git rev-list --parents -n1 "$sha" | wc -w)" -gt 2 ]; then
+                continue
+              fi
+              printf '### %s\n\n' "$subject"
+              body=$(git log -1 --format=%b "$sha" | sed -e '/^Co-Authored-By:/d' -e '/^Signed-off-by:/d')
+              if [ -n "$body" ]; then
+                printf '%s\n\n' "$body"
+              fi
+            done
+          } > notes.md
+          title=$(grep -m1 '^### ' notes.md | sed 's/^### //')
+          echo "title=${tag}${title:+ — ${title}}" >> "$GITHUB_OUTPUT"
+          echo "prev=${prev}" >> "$GITHUB_OUTPUT"
+          cat notes.md
+
+      - name: Create the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release already exists; leaving it alone"
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "${{ steps.notes.outputs.title }}" \
+            --notes-file notes.md \
+            --verify-tag
