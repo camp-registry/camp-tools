@@ -945,8 +945,9 @@ def _fetch_metrics(source: str, token: str | None, checked: str,
                    log) -> tuple[str, dict | None, str | None]:
     """Fetch upstream metrics for one source repo. Returns
     (status, metrics, canonical) where status is 'ok' (metrics populated),
-    'gone' (404 — repo removed), or 'error' (transient/unsupported host —
-    retry later). `canonical` is the repo's canonical URL when it differs
+    'gone' (404 — repo removed), 'unsupported' (a host the registry has no
+    API client for; permanent until the source changes), or 'error'
+    (transient — retry later). `canonical` is the repo's canonical URL when it differs
     from `source` — GitHub 301s renamed repos forever, so without this
     check a migration is invisible (it hid logstore_xapi's move for
     months)."""
@@ -999,7 +1000,7 @@ def _fetch_metrics(source: str, token: str | None, checked: str,
         ), None
 
     log(f"  {source}: unsupported host, skipped")
-    return "error", None, None
+    return "unsupported", None, None
 
 
 def _fetch_repo_id(source: str, token: str | None, log=print) -> tuple[str, int | None]:
@@ -1209,107 +1210,124 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
     replaced by the author's own .camp/listing.yml, so enrich never
     overwrites what an author (or the registry) set.
 
-    Resumable: an entry is skipped once it has metrics and a summary (or can't
-    gain one), unless `force` is set — so an interrupted run resumes cleanly and
-    the metrics-only entries from an earlier pass still get their README summary.
-    `limit` caps the number of repos contacted (for sampling)."""
+    Selection is stalest-first (camp-index#317): every entry needing a
+    refresh is ordered by `metrics.checked` (never checked sorts first),
+    then by path, and `limit` caps how many repos are contacted. Taking the
+    first N stale entries in path order instead let the cursor snap back to
+    the top of the alphabet every `stale_days`, so the second half of the
+    catalog was never refreshed. Two things keep the queue moving: the
+    README summary attempt rides an entry's metrics cycle rather than
+    running on its own every day, and entries whose repo is gone or on an
+    unsupported host get `checked` stamped so they rotate like the rest
+    instead of holding the head of the queue.
+
+    An interrupted run resumes cleanly: what it refreshed is now the
+    freshest, so the next run continues where it stopped."""
     token = token or os.environ.get("GITHUB_TOKEN")
     today = datetime.date.today().isoformat()
-    paths = sorted((Path(index_dir) / "plugins").glob("*/*.yml"))
     stats = {"metrics": 0, "summary": 0, "dependencies": 0, "skipped": 0,
-             "gone": 0, "error": 0, "renamed": 0, "flagged-renames": 0}
-    fetched = 0
+             "gone": 0, "unsupported": 0, "error": 0, "renamed": 0,
+             "flagged-renames": 0}
+    stale_before = ((datetime.date.today() - datetime.timedelta(days=stale_days))
+                    .isoformat() if stale_days is not None else None)
 
-    for path in paths:
-        if limit is not None and fetched >= limit:
-            break
+    candidates: list[tuple[str, Path]] = []
+    for path in sorted((Path(index_dir) / "plugins").glob("*/*.yml")):
         with open(path) as f:
             entry = yaml.safe_load(f)
         if entry.get("status", "active") == "delisted":
             continue
-
         metrics_checked = (entry.get("metrics") or {}).get("checked", "")
-        is_stale = (stale_days is not None and
-                    (not metrics_checked or metrics_checked <
-                     (datetime.date.today()
-                      - datetime.timedelta(days=stale_days)).isoformat()))
-        needs_metrics = force or is_stale or not entry.get("metrics")
-        # README summary is a fallback only when the repo gave no description,
-        # only for GitHub sources (see _fetch_readme_summary), and only at
-        # Tier 0 — never overwrite a claimed entry's summary.
-        needs_summary = (readme and entry.get("tier", 0) == 0
-                         and "github.com" in entry.get("source", "")
-                         and (force or not (entry.get("summary") or "").strip()))
-        if not needs_metrics and not needs_summary:
+        is_stale = stale_before is not None and (
+            not metrics_checked or metrics_checked < stale_before)
+        if force or is_stale or not entry.get("metrics"):
+            candidates.append((metrics_checked or "", path))
+        else:
             stats["skipped"] += 1
-            continue
+    candidates.sort()
+    if limit is not None:
+        candidates = candidates[:limit]
 
-        fetched += 1
+    for _, path in candidates:
+        with open(path) as f:
+            entry = yaml.safe_load(f)
         changed = False
 
-        if needs_metrics:
-            status, metrics, canonical = _fetch_metrics(
-                entry["source"], token, today, log)
-            if status == "ok":
-                entry["metrics"] = metrics
-                if entry.get("tier", 0) >= 1:
-                    ci = _detect_ci(entry["source"], token)
-                    if ci:
-                        entry["metrics"]["ci"] = ci
-                stats["metrics"] += 1
-                changed = True
-                if canonical:
-                    # The repo moved; GitHub redirects the old name forever,
-                    # so only this check ever notices. Scanner-owned entries
-                    # are auto-canonicalized; claimed entries belong to their
-                    # maintainer — record and flag, never rewrite.
-                    if entry.get("tier", 0) == 0:
-                        log(f"  renamed: {entry['source']} -> {canonical} "
-                            "(tier 0, source updated)")
-                        entry["source"] = canonical
-                        stats["renamed"] += 1
-                    else:
-                        log(f"  RENAMED (tier {entry.get('tier')}): "
-                            f"{entry['source']} -> {canonical} — flagged in "
-                            "metrics; maintainer/registry should update source")
-                        entry["metrics"]["renamed-to"] = canonical
-                        stats["flagged-renames"] += 1
-            elif status == "gone":
-                stats["gone"] += 1
-                log(f"  gone: {entry['source']}")
-                continue          # repo unreachable — a README fetch would 404 too
-            else:
-                stats["error"] += 1
-                continue
+        status, metrics, canonical = _fetch_metrics(
+            entry["source"], token, today, log)
+        if status == "ok":
+            entry["metrics"] = metrics
+            if entry.get("tier", 0) >= 1:
+                ci = _detect_ci(entry["source"], token)
+                if ci:
+                    entry["metrics"]["ci"] = ci
+            stats["metrics"] += 1
+            changed = True
+            if canonical:
+                # The repo moved; GitHub redirects the old name forever,
+                # so only this check ever notices. Scanner-owned entries
+                # are auto-canonicalized; claimed entries belong to their
+                # maintainer — record and flag, never rewrite.
+                if entry.get("tier", 0) == 0:
+                    log(f"  renamed: {entry['source']} -> {canonical} "
+                        "(tier 0, source updated)")
+                    entry["source"] = canonical
+                    stats["renamed"] += 1
+                else:
+                    log(f"  RENAMED (tier {entry.get('tier')}): "
+                        f"{entry['source']} -> {canonical} — flagged in "
+                        "metrics; maintainer/registry should update source")
+                    entry["metrics"]["renamed-to"] = canonical
+                    stats["flagged-renames"] += 1
+        elif status in ("gone", "unsupported"):
+            # Terminal for this cycle: nothing to fetch, but record that we
+            # looked, or the entry stays the stalest forever and takes a
+            # slot from every run. Existing metrics are kept as-is.
+            stats[status] += 1
+            log(f"  {status}: {entry['source']}")
+            entry.setdefault("metrics", {})["checked"] = today
+            with open(path, "w") as f:
+                yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
+            continue
+        else:
+            stats["error"] += 1
+            continue
 
-        if needs_summary:
+        # README summary is a fallback only when the repo gave no description,
+        # only for GitHub sources (see _fetch_readme_summary), and only at
+        # Tier 0 — never overwrite a claimed entry's summary. Attempted once
+        # per metrics cycle: a README that yields nothing today will not
+        # yield anything tomorrow either, and a daily retry starved the
+        # refresh budget.
+        if (readme and entry.get("tier", 0) == 0
+                and "github.com" in entry.get("source", "")
+                and (force or not (entry.get("summary") or "").strip())):
             summary = _fetch_readme_summary(entry["source"], token, log)
             if summary:
                 entry["summary"] = summary
                 stats["summary"] += 1
                 changed = True
 
-        if needs_metrics:
-            # Dependency observation rides the metrics cycle so it stays as
-            # current as the liveness data. The ledger's pinned record is
-            # authoritative when the newest release carries one; otherwise
-            # observe the default branch, setting or clearing the entry-level
-            # field to match what version.php declares today.
-            releases = entry.get("releases") or []
-            newest = (max(releases, key=lambda r: r.get("moodle-version", 0))
-                      if releases else None)
-            if newest is None or "dependencies" not in newest:
-                text = _fetch_version_php_text(entry["source"], token)
-                if text is not None:
-                    observed = versionphp.parse_dependencies(text)
-                    if observed and entry.get("dependencies") != observed:
-                        entry["dependencies"] = observed
-                        stats["dependencies"] += 1
-                        changed = True
-                    elif not observed and "dependencies" in entry:
-                        del entry["dependencies"]
-                        stats["dependencies"] += 1
-                        changed = True
+        # Dependency observation rides the metrics cycle so it stays as
+        # current as the liveness data. The ledger's pinned record is
+        # authoritative when the newest release carries one; otherwise
+        # observe the default branch, setting or clearing the entry-level
+        # field to match what version.php declares today.
+        releases = entry.get("releases") or []
+        newest = (max(releases, key=lambda r: r.get("moodle-version", 0))
+                  if releases else None)
+        if newest is None or "dependencies" not in newest:
+            text = _fetch_version_php_text(entry["source"], token)
+            if text is not None:
+                observed = versionphp.parse_dependencies(text)
+                if observed and entry.get("dependencies") != observed:
+                    entry["dependencies"] = observed
+                    stats["dependencies"] += 1
+                    changed = True
+                elif not observed and "dependencies" in entry:
+                    del entry["dependencies"]
+                    stats["dependencies"] += 1
+                    changed = True
 
         if changed:
             with open(path, "w") as f:
@@ -1319,7 +1337,8 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
 
     log(f"enriched: {stats['metrics']} metrics, {stats['summary']} summaries, "
         f"{stats['dependencies']} dependency observations; "
-        f"skipped {stats['skipped']}, gone {stats['gone']}, errors {stats['error']}; "
+        f"skipped {stats['skipped']}, gone {stats['gone']}, "
+        f"unsupported {stats['unsupported']}, errors {stats['error']}; "
         f"{stats['renamed']} renames fixed, {stats['flagged-renames']} flagged")
     # Utilities ride the same daily cycle (camp-docs#4); absent tree = no-op.
     if (Path(index_dir) / "utilities").is_dir():
