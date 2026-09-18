@@ -923,6 +923,14 @@ def _cmd_unknown_type_families(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_parked_families_check(args: argparse.Namespace) -> int:
+    from .parkedfamilies import check, tsv_line
+    for status in check(args.index_dir):
+        if args.all or status.flipped:
+            print(tsv_line(status))
+    return 0
+
+
 def _cmd_site(args: argparse.Namespace) -> int:
     from . import site as site_mod
     count = site_mod.generate(args.index_dir, args.base_url.rstrip("/"), args.out_dir,
@@ -1176,6 +1184,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--write", action="store_true",
                    help="rewrite camp/standardplugins.json from upstream")
     p.set_defaults(func=_cmd_check_standard_plugins)
+
+    p = sub.add_parser("parked-families-check",
+                       help="TSV of parked family prefixes whose gate has "
+                            "flipped (the watched repository now declares "
+                            "the type and the parent is listed): prefix, "
+                            "parent, issue, declaring repos, state (drives "
+                            "the scan workflow's issue reopen, camp-tools#49)")
+    p.add_argument("index_dir")
+    p.add_argument("--all", action="store_true",
+                   help="print every parked prefix with its state, not only flipped ones")
+    p.set_defaults(func=_cmd_parked_families_check)
 
     p = sub.add_parser("unknown-type-families",
                        help="TSV of unknown-plugin-type prefixes awaiting "
