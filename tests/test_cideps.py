@@ -4,6 +4,12 @@ import yaml
 
 from camp import cideps
 from camp.cli import main
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_remote(monkeypatch):
+    monkeypatch.setattr(cideps, "_stable_branches", lambda source: [])
 
 
 def _index(tmp_path, entries: dict, families: dict | None = None):
@@ -47,11 +53,36 @@ def test_declared_dependency_resolves_to_release_covering_branch(tmp_path):
     assert res.deps[0].ref == "v5.0.10.03"
 
 
-def test_no_covering_release_falls_back_to_newest_then_default_branch(tmp_path):
+def test_no_covering_release_prefers_stable_branch_then_newest_then_default(tmp_path):
+    none = lambda source: []
     idx = _index(tmp_path, {"tool_mulib": {"releases": [_rel("v1", ["4.1"]), _rel("v2", ["4.2"])]}})
-    assert cideps.resolve(idx, VERSION_PHP, "4.5").deps[0].ref == "v2"
+    assert cideps.resolve(idx, VERSION_PHP, "4.5", stable_branches=none).deps[0].ref == "v2"
     idx = _index(tmp_path, {"tool_mulib": {"releases": []}})
-    assert cideps.resolve(idx, VERSION_PHP, "4.5").deps[0].ref is None
+    assert cideps.resolve(idx, VERSION_PHP, "4.5", stable_branches=none).deps[0].ref is None
+    asked = []
+    def some(source):
+        asked.append(source); return ["MOODLE_400_STABLE", "MOODLE_500_STABLE", "main"]
+    assert cideps.resolve(idx, VERSION_PHP, "MOODLE_405_STABLE", stable_branches=some).deps[0].ref == "MOODLE_400_STABLE"
+    assert cideps.resolve(idx, VERSION_PHP, "5.2", stable_branches=some).deps[0].ref == "MOODLE_500_STABLE"
+    assert cideps.resolve(idx, VERSION_PHP, "3.9", stable_branches=some).deps[0].ref is None
+    assert asked == ["https://github.com/o/moodle-tool_mulib"] * 3
+    # a covering release wins without asking the remote
+    idx = _index(tmp_path, {"tool_mulib": {"releases": [_rel("v3", ["4.5"])]}})
+    asked.clear()
+    assert cideps.resolve(idx, VERSION_PHP, "4.5", stable_branches=some).deps[0].ref == "v3" and asked == []
+
+
+def test_best_stable_branch():
+    names = ["MOODLE_311_STABLE", "MOODLE_400_STABLE", "MOODLE_405_STABLE", "MOODLE_500_STABLE", "main"]
+    assert cideps.best_stable_branch(names, "4.5") == "MOODLE_405_STABLE"
+    assert cideps.best_stable_branch(names, "4.4") == "MOODLE_400_STABLE"
+    assert cideps.best_stable_branch(names, "5.2") == "MOODLE_500_STABLE"
+    assert cideps.best_stable_branch(names, "3.9") is None
+    assert cideps.best_stable_branch(["main"], "4.5") is None
+
+
+def test_code():
+    assert cideps._code("4.5") == 405 and cideps._code("5.2") == 502 and cideps._code("3.11") == 311
 
 
 def test_subplugin_parent_is_added_first_and_followed_transitively(tmp_path):

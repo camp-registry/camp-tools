@@ -16,6 +16,7 @@ Resolution, transitive, from the plugin's own version.php:
 - components Moodle bundles on the branch under test are skipped;
 - a listed component resolves to its source repository and a ref: the
   newest release whose supported range covers the branch, else the
+  repository's highest MOODLE_xxx_STABLE branch at or below it, else the
   newest release, else no ref (the repository's default branch);
 - each resolved entry's own recorded dependencies and parent are
   followed the same way;
@@ -26,6 +27,7 @@ Resolution, transitive, from the plugin's own version.php:
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -70,11 +72,50 @@ def _entry(index: Path, component: str) -> dict | None:
         return yaml.safe_load(f) or {}
 
 
-def _ref_for(entry: dict, branch: str) -> str | None:
+_STABLE_RE = re.compile(r"^MOODLE_(\d{3})_STABLE$")
+
+
+def _code(branch: str) -> int:
+    """'4.5' -> 405, the number inside MOODLE_405_STABLE."""
+    major, minor = branch.split(".")
+    return int(major) * 100 + int(minor)
+
+
+def _stable_branches(source: str) -> list[str]:
+    """MOODLE_xxx_STABLE branch names the repository has; [] on any failure."""
+    try:
+        out = subprocess.run(["git", "ls-remote", "--heads", source, "refs/heads/MOODLE_*_STABLE"],
+                             capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if out.returncode != 0:
+        return []
+    names = [line.rsplit("refs/heads/", 1)[-1] for line in out.stdout.splitlines() if "refs/heads/" in line]
+    return [n for n in names if _STABLE_RE.match(n)]
+
+
+def best_stable_branch(names: list[str], branch: str) -> str | None:
+    """The highest MOODLE_xxx_STABLE at or below the branch under test: a
+    repository maintaining 400 and 500 serves 4.5 from 400."""
+    target = _code(branch)
+    codes = sorted((int(m.group(1)), n) for n in names if (m := _STABLE_RE.match(n)))
+    eligible = [n for c, n in codes if c <= target]
+    return eligible[-1] if eligible else None
+
+
+def _ref_for(entry: dict, branch: str, stable_branches) -> str | None:
+    """Newest release covering the branch; else the repository's best
+    MOODLE_xxx_STABLE branch for it (a plugin with no listed releases, or
+    none covering the branch, usually maintains one per Moodle series);
+    else the newest release; else the default branch."""
     releases = entry.get("releases") or []
     covering = [r for r in releases if branch in (r.get("supported-moodle") or [])]
-    pick = (covering or releases)
-    return str(pick[-1]["tag"]) if pick else None
+    if covering:
+        return str(covering[-1]["tag"])
+    stable = best_stable_branch(stable_branches(entry["source"]), branch)
+    if stable:
+        return stable
+    return str(releases[-1]["tag"]) if releases else None
 
 
 def _entry_dependencies(entry: dict) -> list[str]:
@@ -94,7 +135,11 @@ def _wanted(component: str, established: dict, deps: dict) -> list[str]:
     return wants
 
 
-def resolve(index_dir, version_text: str, moodle_branch: str) -> Resolution:
+def resolve(index_dir, version_text: str, moodle_branch: str,
+            stable_branches=None) -> Resolution:
+    """`stable_branches` lists a repository's MOODLE_xxx_STABLE heads; it
+    defaults to a git ls-remote at call time (so tests can patch it)."""
+    stable_branches = stable_branches or _stable_branches
     index = Path(index_dir)
     branch = branch_label(moodle_branch)
     established = plugintypes.load_established(index)
@@ -117,7 +162,7 @@ def resolve(index_dir, version_text: str, moodle_branch: str) -> Resolution:
             res.unlisted.append((component, via))
             continue
         res.deps.append(Dep(component=component, source=entry["source"],
-                            ref=_ref_for(entry, branch), via=via))
+                            ref=_ref_for(entry, branch, stable_branches), via=via))
         queue.extend((c, component) for c in _wanted(
             component, established, dict.fromkeys(_entry_dependencies(entry))))
     return res
