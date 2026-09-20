@@ -923,6 +923,21 @@ def _cmd_unknown_type_families(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ci_deps(args: argparse.Namespace) -> int:
+    from .cideps import resolve, tsv_line
+    text = Path(args.plugin_dir, "version.php").read_text(errors="replace")
+    res = resolve(args.index_dir, text, args.moodle_branch)
+    for dep in res.deps:
+        print(tsv_line(dep))
+    for component in res.bundled:
+        print(f"{component}: bundled with Moodle {args.moodle_branch}; nothing to add",
+              file=sys.stderr)
+    for component, via in res.unlisted:
+        print(f"::warning::{component} (needed by {via}) is not listed in the "
+              f"index; not installed, so the install may fail on it", file=sys.stderr)
+    return 0
+
+
 def _cmd_parked_families_check(args: argparse.Namespace) -> int:
     from .parkedfamilies import check, tsv_line
     for status in check(args.index_dir):
@@ -1184,6 +1199,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--write", action="store_true",
                    help="rewrite camp/standardplugins.json from upstream")
     p.set_defaults(func=_cmd_check_standard_plugins)
+
+    p = sub.add_parser("ci-deps",
+                       help="TSV of listed plugins to install beside a plugin "
+                            "under moodle-plugin-ci test (component, source, "
+                            "ref, needed-by): its version.php dependencies and "
+                            "third-party parent, transitively, minus what "
+                            "Moodle bundles on the branch (camp-tools#50)")
+    p.add_argument("index_dir")
+    p.add_argument("plugin_dir", help="checkout of the plugin under test (version.php at its root)")
+    p.add_argument("--moodle-branch", required=True,
+                   help="branch under test: MOODLE_405_STABLE or 4.5")
+    p.set_defaults(func=_cmd_ci_deps)
 
     p = sub.add_parser("parked-families-check",
                        help="TSV of parked family prefixes whose gate has "
