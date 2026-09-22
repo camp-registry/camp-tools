@@ -13,7 +13,16 @@ dependencies = [
 [project.optional-dependencies]
 screenshots = ["Pillow>=10.0"]
 archive = ["boto3>=1.34"]
-dev = ["pytest>=8.0"]
+# `camp tuf` and `camp rekor` (release signing and transparency, RFC 4.3).
+# python-tuf 7 pins securesystemslib ~=1.0; securesystemslib only pulls
+# cryptography through its `crypto` extra, and the modules import it directly.
+signing = [
+    "tuf>=7,<8",
+    "securesystemslib[crypto]>=1.4,<2",
+    "cryptography>=40",
+]
+# The suite imports every module, so dev carries every extra.
+dev = ["pytest>=8.0", "camp-tools[signing]"]
 
 [project.scripts]
 camp = "camp.cli:main"

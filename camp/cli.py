@@ -295,8 +295,21 @@ def _print_report(report, limit: int = 40) -> None:
         print(f"  … and {len(report.findings) - limit} more findings")
 
 
+def _signing_extra_missing(command: str, exc: ImportError) -> int:
+    """`camp tuf` and `camp rekor` import python-tuf, securesystemslib and
+    cryptography, which only the `signing` extra installs; every other
+    command works without them."""
+    print(f"camp {command}: {exc.name or exc} is not installed; this command "
+          "needs the signing extra:\n  pip install 'camp-tools[signing]'",
+          file=sys.stderr)
+    return 2
+
+
 def _cmd_rekor(args: argparse.Namespace) -> int:
-    from . import rekor
+    try:
+        from . import rekor
+    except ImportError as exc:
+        return _signing_extra_missing("rekor", exc)
     key_path = Path(args.key)
     if not key_path.exists():
         rekor.generate_key(key_path)
@@ -314,7 +327,10 @@ def _cmd_rekor(args: argparse.Namespace) -> int:
 
 
 def _cmd_tuf(args: argparse.Namespace) -> int:
-    from . import tuf_repo
+    try:
+        from . import tuf_repo
+    except ImportError as exc:
+        return _signing_extra_missing("tuf", exc)
     if args.tuf_command == "init":
         written = tuf_repo.init_keys(args.keys_dir, root_keys=args.root_keys,
                                      threshold=args.threshold)

@@ -1,0 +1,60 @@
+# The test suite on every push and pull request, on a clean runner.
+#
+# Two jobs, two different questions. `tests` installs the package from
+# pyproject.toml with the dev extra and runs the suite, on the oldest and
+# newest supported Python: a module that imports something pyproject does
+# not declare fails here and nowhere else (the local venv is hand-fed).
+# `base-install` installs with no extras and runs the commands every
+# workflow depends on, proving the base stays self-contained: optional
+# dependencies (Pillow, boto3, python-tuf and friends) must only be
+# reached from the commands that need them.
+#
+# Advisory, not a required check: the release train pushes to main and
+# tags directly (camp-docs runbooks/release-train.md); do not tag on red.
+
+name: Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install with the dev extra
+        run: pip install --quiet ".[dev]"
+      - name: Run the suite
+        run: python -m pytest tests -q
+
+  base-install:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install with no extras
+        run: pip install --quiet .
+      - name: Base commands run without optional dependencies
+        run: |
+          camp --help > /dev/null
+          camp tuf --help > /dev/null
+          if camp tuf verify /nonexistent /nonexistent 2> err.txt; then
+            echo "expected camp tuf to fail without the signing extra"; exit 1
+          fi
+          grep -q "signing extra" err.txt
+          camp rekor --help > /dev/null

@@ -2724,11 +2724,12 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             sub_bits.append(f'{rel_n} release{"s" if rel_n != 1 else ""} in the archive')
         if others > 0:
             sub_bits.append(f'+{others} co-maintainer{"s" if others != 1 else ""}')
+        mt_sub = (f'<div class="mt-sub">{escape(" · ".join(sub_bits))}</div>'
+                  if sub_bits else "")
         kv_rows.append(
             f'<div class="kvrow"><span class="fk">Maintainer</span>'
             f'<span class="fv"><div class="mt-name">{escape(mt_name)}</div>'
-            f'{f"<div class=\"mt-sub\">{escape(chr(183).join(sub_bits)) if False else escape(" · ".join(sub_bits))}</div>" if sub_bits else ""}'
-            f'</span></div>')
+            f'{mt_sub}</span></div>')
     kv_rows.append(f'<div class="kvrow"><span class="fk">Source repository</span>'
                    f'<span class="fv mono" style="font-size:0.78125rem;word-break:break-all">'
                    f'<a href="{escape(entry["source"])}">'

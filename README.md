@@ -28,4 +28,8 @@ The JSON Schemas for index entries, listing manifests, and advisories ship
 inside the package (`camp/schema/`) — they are the tool's contract with
 [camp-index](https://github.com/camp-registry/camp-index).
 
-Python ≥3.11. GPL-3.0-or-later. Tests: `python -m pytest tests`.
+Python ≥3.11. GPL-3.0-or-later. Extras: `[screenshots]` (Pillow, for
+listing images), `[archive]` (boto3, for deposits), `[signing]` (python-tuf,
+securesystemslib, cryptography, for `camp tuf` and `camp rekor`); `[dev]`
+pulls in what the tests import. Tests: `python -m pytest tests`, run on
+every push and pull request by `.github/workflows/tests.yml`.
