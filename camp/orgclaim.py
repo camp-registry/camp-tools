@@ -53,6 +53,7 @@ MANIFEST_FILE = "camp-claim.yml"
 LABEL_VOCABULARY = {
     "fully-free", "freemium", "paid-service", "external-account",
     "donation-supported", "commercial-support-available",
+    "requires-core-patch",
 }
 
 # The canonical key order claim PRs produce; rebuilt on write so org-claimed

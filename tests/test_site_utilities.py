@@ -169,3 +169,17 @@ def test_stylesheet_type_floor_covers_utility_pill(index_dir, tmp_path):
                                       decls):
             floor = 12 if unit == "px" else 0.75
             assert float(value) >= floor, (selector.strip(), value + unit)
+
+
+def test_requires_core_patch_label_renders_and_filters(index_dir, tmp_path, entry_path):
+    import yaml
+    entry = yaml.safe_load(entry_path.read_text())
+    entry["labels"] = ["fully-free", "requires-core-patch"]
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    page = (out / "plugin" / "mod_example.html").read_text()
+    assert "Requires Moodle core patch" in page
+    browse = (out / "index.html").read_text()
+    assert 'requires-core-patch' in browse          # facet value + row rail map
+    assert "Requires core patch" in browse

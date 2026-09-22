@@ -668,3 +668,14 @@ def test_entry_schema_rejects_bad_dependency_shapes(entry_path):
     _mutate(entry_path, lambda e: e["releases"][0].update(
         dependencies={"mod_ok": "any"}))
     assert validate_entry(entry_path) == []
+
+
+def test_requires_core_patch_is_a_valid_label(entry_path):
+    def add(entry):
+        entry["labels"] = ["fully-free", "requires-core-patch"]
+    _mutate(entry_path, add)
+    assert validate_entry(entry_path) == []
+    def bad(entry):
+        entry["labels"] = ["needs-patch"]
+    _mutate(entry_path, bad)
+    assert any("labels" in p for p in validate_entry(entry_path))

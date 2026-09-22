@@ -104,7 +104,8 @@
           "paid-service",
           "external-account",
           "donation-supported",
-          "commercial-support-available"
+          "commercial-support-available",
+          "requires-core-patch"
         ]
       }
     },

@@ -12,6 +12,8 @@ Label heuristics (`camp lint-labels`):
   - premium/upgrade/subscription language in lang strings → suggests `freemium`
   - hardcoded remote service endpoints + HTTP client usage
     → suggests `external-account`
+  - core-patch language in lang strings, PHP or the README
+    → suggests `requires-core-patch`
 
 Security lint (`camp audit`):
   - dynamic code execution (eval, create_function, preg_replace /e)
@@ -66,6 +68,10 @@ REMOTE_ENDPOINT = re.compile(
     r"purl\.org|www\.w3\.org|raw\.githubusercontent\.com)/)"
     r"[a-z0-9.-]+\.[a-z]{2,}/[^'\"]*['\"]", re.IGNORECASE)
 HTTP_CLIENT = re.compile(r"\b(curl_init|curl_exec|download_file_content|\\?GuzzleHttp|new\s+curl)\b")
+CORE_PATCH = re.compile(
+    r"(core (?:patch|modification)s?\b|patch(?:es)? (?:to|for) (?:moodle )?core\b|"
+    r"requires? (?:a )?(?:core )?patch\b|patch is missing|modified core|"
+    r"apply (?:the )?patch)", re.IGNORECASE)
 
 
 def _php_files(root: Path):
@@ -92,11 +98,22 @@ def lint_labels(source_dir: str | Path) -> Report:
                 report.suggested_labels.add("external-account")
             if PREMIUM_LANG.search(line) and "/lang/" in f"/{relative}":
                 report.add(relative, line_no, "premium/upgrade language", line, "freemium")
+            if CORE_PATCH.search(line):
+                report.add(relative, line_no, "core patch language", line, "requires-core-patch")
             if HTTP_CLIENT.search(line):
                 uses_http = True
             match = REMOTE_ENDPOINT.search(line)
             if match:
                 endpoint_hits.append((relative, line_no, line))
+
+    # READMEs say it plainly when the code does not
+    for readme in sorted(root.glob("README*")):
+        if readme.is_file() and readme.stat().st_size <= MAX_FILE_BYTES:
+            for line_no, line in enumerate(readme.read_text(errors="replace").splitlines(), 1):
+                if CORE_PATCH.search(line):
+                    report.add(readme.relative_to(root), line_no, "core patch language", line,
+                               "requires-core-patch")
+                    break
 
     if uses_http and endpoint_hits:
         for relative, line_no, line in endpoint_hits[:5]:

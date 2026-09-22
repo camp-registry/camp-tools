@@ -83,3 +83,14 @@ def test_scaffold_creates_valid_listing(tmp_path):
     # second run is a no-op
     actions, fine = scaffold(tmp_path, check_only=True)
     assert actions == [] and len(fine) == 2
+
+
+def test_labels_core_patch_language(tmp_path):
+    _plugin(tmp_path, {"lang/en/tool_x.php": (
+        "<?php\n$string['patchmissing'] = 'Required Multi-tenancy patch is missing or version is invalid';\n")})
+    assert "requires-core-patch" in lint_labels(tmp_path).suggested_labels
+    _plugin(tmp_path, {"lang/en/tool_x.php": "<?php\n$string['ok'] = 'Fine';\n",
+                       "README.md": "# tool_x\n\nThis plugin requires a core patch, see patches/.\n"})
+    report = lint_labels(tmp_path)
+    assert "requires-core-patch" in report.suggested_labels
+    assert any(f.path == "README.md" for f in report.findings)

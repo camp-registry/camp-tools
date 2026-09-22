@@ -55,6 +55,7 @@ LABEL_TEXT = {
     "external-account": "External account",
     "donation-supported": "Donation-supported",
     "commercial-support-available": "Commercial support",
+    "requires-core-patch": "Requires core patch",
 }
 
 # Ordered Moodle branches for range filtering (oldest → newest) — derived
@@ -738,7 +739,8 @@ BROWSE_JS = """
   var HEALTH = {0:['Archived upstream','var(--text-subtle)'],
     1:['Actively maintained','var(--ok-text)'], 2:['Maintained','var(--ok-text)'],
     3:['Slowing down','var(--warn-text)'], 4:['Dormant','var(--bad-text)']};
-  var COST = {'paid-service':'Paid service', 'freemium':'Freemium'};
+  var COST = {'paid-service':'Paid service', 'freemium':'Freemium',
+              'requires-core-patch':'Requires core patch'};
   var TIERS = ['Discovered','Claimed','Verified','Reviewed'];
 
   var state = {q:'', group:'', ver:'', tier:'', cost:'', health:'', sort:'relevance'};
@@ -1551,6 +1553,7 @@ LABEL_NAMES = {
     "external-account": "External account required",
     "donation-supported": "Donation supported",
     "commercial-support-available": "Commercial support available",
+    "requires-core-patch": "Requires Moodle core patch",
 }
 
 
@@ -1918,7 +1921,8 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         _facet("cost", "", "Any cost model")
         + _facet("cost", "fully-free", "Fully free")
         + _facet("cost", "donation-supported", "Donation-supported")
-        + _facet("cost", "commercial-support-available", "Commercial support"))
+        + _facet("cost", "commercial-support-available", "Commercial support")
+        + _facet("cost", "requires-core-patch", "Requires core patch"))
 
     # values are the same health codes the row records carry in "h"
     health_facets = (

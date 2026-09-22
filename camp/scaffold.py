@@ -33,6 +33,7 @@ labels:
   # Required disclosure labels — pick all that apply (RFC §4.7):
   #   fully-free | freemium | paid-service | external-account
   #   donation-supported | commercial-support-available
+  #   requires-core-patch (needs modifications to Moodle core to work)
   - fully-free
 # screenshots:
 #   - path: .camp/screenshots/overview.png
