@@ -157,3 +157,105 @@ def test_every_package_gets_a_metadata_file_even_without_advisories(index_dir, t
     # the whole-feed file tool_camp consumes is still written
     assert json.loads((out.parent / "security-advisories.json").read_text()) == \
         {"advisories": {}}
+
+
+# --- requirements on other camp packages (camp-tools#51) -------------------
+
+def _add_entry(index_dir, component, releases, maintainer="tester", tier=2):
+    """A tier-2 entry with hand-written releases: generate() reads records,
+    it does not verify them, so hashes can be placeholders here."""
+    d = index_dir / "plugins" / component.partition("_")[0]
+    d.mkdir(parents=True, exist_ok=True)
+    recs = []
+    for version, moodle_version, deps in releases:
+        recs.append({"version": version, "tag": f"v{version}", "commit": "a" * 40,
+                     "moodle-version": moodle_version, "supported-moodle": ["4.5", "5.0"],
+                     "zip-sha256": "b" * 64, "listing-sha256": "c" * 64,
+                     "published": "2026-09-01T00:00:00Z",
+                     **({"dependencies": deps} if deps else {})})
+    (d / f"{component}.yml").write_text(yaml.safe_dump({
+        "component": component, "source": f"https://example.org/{component}",
+        "maintainers": [{"github": maintainer}], "security-contact": "s@example.org",
+        "tier": tier, "labels": ["fully-free"], "status": "active", "releases": recs}))
+
+
+def _families(index_dir, families: dict):
+    (index_dir / "discovery").mkdir(exist_ok=True)
+    (index_dir / "discovery" / "subplugin-families.yml").write_text(yaml.safe_dump(families))
+
+
+def _require(doc, name, version):
+    return doc["packages"][name][version]["require"]
+
+
+def test_subplugin_requires_its_listed_third_party_parent(index_dir):
+    _families(index_dir, {"exampleelement": {"parent": "mod_example", "name": "Example elements"}})
+    _add_entry(index_dir, "exampleelement_fancy", [("2.0.0", 2026020100, None)], maintainer="other")
+    doc = generate(index_dir, "https://repo.test")
+    req = _require(doc, "other/moodle-exampleelement_fancy", "2.0.0")
+    assert req["tester/moodle-mod_example"] == "1.0.0"
+    assert set(req) == {INSTALLER_PACKAGE, "php", "tester/moodle-mod_example"}
+    # the parent itself gains nothing
+    assert set(_require(doc, "tester/moodle-mod_example", "1.0.0")) == {INSTALLER_PACKAGE, "php"}
+
+
+def test_core_parent_is_not_a_requirement(index_dir):
+    _add_entry(index_dir, "quizaccess_fancy", [("1.0.0", 2026020100, None)])
+    doc = generate(index_dir, "https://repo.test")
+    assert set(_require(doc, "tester/moodle-quizaccess_fancy", "1.0.0")) == {INSTALLER_PACKAGE, "php"}
+
+
+def test_declared_dependency_becomes_exact_versions_meeting_the_floor(index_dir):
+    _add_entry(index_dir, "tool_lib", [("1.0.0", 2026010100, None), ("1.1.0", 2026030100, None),
+                                       ("1.2.0", 2026050100, None)])
+    _add_entry(index_dir, "local_user", [("3.0.0", 2026060100, {"tool_lib": 2026030100})])
+    unlinked = []
+    doc = generate(index_dir, "https://repo.test", unlinked=unlinked)
+    assert _require(doc, "tester/moodle-local_user", "3.0.0")["tester/moodle-tool_lib"] == "1.1.0 || 1.2.0"
+    assert unlinked == []
+
+
+def test_floor_above_every_served_version_is_skipped_and_reported(index_dir):
+    _add_entry(index_dir, "tool_lib", [("1.0.0", 2026010100, None)])
+    _add_entry(index_dir, "local_user", [("3.0.0", 2026060100, {"tool_lib": 2026090100})])
+    unlinked = []
+    doc = generate(index_dir, "https://repo.test", unlinked=unlinked)
+    assert "tester/moodle-tool_lib" not in _require(doc, "tester/moodle-local_user", "3.0.0")
+    assert unlinked == ["local_user 3.0.0: depends on tool_lib >= 2026090100, above every version camp serves"]
+
+
+def test_bundled_dependency_is_silent_and_unlisted_is_reported(index_dir):
+    _add_entry(index_dir, "local_user", [("3.0.0", 2026060100, {"mod_forum": 2024100700, "local_nowhere": "any"})])
+    unlinked = []
+    doc = generate(index_dir, "https://repo.test", unlinked=unlinked)
+    assert set(_require(doc, "tester/moodle-local_user", "3.0.0")) == {INSTALLER_PACKAGE, "php"}
+    assert unlinked == ["local_user 3.0.0: depends on local_nowhere, which camp does not serve as a package"]
+
+
+def test_requirement_follows_a_package_rename(index_dir):
+    _add_entry(index_dir, "tool_lib", [("1.0.0", 2026010100, None)], maintainer="alice")
+    _add_entry(index_dir, "local_user", [("3.0.0", 2026060100, {"tool_lib": "any"})])
+    doc = generate(index_dir, "https://repo.test")
+    assert "alice/moodle-tool_lib" in _require(doc, "tester/moodle-local_user", "3.0.0")
+    _add_entry(index_dir, "tool_lib", [("1.0.0", 2026010100, None)], maintainer="bob")
+    doc = generate(index_dir, "https://repo.test")
+    req = _require(doc, "tester/moodle-local_user", "3.0.0")
+    assert "bob/moodle-tool_lib" in req and "alice/moodle-tool_lib" not in req
+
+
+def test_dependencies_are_visible_in_extra_camp(index_dir):
+    _add_entry(index_dir, "local_user", [("3.0.0", 2026060100, {"tool_lib": 2026030100})])
+    doc = generate(index_dir, "https://repo.test")
+    assert doc["packages"]["tester/moodle-local_user"]["3.0.0"]["extra"]["camp"]["dependencies"] == {"tool_lib": 2026030100}
+
+
+def test_requirements_switch_off(index_dir, tmp_path):
+    _add_entry(index_dir, "tool_lib", [("1.0.0", 2026010100, None)])
+    _add_entry(index_dir, "local_user", [("3.0.0", 2026060100, {"tool_lib": "any"})])
+    doc = generate(index_dir, "https://repo.test", requirements=False)
+    assert set(_require(doc, "tester/moodle-local_user", "3.0.0")) == {INSTALLER_PACKAGE, "php"}
+    from camp.cli import main
+    out = tmp_path / "out" / "packages.json"
+    assert main(["composer", str(index_dir), "https://repo.test", str(out), "--no-requirements"]) == 0
+    doc = json.loads(out.read_text())
+    assert set(doc["packages"]["tester/moodle-local_user"]["3.0.0"]["require"]) == {INSTALLER_PACKAGE, "php"}

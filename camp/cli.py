@@ -499,7 +499,8 @@ def _cmd_ledger_check(args: argparse.Namespace) -> int:
 
 def _cmd_composer(args: argparse.Namespace) -> int:
     count = composer_mod.write(args.index_dir, args.base_url.rstrip("/"), args.out,
-                               artifacts_base=(args.artifacts_base or "").rstrip("/") or None)
+                               artifacts_base=(args.artifacts_base or "").rstrip("/") or None,
+                               requirements=not args.no_requirements)
     print(f"wrote {args.out} ({count} packages)")
     return 0
 
@@ -1001,6 +1002,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("out")
     p.add_argument("--artifacts-base", help="artifact archive base URL "
                    "(default: <base_url>/artifacts)")
+    p.add_argument("--no-requirements", action="store_true",
+                   help="do not link packages to their parent and declared "
+                        "dependencies (D29 switch; the mapping is camp's, "
+                        "revisable if HQ defines one)")
     p.set_defaults(func=_cmd_composer)
 
     for verb, fn, hlp in (

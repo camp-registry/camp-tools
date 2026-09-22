@@ -21,6 +21,7 @@ import re
 import sys
 from pathlib import Path
 
+from . import plugintypes, standardplugins
 from .advisory import AdvisorySet
 from .moodleversions import branch_names, branches_known_at, next_branch
 from .validate import load_entry
@@ -152,6 +153,9 @@ def package_definition(entry: dict, base_url: str,
                     "supported-moodle": release["supported-moodle"],
                     "moodle-version": release["moodle-version"],
                     "published": release["published"],
+                    # $plugin->dependencies at the tag (camp-tools#20):
+                    # component -> minimum $plugin->version, or "any"
+                    "dependencies": dict(release.get("dependencies") or {}),
                 },
             },
             "time": release["published"],
@@ -180,9 +184,67 @@ def _core_conflict(release: dict) -> dict:
     return {"conflict": {"moodle/moodle": " || ".join(parts)}}
 
 
+def _bundled_on(component: str, branches: list[str]) -> bool:
+    """Moodle ships the component on at least one branch the release
+    supports, so it is core there and never a Composer requirement."""
+    return bool(set(standardplugins.standard_branches(component)) & set(branches))
+
+
+def link_requirements(packages: dict[str, dict], established: dict,
+                      unlinked: list[str] | None = None) -> None:
+    """Add `require` entries pointing at other camp packages (camp-tools#51):
+    the parent package for a subplugin of a third-party parent, and every
+    $plugin->dependencies entry that names a listed plugin. The constraint
+    is the exact list of the dependency's published versions whose own
+    $plugin->version meets the declared floor, so Composer refuses early
+    what Moodle's upgrade would refuse later, and installs in dependency
+    order (moodle/composer-installer#4). Dependencies Moodle bundles are
+    skipped silently; ones camp does not serve, or serves only in versions
+    below the floor, are skipped and reported in `unlinked`, since a
+    requirement nothing can satisfy would only make the package
+    uninstallable."""
+    by_component = {}
+    for name, versions in packages.items():
+        any_version = next(iter(versions.values()))
+        by_component[any_version["extra"]["camp"]["component"]] = name
+
+    def satisfying(dep: str, floor) -> list[str]:
+        versions = packages[by_component[dep]]
+        return sorted(v for v, d in versions.items()
+                      if floor == "any" or d["extra"]["camp"]["moodle-version"] >= floor)
+
+    for name, versions in packages.items():
+        for pkg_version, definition in versions.items():
+            camp = definition["extra"]["camp"]
+            component = camp["component"]
+            wants: dict[str, int | str] = {}
+            parent = plugintypes.parent(component.partition("_")[0], established)
+            if parent:
+                wants[parent] = "any"
+            for dep, floor in camp["dependencies"].items():
+                wants.setdefault(dep, floor)
+            for dep, floor in wants.items():
+                if dep == component or _bundled_on(dep, camp["supported-moodle"]):
+                    continue
+                if dep not in by_component:
+                    if unlinked is not None:
+                        unlinked.append(f"{component} {camp['version']}: depends on "
+                                        f"{dep}, which camp does not serve as a package")
+                    continue
+                allowed = satisfying(dep, floor)
+                if not allowed:
+                    if unlinked is not None:
+                        unlinked.append(f"{component} {camp['version']}: depends on "
+                                        f"{dep} >= {floor}, above every version camp serves")
+                    continue
+                definition["require"][by_component[dep]] = " || ".join(allowed)
+
+
 def generate(index_dir: str | Path, base_url: str,
              artifacts_base: str | None = None,
-             skipped: list[str] | None = None) -> dict:
+             skipped: list[str] | None = None,
+             unlinked: list[str] | None = None,
+             requirements: bool = True) -> dict:
     """Build the full packages.json document from an index tree.
 
     Packages ride inline (Composer's "partial packages": resolution never
@@ -206,6 +268,8 @@ def generate(index_dir: str | Path, base_url: str,
                                             skipped=skipped)
         if versions:
             packages[name] = versions
+    if requirements:
+        link_requirements(packages, plugintypes.load_established(index_dir), unlinked)
     return {
         "packages": packages,
         # Host-relative on purpose: a mirror serving the same tree answers
@@ -261,13 +325,16 @@ def generate_advisories(index_dir: str | Path, base_url: str) -> dict:
 
 
 def write(index_dir: str | Path, base_url: str, out_path: str | Path,
-          artifacts_base: str | None = None) -> int:
+          artifacts_base: str | None = None, requirements: bool = True) -> int:
     skipped: list[str] = []
+    unlinked: list[str] = []
     document = generate(index_dir, base_url, artifacts_base=artifacts_base,
-                        skipped=skipped)
+                        skipped=skipped, unlinked=unlinked, requirements=requirements)
     for item in skipped:
         print(f"warning: {item}: version not expressible in Composer's "
               f"grammar; left out of packages.json", file=sys.stderr)
+    for item in unlinked:
+        print(f"note: {item}; no Composer requirement written", file=sys.stderr)
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:
