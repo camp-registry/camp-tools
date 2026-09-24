@@ -59,12 +59,13 @@ jobs:
       - name: Create the Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.notes.outputs.title }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "release already exists; leaving it alone"
             exit 0
           fi
           gh release create "$GITHUB_REF_NAME" \
-            --title "${{ steps.notes.outputs.title }}" \
+            --title "$TITLE" \
             --notes-file notes.md \
             --verify-tag
