@@ -278,6 +278,30 @@ def test_verify_accepts_declared_thirdparty_present(plugin_repo, entry_path):
     assert any("thirdpartylibs" in c for c in results[0].checks)
 
 
+def test_verify_normalises_dot_slash_locations(plugin_repo, entry_path):
+    """`./amd/src/x.js` names the same file as `amd/src/x.js`; Moodle's own
+    tooling joins locations with path.posix.join, so we normalise the same
+    way (theme_adaptable V502.1.5 was refused on three such entries)."""
+    _retag_with_thirdpartylibs(
+        plugin_repo, entry_path, THIRDPARTYLIBS.format(location="./amd/src/pace.js"),
+        extra={"amd/src/pace.js": "// vendored\n"})
+
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert results[0].ok, results[0].problems
+
+
+def test_verify_rejects_locations_outside_the_plugin(plugin_repo, entry_path):
+    """`../boost/scss/bootstrap` resolves to another component: it can never
+    be in this artifact and is that component's to declare."""
+    _retag_with_thirdpartylibs(
+        plugin_repo, entry_path, THIRDPARTYLIBS.format(location="../boost/scss/bootstrap"))
+
+    results = verify_entry(entry_path, source_override=str(plugin_repo))
+    assert not results[0].ok
+    assert any("points outside the plugin" in p and "../boost/scss/bootstrap" in p
+               for p in results[0].problems)
+
+
 def test_verify_detects_malformed_thirdpartylibs(plugin_repo, entry_path):
     _retag_with_thirdpartylibs(plugin_repo, entry_path, "<libraries><library>")
 

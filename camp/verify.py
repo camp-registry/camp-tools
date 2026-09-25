@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import posixpath
 import subprocess
 import tempfile
 import zipfile
@@ -75,14 +76,31 @@ def thirdparty_problems(zip_data: bytes, component: str) -> list[str] | None:
         return [f"thirdpartylibs.xml is not well-formed XML: {exc}"]
     problems = []
     for library in root.iter("library"):
-        location = (library.findtext("location") or "").strip().strip("/")
-        if not location:
+        raw = (library.findtext("location") or "").strip()
+        if not raw:
+            continue
+        # Moodle's own tooling joins the location onto the plugin folder with
+        # path.posix.join, so `./amd/src/x.js` and `amd/src/x.js/` name the
+        # same file; normalise the same way before looking it up.
+        location = posixpath.normpath(raw.strip("/"))
+        if location in (".", ""):
+            continue
+        if location.startswith("../"):
+            # Resolves outside the plugin folder (theme_adaptable declared
+            # ../boost/...): whatever it points at lives in another
+            # component, so it cannot be in this artifact and is that
+            # component's to declare.
+            problems.append(
+                f"thirdpartylibs.xml declares {raw}, which points outside the "
+                f"plugin — a library another component ships (a parent theme, "
+                f"Moodle core) is that component's to declare, not this one's"
+            )
             continue
         prefixed = f"{folder}/{location}"
         if prefixed in names or any(n.startswith(prefixed + "/") for n in names):
             continue
         problems.append(
-            f"thirdpartylibs.xml declares {location}, which is not in the "
+            f"thirdpartylibs.xml declares {raw}, which is not in the "
             f"release — the tag must contain everything it declares"
         )
     return problems
