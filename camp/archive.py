@@ -37,6 +37,9 @@ class ArchiveResult:
     deposited: int = 0
     present: int = 0
     problems: list[str] = field(default_factory=list)
+    # artifact key -> byte length, filled by audit() from the store's HEAD
+    # (TUF target files need length + hash; the ledger records only the hash)
+    lengths: dict[str, int] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -67,8 +70,10 @@ def s3_store(bucket: str, endpoint: str, key_id: str, application_key: str):
                 if code == 404:
                     return None
                 raise
-            return {k.lower(): v for k, v in
+            head = {k.lower(): v for k, v in
                     (response.get("Metadata") or {}).items()}
+            head["length"] = int(response["ContentLength"])
+            return head
 
         def put(self, key: str, data: bytes, sha256: str) -> None:
             retain_until = (datetime.datetime.now(datetime.UTC)
@@ -156,4 +161,6 @@ def audit(index_dir: str | Path, store, log=print) -> ArchiveResult:
                 f"ledger {release['zip-sha256']}")
         else:
             result.present += 1
+            if existing.get("length") is not None:
+                result.lengths[key] = int(existing["length"])
     return result

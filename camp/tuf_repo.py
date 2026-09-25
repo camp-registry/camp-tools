@@ -37,13 +37,45 @@ from tuf.api.metadata import (
 from tuf.api.serialization.json import JSONSerializer
 
 ONLINE_ROLES = ["targets", "snapshot", "timestamp"]
-EXPIRY_DAYS = {"root": 365, "targets": 90, "snapshot": 7, "timestamp": 1}
+# Phase-2 windows (camp-tools#47, decided 2026-09-25): the timestamp is the
+# freeze-attack bound and the availability budget in one number. Publish runs
+# twice daily, so 14 days is ~28 missed runs of slack; the dead-man's switch
+# fires ~30 h after a missed run, leaving ~12 days to repair. Tighten later by
+# passing `expiry` from the publish workflow; the root's expiry is set at the
+# ceremony and never written here.
+EXPIRY_DAYS = {"root": 365, "targets": 90, "snapshot": 30, "timestamp": 14}
 _SERIALIZER = JSONSerializer(compact=False)
 
 
-def _expires(role: str) -> datetime.datetime:
-    return (datetime.datetime.now(datetime.UTC)
-            + datetime.timedelta(days=EXPIRY_DAYS[role]))
+def parse_expiry(specs) -> dict[str, int]:
+    """`role=days` strings (CLI / workflow env) → override dict, validated."""
+    out: dict[str, int] = {}
+    for spec in specs or []:
+        role, _, days = str(spec).partition("=")
+        role = role.strip()
+        if role not in ONLINE_ROLES:
+            raise ValueError(f"expiry role must be one of {ONLINE_ROLES}: {spec!r}")
+        try:
+            value = int(days)
+        except ValueError:
+            raise ValueError(f"expiry days must be an integer: {spec!r}") from None
+        if value < 1:
+            raise ValueError(f"expiry days must be >= 1: {spec!r}")
+        out[role] = value
+    if out:
+        ts = out.get("timestamp", EXPIRY_DAYS["timestamp"])
+        sn = out.get("snapshot", EXPIRY_DAYS["snapshot"])
+        tg = out.get("targets", EXPIRY_DAYS["targets"])
+        if not ts <= sn <= tg:
+            raise ValueError(
+                f"expiry must satisfy timestamp <= snapshot <= targets, got "
+                f"timestamp={ts} snapshot={sn} targets={tg}")
+    return out
+
+
+def _expires(role: str, expiry: dict[str, int] | None = None) -> datetime.datetime:
+    days = (expiry or {}).get(role, EXPIRY_DAYS[role])
+    return datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=days)
 
 
 def _write_key(path: Path, signer: CryptoSigner) -> None:
@@ -98,18 +130,43 @@ def _next_version(metadata_dir: Path, role: str) -> int:
 
 
 def sign_repository(targets_dir: str | Path, keys_dir: str | Path,
-                    metadata_dir: str | Path) -> dict[str, int]:
+                    metadata_dir: str | Path, *,
+                    only: list[str] | None = None,
+                    extra: dict[str, TargetFile] | None = None,
+                    expiry: dict[str, int] | None = None) -> dict[str, int]:
+    """Sign the online roles over a target set and write the metadata.
+
+    Targets are every file under `targets_dir` (the dev/test shape), or,
+    when `only` is given, just those relative paths (production: the few
+    machine-readable files of the site tree, not 6,000 HTML pages), plus
+    `extra` target files whose bytes live elsewhere (the ledger's ZIPs on
+    the artifact host; see tuf_targets.ledger_targets).
+
+    The root's consistent_snapshot is true, so targets and snapshot are also
+    written as `<version>.<role>.json`, root as `<version>.root.json`, and
+    timestamp only unversioned — the layout python-tuf clients expect.
+    `expiry` overrides EXPIRY_DAYS per online role (never root)."""
     targets_path = Path(targets_dir)
     out = Path(metadata_dir)
     out.mkdir(parents=True, exist_ok=True)
     root_signers, online, threshold = _load_all(Path(keys_dir))
 
-    targets = Targets(expires=_expires("targets"),
+    targets = Targets(expires=_expires("targets", expiry),
                       version=_next_version(out, "targets"))
-    for path in sorted(targets_path.rglob("*")):
-        if path.is_file():
-            name = path.relative_to(targets_path).as_posix()
-            targets.targets[name] = TargetFile.from_file(name, str(path))
+    if only is None:
+        paths = [p for p in sorted(targets_path.rglob("*")) if p.is_file()]
+    else:
+        paths = []
+        for rel in only:
+            path = targets_path / rel
+            if not path.is_file():
+                raise FileNotFoundError(f"target listed in --only is missing: {rel}")
+            paths.append(path)
+    for path in paths:
+        name = path.relative_to(targets_path).as_posix()
+        targets.targets[name] = TargetFile.from_file(name, str(path))
+    for name, target in (extra or {}).items():
+        targets.targets[name] = target
 
     ceremony_root: Metadata | None = None
     if root_signers:
@@ -140,7 +197,7 @@ def sign_repository(targets_dir: str | Path, keys_dir: str | Path,
         md_targets.sign(signer)
     targets_bytes = md_targets.to_bytes(_SERIALIZER)
 
-    snapshot = Snapshot(expires=_expires("snapshot"),
+    snapshot = Snapshot(expires=_expires("snapshot", expiry),
                         version=_next_version(out, "snapshot"))
     snapshot.meta["targets.json"] = MetaFile(
         version=targets.version, length=len(targets_bytes),
@@ -149,7 +206,7 @@ def sign_repository(targets_dir: str | Path, keys_dir: str | Path,
     md_snapshot.sign(online["snapshot"])
     snapshot_bytes = md_snapshot.to_bytes(_SERIALIZER)
 
-    timestamp = Timestamp(expires=_expires("timestamp"),
+    timestamp = Timestamp(expires=_expires("timestamp", expiry),
                           version=_next_version(out, "timestamp"))
     timestamp.snapshot_meta = MetaFile(
         version=snapshot.version, length=len(snapshot_bytes),
@@ -167,13 +224,23 @@ def sign_repository(targets_dir: str | Path, keys_dir: str | Path,
     for role, md in [("root", md_root), ("targets", md_targets),
                      ("snapshot", md_snapshot), ("timestamp", md_timestamp)]:
         md.to_file(str(out / f"{role}.json"), _SERIALIZER)
+        if role != "timestamp":
+            # consistent_snapshot layout; the unversioned copy above is
+            # the convenience "latest" for humans and for _next_version.
+            md.to_file(str(out / f"{md.signed.version}.{role}.json"), _SERIALIZER)
     return {"root": root.version, "targets": targets.version,
             "snapshot": snapshot.version, "timestamp": timestamp.version,
             "target-files": len(targets.targets)}
 
 
-def verify_repository(metadata_dir: str | Path, targets_dir: str | Path) -> list[str]:
-    """Full client-style verification. Returns a list of problems."""
+def verify_repository(metadata_dir: str | Path, targets_dir: str | Path, *,
+                      missing_ok_suffixes: tuple[str, ...] = ()) -> list[str]:
+    """Full client-style verification. Returns a list of problems.
+
+    Targets whose name ends with one of `missing_ok_suffixes` and are not
+    under `targets_dir` are skipped, not reported: in publish the ZIPs live
+    on the artifact host and were just audited hash-exact there, while the
+    site-tree targets are on disk and must match."""
     meta = Path(metadata_dir)
     problems: list[str] = []
     loaded = {role: Metadata.from_file(str(meta / f"{role}.json"))
@@ -198,6 +265,8 @@ def verify_repository(metadata_dir: str | Path, targets_dir: str | Path) -> list
     for name, target in loaded["targets"].signed.targets.items():
         local = targets_path / name
         if not local.exists():
+            if missing_ok_suffixes and name.endswith(missing_ok_suffixes):
+                continue
             problems.append(f"target missing on disk: {name}")
             continue
         try:

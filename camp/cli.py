@@ -340,14 +340,32 @@ def _cmd_tuf(args: argparse.Namespace) -> int:
         print("WARNING: plaintext dev/staging keys — see WARNING.txt")
         return 0
     if args.tuf_command == "sign":
+        extra = None
+        if args.index:
+            from . import tuf_targets
+            lengths = json.loads(Path(args.artifact_lengths).read_text()) \
+                if args.artifact_lengths else {}
+            extra, problems = tuf_targets.ledger_targets(args.index, lengths)
+            for problem in problems:
+                print(f"  ! {problem}", file=sys.stderr)
+            if problems:
+                return 1
+        try:
+            expiry = tuf_repo.parse_expiry(args.expiry)
+        except ValueError as exc:
+            print(f"camp tuf sign: {exc}", file=sys.stderr)
+            return 2
         versions = tuf_repo.sign_repository(args.targets_dir, args.keys_dir,
-                                            args.metadata_dir)
+                                            args.metadata_dir, only=args.only,
+                                            extra=extra, expiry=expiry)
         for role, version in versions.items():
             print(f"{role}: v{version}" if role != "target-files"
                   else f"{version} target files signed")
         return 0
     if args.tuf_command == "verify":
-        problems = tuf_repo.verify_repository(args.metadata_dir, args.targets_dir)
+        problems = tuf_repo.verify_repository(
+            args.metadata_dir, args.targets_dir,
+            missing_ok_suffixes=tuple(args.missing_ok_suffix or ()))
         if problems:
             for problem in problems:
                 print(f"  - {problem}")
@@ -553,6 +571,9 @@ def _cmd_archive_audit(args: argparse.Namespace) -> int:
     print(f"archive-audit: {result.present} verified")
     for problem in result.problems:
         print(f"  ! {problem}", file=sys.stderr)
+    if args.lengths_out:
+        Path(args.lengths_out).write_text(json.dumps(result.lengths, indent=1, sort_keys=True))
+        print(f"archive-audit: {len(result.lengths)} artifact lengths -> {args.lengths_out}")
     return 0 if result.ok else 1
 
 
@@ -1034,6 +1055,10 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--bucket", required=True)
         p.add_argument("--endpoint", required=True,
                        help="S3-compatible endpoint hostname")
+        if verb == "archive-audit":
+            p.add_argument("--lengths-out", metavar="FILE",
+                           help="write {artifact path: byte length} JSON for "
+                                "`camp tuf sign --artifact-lengths`")
         p.set_defaults(func=fn)
 
     p = sub.add_parser("rekor", help="build a Rekor transparency-log entry (dry-run unless --submit)")
@@ -1055,10 +1080,25 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("targets_dir")
     q.add_argument("keys_dir")
     q.add_argument("metadata_dir")
+    q.add_argument("--only", action="append", metavar="RELPATH",
+                   help="sign only these files under targets_dir (repeatable; "
+                        "default: every file)")
+    q.add_argument("--index", metavar="INDEX_DIR",
+                   help="also sign every served ledger release as a target "
+                        "(ZIPs on the artifact host; needs --artifact-lengths)")
+    q.add_argument("--artifact-lengths", metavar="FILE",
+                   help="JSON {artifact path: byte length} from "
+                        "`camp archive-audit --lengths-out`")
+    q.add_argument("--expiry", action="append", metavar="ROLE=DAYS",
+                   help="override an online role's expiry, e.g. timestamp=14 "
+                        "(repeatable; root is never written here)")
     q.set_defaults(func=_cmd_tuf)
     q = tuf_sub.add_parser("verify", help="client-style verification of metadata + targets")
     q.add_argument("metadata_dir")
     q.add_argument("targets_dir")
+    q.add_argument("--missing-ok-suffix", action="append", metavar="SUFFIX",
+                   help="targets whose name ends with this may be absent locally "
+                        "(the artifact-host ZIPs: .zip); repeatable")
     q.set_defaults(func=_cmd_tuf)
     # root ceremony (host side); stewards sign with pkcs11-tool, not camp
     r = tuf_sub.add_parser("root", help="root ceremony: build, check and assemble the steward-signed root")
