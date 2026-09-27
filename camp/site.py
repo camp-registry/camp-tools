@@ -470,6 +470,9 @@ footer .build{display:block;margin-top:4px}
   background:var(--surface)}
 .shot-grid a:hover img{border-color:var(--muted)}
 .shot-grid.shots-single{grid-template-columns:minmax(0,380px)}
+/* A lone image is usually a logo or a hero, not one of a row: show it
+   whole at any ratio instead of cropping it to the tile (camp-index#393) */
+.shot-grid.shots-single img{object-fit:contain;object-position:center}
 /* lightbox (js-built; anchors fall back to the raw image without js) */
 .lb{position:fixed;inset:0;background:rgba(12,11,9,.93);z-index:60;display:flex;
   flex-direction:column;align-items:center;justify-content:center;padding:24px}
