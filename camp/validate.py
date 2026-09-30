@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 from pathlib import Path
 
@@ -38,6 +39,48 @@ def _schema(name: str) -> dict:
         return json.load(f)
 
 
+# What a claim adds to a Tier 0 entry (AUTHORS.md Step 1). Hand-authored
+# claim PRs are where schema errors bite authors: three of them stumbled
+# on these exact keys (camp-index#82/#83, #399-#401; camp-tools#12).
+CLAIM_KEYS = ("maintainers", "security-contact", "labels")
+AUTHORS_URL = "https://github.com/camp-registry/camp-docs/blob/main/AUTHORS.md"
+
+
+def _describe(error: jsonschema.ValidationError) -> str:
+    """The schema error message, plus a did-you-mean for unknown keys
+    (camp-tools#12): the schema rightly rejects `security`, but the author
+    needs to hear `security-contact`."""
+    message = error.message
+    if error.validator == "additionalProperties" and isinstance(error.instance, dict):
+        known = list((error.schema.get("properties") or {}).keys())
+        for key in sorted(set(error.instance) - set(known)):
+            match = difflib.get_close_matches(str(key), known, n=1, cutoff=0.6)
+            if match:
+                message += f" (did you mean '{match[0]}'?)"
+    return message
+
+
+def _claim_hint(entry: dict, errors: list) -> str | None:
+    """One line for the common claim mistake: a Tier 1+ entry missing or
+    misspelling a claim key gets the checklist, not just the schema's
+    'required property' (camp-tools#12)."""
+    try:
+        tier = int(entry.get("tier") or 0)
+    except (TypeError, ValueError):
+        return None
+    if tier < 1:
+        return None
+    at_root = [e for e in errors if not list(e.absolute_path)]
+    missing = any(e.validator == "required" and any(k in e.message for k in CLAIM_KEYS)
+                  for e in at_root)
+    unknown = any(e.validator == "additionalProperties" for e in at_root)
+    if not (missing or unknown):
+        return None
+    return ("a claim adds exactly these to the entry: maintainers (you), "
+            "security-contact, labels, and tier: 1; releases stay as they are "
+            f"(AUTHORS.md Step 1, {AUTHORS_URL})")
+
+
 def validate_entry(path: str | Path) -> list[str]:
     """Validate one index entry file. Returns a list of problems (empty = valid)."""
     problems: list[str] = []
@@ -47,9 +90,13 @@ def validate_entry(path: str | Path) -> list[str]:
         return [str(exc)]
 
     validator = jsonschema.Draft202012Validator(_schema("index-entry.schema.json"))
-    for error in sorted(validator.iter_errors(entry), key=str):
+    errors = sorted(validator.iter_errors(entry), key=str)
+    for error in errors:
         location = "/".join(str(p) for p in error.absolute_path) or "(root)"
-        problems.append(f"{location}: {error.message}")
+        problems.append(f"{location}: {_describe(error)}")
+    hint = _claim_hint(entry, errors)
+    if hint:
+        problems.append(f"hint: {hint}")
 
     if problems:
         return problems
