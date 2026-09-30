@@ -194,7 +194,54 @@ def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
     # GitHub is the default and stays implicit (camp-tools#31)
     if candidate.platform == "gitlab":
         entry["host"] = "gitlab.com"
+    # A human collision verdict outlives rechecks (camp-tools#57): the
+    # scanner re-derives outcome and detail, never the decision.
+    if previous.get("resolution"):
+        entry["resolution"] = previous["resolution"]
     ledger[candidate.full_name] = entry
+
+
+# Verdicts an operator may record on a name-collision record
+# (camp-tools#57). copy-of-listed: the colliding repository is a copy or
+# re-upload of the listed plugin (no dispute to hold). dispute-lost /
+# dispute-won: a NAMESPACE.md name-dispute decided against / for the
+# colliding repository (won means the listing was repointed; the record
+# is kept for the history).
+RESOLUTION_VERDICTS = ("copy-of-listed", "dispute-lost", "dispute-won")
+
+
+def resolve_collision(index_dir: str | Path, repo: str, verdict: str, ref: str,
+                      decided: str | None = None, force: bool = False,
+                      log=print) -> dict:
+    """Record a human verdict on a name-collision ledger record so the
+    claim path stops routing the component to a human (camp-tools#57).
+    The verdict must point at where the reasoning was written down
+    (NAMESPACE.md: no private adjudication). Raises ValueError/KeyError
+    with a plain message on any refusal; writes the ledger on success."""
+    if verdict not in RESOLUTION_VERDICTS:
+        raise ValueError(f"verdict must be one of {', '.join(RESOLUTION_VERDICTS)}")
+    if not ref.startswith("https://"):
+        raise ValueError("ref must be the public issue or pull request URL that records the decision")
+    index = Path(index_dir)
+    ledger = load_ledger(index)
+    key = next((k for k in ledger if k.lower() == repo.lower()), None)
+    if key is None:
+        raise KeyError(f"{repo} is not in the scan ledger")
+    entry = ledger[key]
+    if entry.get("outcome") != "name-collision":
+        raise ValueError(f"{key} is recorded as {entry.get('outcome')!r}, not name-collision")
+    if entry.get("resolution") and not force:
+        prior = entry["resolution"]
+        raise ValueError(f"{key} already resolved: {prior.get('verdict')} ({prior.get('ref')}); "
+                         "pass force to replace it")
+    entry["resolution"] = {
+        "verdict": verdict,
+        "ref": ref,
+        "decided": decided or datetime.date.today().isoformat(),
+    }
+    save_ledger(index, ledger)
+    log(f"resolved: {key}  [{entry.get('component', '?')}]  {verdict}  {ref}")
+    return entry
 
 
 def unknown_type_detail(index: Path, component: str, version_text: str | None,
@@ -1534,17 +1581,23 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
 def check_collisions(index_dir: str | Path, token: str | None = None,
                      component: str | None = None, reclassify: bool = False,
                      include_copies: bool = False, dry_run: bool = False,
-                     log=print) -> dict:
+                     include_resolved: bool = False, log=print) -> dict:
     """Report same-component ledger entries; with reclassify=True, also
     backfill legacy 'exists' entries that point at a repository other than
     the listing's source, splitting them into copy / name-collision via the
     shared-history probe. Entries whose probe is inconclusive on both hosts
-    are left as 'exists' for a later run rather than guessed at."""
+    are left as 'exists' for a later run rather than guessed at.
+
+    Collision records carrying a human verdict (`resolution`, written by
+    resolve_collision) are not reported unless include_resolved is set:
+    index CI greps this output at claim time, and a decided collision
+    must not route the same claim to a human again (camp-tools#57)."""
     token = token or os.environ.get("GITHUB_TOKEN")
     index = Path(index_dir)
     ledger = load_ledger(index)
     today = datetime.date.today().isoformat()
-    stats = {"collisions": [], "copies": [], "reclassified": 0, "inconclusive": 0}
+    stats = {"collisions": [], "copies": [], "resolved": [],
+             "reclassified": 0, "inconclusive": 0}
     # Both legacy 'exists' wordings qualify: "already registered" (listing
     # file existed at scan time) and "already indexed this run" (another
     # repo claimed the component earlier in the same sweep). The first
@@ -1590,19 +1643,30 @@ def check_collisions(index_dir: str | Path, token: str | None = None,
         if component and entry.get("component") != component:
             continue
         if outcome == "name-collision":
-            stats["collisions"].append((full_name, entry))
+            if entry.get("resolution"):
+                stats["resolved"].append((full_name, entry))
+            else:
+                stats["collisions"].append((full_name, entry))
         elif outcome == "copy":
             stats["copies"].append((full_name, entry))
 
     for full_name, entry in stats["collisions"]:
         log(f"name-collision: {full_name}  [{entry.get('component', '?')}]  "
             f"{entry.get('detail', '')}")
+    if include_resolved:
+        for full_name, entry in stats["resolved"]:
+            res = entry["resolution"]
+            log(f"resolved: {full_name}  [{entry.get('component', '?')}]  "
+                f"{res.get('verdict', '?')} {res.get('decided', '')}  {res.get('ref', '')}")
     if include_copies:
         for full_name, entry in stats["copies"]:
             log(f"copy: {full_name}  [{entry.get('component', '?')}]  "
                 f"{entry.get('detail', '')}")
     log(f"{len(stats['collisions'])} name-collision(s), "
         f"{len(stats['copies'])} cop(ies)"
+        + (f", {len(stats['resolved'])} resolved"
+           + ("" if include_resolved else " (hidden; --all shows them)")
+           if stats["resolved"] else "")
         + (f"; {stats['reclassified']} reclassified, "
            f"{stats['inconclusive']} inconclusive" if reclassify else ""))
     if reclassify and stats["reclassified"] and not dry_run:

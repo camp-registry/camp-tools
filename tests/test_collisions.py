@@ -6,8 +6,11 @@ import json
 import yaml
 
 import camp.scan as scan
+import pytest
+
 from camp.scan import (Candidate, check_collisions, classify_existing,
-                       load_ledger, record_outcome, save_ledger)
+                       load_ledger, record_outcome, resolve_collision,
+                       save_ledger)
 
 HOLDER = "holder/moodle-local_x"
 RIVAL = "rival/moodle-local_x"
@@ -202,3 +205,94 @@ def test_reclassify_matches_same_run_duplicate_wording(tmp_path, monkeypatch):
     stats = check_collisions(tmp_path, reclassify=True, log=lambda *a: None)
     assert stats["reclassified"] == 1
     assert load_ledger(tmp_path)[RIVAL]["outcome"] == "name-collision"
+
+
+# --- recorded collision verdicts (camp-tools#57) ---------------------------
+
+_COLLISION = {
+    "outcome": "name-collision",
+    "detail": "independent repository declaring local_x, held by "
+              f"https://github.com/{HOLDER}; see NAMESPACE.md",
+    "first-seen": "2026-07-11", "last-checked": "2026-09-05",
+    "component": "local_x",
+}
+REF = "https://github.com/camp-registry/camp-index/pull/401"
+
+
+def test_resolve_collision_writes_the_verdict(tmp_path):
+    save_ledger(tmp_path, {RIVAL: dict(_COLLISION)})
+    lines = []
+    entry = resolve_collision(tmp_path, RIVAL.upper(), "copy-of-listed", REF,
+                              decided="2026-09-30", log=lines.append)
+    assert entry["resolution"] == {"verdict": "copy-of-listed", "ref": REF,
+                                   "decided": "2026-09-30"}
+    # persisted under the ledger's own key, case-insensitive lookup
+    assert load_ledger(tmp_path)[RIVAL]["resolution"]["verdict"] == "copy-of-listed"
+    assert lines and lines[0].startswith(f"resolved: {RIVAL}")
+
+
+def test_resolve_collision_refusals(tmp_path):
+    save_ledger(tmp_path, {
+        RIVAL: dict(_COLLISION),
+        "other/moodle-local_x": {"outcome": "copy", "detail": "d",
+                                 "first-seen": "2026-07-11", "last-checked": "2026-07-11",
+                                 "component": "local_x"},
+    })
+    with pytest.raises(KeyError):
+        resolve_collision(tmp_path, "nobody/moodle-local_x", "copy-of-listed", REF)
+    with pytest.raises(ValueError, match="not name-collision"):
+        resolve_collision(tmp_path, "other/moodle-local_x", "copy-of-listed", REF)
+    with pytest.raises(ValueError, match="verdict must be"):
+        resolve_collision(tmp_path, RIVAL, "whatever", REF)
+    with pytest.raises(ValueError, match="public issue or pull request URL"):
+        resolve_collision(tmp_path, RIVAL, "copy-of-listed", "see chat")
+    resolve_collision(tmp_path, RIVAL, "copy-of-listed", REF, log=lambda *a: None)
+    with pytest.raises(ValueError, match="already resolved"):
+        resolve_collision(tmp_path, RIVAL, "dispute-lost", REF)
+    resolve_collision(tmp_path, RIVAL, "dispute-lost", REF, force=True,
+                      log=lambda *a: None)
+    assert load_ledger(tmp_path)[RIVAL]["resolution"]["verdict"] == "dispute-lost"
+
+
+def test_check_collisions_hides_resolved_unless_asked(tmp_path):
+    _write_listing(tmp_path)
+    resolved = dict(_COLLISION, resolution={"verdict": "copy-of-listed",
+                                            "ref": REF, "decided": "2026-09-30"})
+    save_ledger(tmp_path, {RIVAL: resolved,
+                           "third/moodle-local_x": dict(_COLLISION)})
+    lines = []
+    stats = check_collisions(tmp_path, component="local_x", log=lines.append)
+    # the unresolved one still routes; the resolved one is out of the grep
+    assert [n for n, _ in stats["collisions"]] == ["third/moodle-local_x"]
+    assert [n for n, _ in stats["resolved"]] == [RIVAL]
+    assert sum(1 for l in lines if l.startswith("name-collision:")) == 1
+    assert not any(l.startswith("resolved:") for l in lines)
+    assert "1 resolved (hidden" in lines[-1]
+
+    lines = []
+    check_collisions(tmp_path, component="local_x", include_resolved=True,
+                     log=lines.append)
+    assert any(l.startswith(f"resolved: {RIVAL}") and "copy-of-listed" in l
+               for l in lines)
+    assert sum(1 for l in lines if l.startswith("name-collision:")) == 1
+
+
+def test_recheck_preserves_the_verdict():
+    candidate = Candidate(
+        full_name=RIVAL, html_url=f"https://github.com/{RIVAL}", owner="rival",
+        description="", license_spdx="GPL-3.0", stars=0,
+        default_branch="main", archived=False)
+    ledger = {RIVAL: dict(_COLLISION, resolution={"verdict": "copy-of-listed",
+                                                  "ref": REF, "decided": "2026-09-30"})}
+    record_outcome(ledger, candidate, "name-collision", "re-derived detail",
+                   "2026-10-05", component="local_x")
+    assert ledger[RIVAL]["last-checked"] == "2026-10-05"
+    assert ledger[RIVAL]["detail"] == "re-derived detail"
+    assert ledger[RIVAL]["resolution"]["verdict"] == "copy-of-listed"
+    # a record without a verdict gains none
+    record_outcome(ledger, Candidate(
+        full_name="third/moodle-local_x", html_url="", owner="third", description="",
+        license_spdx="GPL-3.0", stars=0, default_branch="main", archived=False),
+        "name-collision", "d", "2026-10-05", component="local_x")
+    assert "resolution" not in ledger["third/moodle-local_x"]
+

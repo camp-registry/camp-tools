@@ -904,9 +904,20 @@ def _cmd_check_collisions(args: argparse.Namespace) -> int:
     from .scan import check_collisions
     check_collisions(args.index_dir, component=args.component,
                      reclassify=args.reclassify, include_copies=args.copies,
-                     dry_run=args.dry_run)
+                     dry_run=args.dry_run, include_resolved=args.all)
     # Warn-only by design (NAMESPACE.md): collisions are surfaced for
     # humans, never a gate.
+    return 0
+
+
+def _cmd_resolve_collision(args: argparse.Namespace) -> int:
+    from .scan import resolve_collision
+    try:
+        resolve_collision(args.index_dir, args.repo, args.verdict, args.ref,
+                          decided=args.decided, force=args.force)
+    except (ValueError, KeyError) as exc:
+        print(f"error: {exc.args[0] if exc.args else exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -1383,7 +1394,27 @@ def main(argv: list[str] | None = None) -> int:
                    help="backfill legacy 'exists' entries whose repo differs "
                         "from the listing source (writes the ledger)")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--all", action="store_true",
+                   help="also list collisions that carry a recorded verdict "
+                        "(hidden by default so claim-time CI stops routing them)")
     p.set_defaults(func=_cmd_check_collisions)
+
+    p = sub.add_parser("resolve-collision",
+                       help="record a human verdict on a name-collision ledger "
+                            "record (camp-tools#57)")
+    p.add_argument("index_dir")
+    p.add_argument("repo", help="ledger key, e.g. someone/moodle-local_example")
+    p.add_argument("--verdict", required=True,
+                   choices=("copy-of-listed", "dispute-lost", "dispute-won"),
+                   help="copy-of-listed: a copy or re-upload of the listed plugin; "
+                        "dispute-lost / dispute-won: a NAMESPACE.md name-dispute "
+                        "decided against / for this repository")
+    p.add_argument("--ref", required=True,
+                   help="URL of the issue or pull request where the decision is written down")
+    p.add_argument("--decided", help="decision date YYYY-MM-DD (default: today)")
+    p.add_argument("--force", action="store_true",
+                   help="replace an existing verdict")
+    p.set_defaults(func=_cmd_resolve_collision)
 
     p = sub.add_parser("scan-report", help="summarize the scan ledger (rejections and why)")
     p.add_argument("--html", metavar="FILE",
