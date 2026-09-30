@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime
 import json
 import re
+import urllib.parse
 import shutil
 from collections import Counter
 from html import escape
@@ -778,6 +779,7 @@ BROWSE_JS = """
     ['q','group','ver','tier','cost','health','sort'].forEach(function(k){
       if (p.get(k)) state[k] = p.get(k);
     });
+    state.q = state.q.toLowerCase();  // typed input is lowercased; links must match
     q.value = state.q;
   }
   function persist(){
@@ -1519,6 +1521,18 @@ def _rel_time(iso: str, today: datetime.date) -> str:
     if days < 720:
         return f"{days // 30} mo ago"
     return f"{days // 365} yr ago"
+
+
+def _maintainer_link(m: dict, display: str) -> str:
+    """The maintainer's name as a link to the browse search on their
+    handle, so every other plugin they maintain is one click away
+    (camp-tools#2). The search blob indexes github/gitlab handles and
+    names, lowercased; a maintainer with none of those renders as text."""
+    handle = m.get("github") or m.get("gitlab") or m.get("name") or ""
+    if not handle:
+        return escape(display)
+    return (f'<a href="/?q={urllib.parse.quote(str(handle).lower())}" '
+            f'title="All plugins by this maintainer">{escape(display)}</a>')
 
 
 def _health(entry: dict, today: datetime.date) -> tuple[str, str] | None:
@@ -2731,7 +2745,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                   if sub_bits else "")
         kv_rows.append(
             f'<div class="kvrow"><span class="fk">Maintainer</span>'
-            f'<span class="fv"><div class="mt-name">{escape(mt_name)}</div>'
+            f'<span class="fv"><div class="mt-name">{_maintainer_link(m, mt_name)}</div>'
             f'{mt_sub}</span></div>')
     kv_rows.append(f'<div class="kvrow"><span class="fk">Source repository</span>'
                    f'<span class="fv mono" style="font-size:0.78125rem;word-break:break-all">'
@@ -3019,7 +3033,7 @@ def _utility_page(entry: dict, today: datetime.date) -> str:
         mt_name = m.get("name") or m.get("github") or m.get("gitlab") or "maintainer"
         kv_rows.append(
             f'<div class="kvrow"><span class="fk">Maintainer</span>'
-            f'<span class="fv"><div class="mt-name">{escape(mt_name)}</div>'
+            f'<span class="fv"><div class="mt-name">{_maintainer_link(m, mt_name)}</div>'
             f'</span></div>')
     repo_label = "Project repository" if closed else "Source repository"
     repo_attrib = ('<div class="attrib" style="margin-top:6px">documentation '
