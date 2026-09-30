@@ -629,10 +629,15 @@ def _cmd_advisory_new(args: argparse.Namespace) -> int:
         "title": args.title or "TODO: one-line summary",
         "severity": args.severity,
         "affected-versions": args.affected or "<0.0.1",
-        "revoke": False,
-        "published": now,
-        "description": "TODO: impact and what administrators should do.\n",
     }
+    # Withdrawals (RFC §5.3, AUTHORS.md "Withdrawing a version") set both
+    # from the command line so the operator edits only the description
+    # (camp-tools#58). Key order follows the advisory schema.
+    if getattr(args, "fixed_in", None):
+        scaffold["fixed-in"] = args.fixed_in
+    scaffold["revoke"] = bool(getattr(args, "revoke", False))
+    scaffold["published"] = now
+    scaffold["description"] = "TODO: impact and what administrators should do.\n"
     with open(out_path, "w") as f:
         yaml.safe_dump(scaffold, f, sort_keys=False, allow_unicode=True)
     print(f"scaffolded {out_path}")
@@ -1209,6 +1214,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--title")
     p.add_argument("--affected", help='constraint, e.g. ">=1.0,<1.4.2"')
     p.add_argument("--year", help="advisory-id year (default: current)")
+    p.add_argument("--revoke", action="store_true",
+                   help="withdraw the affected versions from installation channels")
+    p.add_argument("--fixed-in", dest="fixed_in", metavar="VERSION",
+                   help="the version that supersedes the affected ones")
     p.set_defaults(func=_cmd_advisory_new)
 
     p = sub.add_parser("validate-advisory", help="validate advisory files")
