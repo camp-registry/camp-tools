@@ -33,7 +33,8 @@ REASONS = [
     ("name-mismatch", "Repository name does not match the component (RFC §8)",
      "declares "),
 ]
-BULK = {"no-version-php", "bad-license", "exists", "written", "skipped-known"}
+BULK = {"no-version-php", "bad-license", "exists", "written", "skipped-known",
+        "name-mismatch"}  # rejected with the fix in the detail (camp-tools#60)
 
 
 def _reason(detail: str) -> str:

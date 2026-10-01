@@ -188,7 +188,7 @@ def record_outcome(ledger: dict, candidate: Candidate, outcome: str,
     # family report can group members by prefix (name-mismatch records
     # pass no component and are unchanged).
     if component and outcome in ("copy", "name-collision", "needs-review",
-                                 "core-component"):
+                                 "core-component", "name-mismatch"):
         entry["component"] = component
     # non-GitHub rows carry their host so review surfaces can link them;
     # GitHub is the default and stays implicit (camp-tools#31)
@@ -679,11 +679,23 @@ def classify_license_text(text: str) -> str | None:
     return None
 
 
+def name_mismatch_detail(component: str) -> str:
+    """The ledger detail for a rejected name mismatch: what the author does
+    about it (camp-tools#60). A rename is one click on GitHub and keeps the
+    old URL redirecting; the next sweep sees the new name as a fresh
+    candidate. The seed request is the human sign-off RFC §8 keeps."""
+    short = component.partition("_")[2]
+    return (f"declares {component} but the repository name does not carry it; "
+            f"rename the repository to include '{component}' or '{short}', "
+            f"or file a seed request for human sign-off (RFC §8, camp-tools#60)")
+
+
 def _name_matches_component(full_name: str, component: str) -> bool:
     """Weak-canonicality check (RFC §8): auto-listing requires the repository
     name to plausibly correspond to the component it declares. Repos that
-    fail (e.g. a repo named WORDPRESS-02-x declaring mod_y) are recorded as
-    needs-review for human sign-off rather than silently claiming the name."""
+    fail (e.g. a repo named WORDPRESS-02-x declaring mod_y) are rejected as
+    name-mismatch, like any other gate, with the fix in the detail; a seed
+    request lifts the gate for one targeted run (camp-tools#60)."""
     repo_name = re.sub(r"[-_.]", "", full_name.split("/", 1)[1].lower())
     short_name = re.sub(r"[-_.]", "", component.partition("_")[2])
     full = re.sub(r"[-_.]", "", component)
@@ -1543,7 +1555,8 @@ def enrich_utilities(index_dir: str | Path, token: str | None = None,
 
 
 def recheck_noassertion(index_dir: str | Path, token: str | None = None,
-                        dry_run: bool = False, log=print) -> list[ScanResult]:
+                        dry_run: bool = False, log=print,
+                        allow_mismatch: bool = False) -> list[ScanResult]:
     """Re-examine ledger rejections whose license GitHub couldn't classify
     (NOASSERTION): fetch the actual license file, pattern-match its text,
     and admit repos that turn out to be GPL-family or GPL-compatible."""
@@ -1604,11 +1617,10 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             results.append(ScanResult(candidate, "no-version-php"))
             continue
 
-        if not _name_matches_component(candidate.full_name, component):
-            record_outcome(ledger, candidate, "needs-review",
-                           f"declares {component} but repo name does not correspond; "
-                           f"human sign-off required before listing (RFC §8)", today)
-            results.append(ScanResult(candidate, "needs-review", component))
+        if not allow_mismatch and not _name_matches_component(candidate.full_name, component):
+            record_outcome(ledger, candidate, "name-mismatch",
+                           name_mismatch_detail(component), today, component=component)
+            results.append(ScanResult(candidate, "name-mismatch", component))
             continue
 
         plugintype = component.partition("_")[0]
@@ -2019,7 +2031,8 @@ def _gitlab_component(candidate: Candidate, token: str | None) -> tuple[str, str
 
 def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: int = 50,
                 token: str | None = None, dry_run: bool = False, log=print,
-                recheck_days: int = DEFAULT_RECHECK_DAYS) -> list[ScanResult]:
+                recheck_days: int = DEFAULT_RECHECK_DAYS,
+                allow_mismatch: bool = False) -> list[ScanResult]:
     """Discover Moodle plugins on GitLab.com and write Tier 0 entries."""
     token = token or os.environ.get("GITLAB_TOKEN")
     # GitHub-side probes (collision classifier) take the same self-refreshing
@@ -2090,11 +2103,10 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 results.append(ScanResult(candidate, outcome, component))
                 seen_components.add(component)
                 continue
-            if not _name_matches_component(candidate.full_name, component):
-                record_outcome(ledger, candidate, "needs-review",
-                               f"declares {component} but repo name does not correspond; "
-                               f"human sign-off required before listing (RFC §8)", today)
-                results.append(ScanResult(candidate, "needs-review", component))
+            if not allow_mismatch and not _name_matches_component(candidate.full_name, component):
+                record_outcome(ledger, candidate, "name-mismatch",
+                               name_mismatch_detail(component), today, component=component)
+                results.append(ScanResult(candidate, "name-mismatch", component))
                 continue
 
             core = core_component_outcome(component)
@@ -2133,7 +2145,8 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
 
 def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 30,
          token: str | None = None, dry_run: bool = False, log=print,
-         recheck_days: int = DEFAULT_RECHECK_DAYS) -> list[ScanResult]:
+         recheck_days: int = DEFAULT_RECHECK_DAYS,
+         allow_mismatch: bool = False) -> list[ScanResult]:
     """Run discovery and write Tier 0 entries into the index tree."""
     # App credentials in the environment give a self-refreshing token source;
     # a sweep runs for hours and a fixed installation token dies after one.
@@ -2208,11 +2221,10 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 results.append(ScanResult(candidate, "exists", component))
                 continue
 
-            if not _name_matches_component(candidate.full_name, component):
-                record_outcome(ledger, candidate, "needs-review",
-                               f"declares {component} but repo name does not correspond; "
-                               f"human sign-off required before listing (RFC §8)", today)
-                results.append(ScanResult(candidate, "needs-review", component))
+            if not allow_mismatch and not _name_matches_component(candidate.full_name, component):
+                record_outcome(ledger, candidate, "name-mismatch",
+                               name_mismatch_detail(component), today, component=component)
+                results.append(ScanResult(candidate, "name-mismatch", component))
                 continue
 
             plugintype = component.partition("_")[0]
@@ -2258,3 +2270,74 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
     if not dry_run:
         save_ledger(index, ledger)
     return results
+
+
+_LEGACY_MISMATCH = re.compile(r"^declares ([a-z][a-z0-9]*_[a-z0-9_]+) but repo name does not correspond")
+
+
+def reclassify_mismatches(index_dir: str | Path, token: str | None = None,
+                          dry_run: bool = False, prune_gone: bool = True,
+                          log=print) -> dict:
+    """One-off: move the legacy needs-review name-mismatch records to the
+    rejection outcome (camp-tools#60), applying the mechanical rules first:
+    a repository that is gone is pruned; a component camp already lists at
+    this repository makes the record stale (dropped); a component listed
+    elsewhere goes through classify_existing like any second declarer; a
+    repository the old directory mapped to that exact component is left
+    for a targeted `scan --allow-mismatch` (the directory already signed
+    off) and reported; everything else becomes name-mismatch."""
+    from . import directorymap
+    token = token or os.environ.get("GITHUB_TOKEN")
+    index = Path(index_dir)
+    ledger = load_ledger(index)
+    today = datetime.date.today().isoformat()
+    stats = {"pruned": [], "stale": [], "reclassified": [], "anchored": [],
+             "rejected": 0, "seen": 0}
+    for full_name, record in sorted(ledger.items()):
+        if record.get("outcome") != "needs-review":
+            continue
+        match = _LEGACY_MISMATCH.match(record.get("detail") or "")
+        if not match:
+            continue
+        stats["seen"] += 1
+        component = match.group(1)
+        html_url = f"https://github.com/{full_name}"
+        if prune_gone:
+            status, _, _ = _request(f"https://api.github.com/repos/{full_name}", token)
+            if status == 404:
+                stats["pruned"].append(full_name)
+                log(f"  gone: {full_name}")
+                del ledger[full_name]
+                continue
+        source = _listing_source(index, component)
+        if source:
+            listed = _repo_host_path(source)
+            if listed and listed[1] == full_name.lower():
+                stats["stale"].append(full_name)
+                log(f"  stale park, already listed here: {full_name}")
+                del ledger[full_name]
+                continue
+            outcome, detail = classify_existing(index, html_url, component, token)
+            record.update({"outcome": outcome, "detail": detail,
+                           "component": component, "last-checked": today})
+            stats["reclassified"].append((full_name, outcome))
+            log(f"  {outcome}: {full_name}  [{component}]")
+            continue
+        anchor = directorymap.directory_source(component)
+        if anchor and directorymap.same_repo(anchor, html_url):
+            stats["anchored"].append((full_name, component))
+            log(f"  directory-anchored, seed with --allow-mismatch: {full_name}  [{component}]")
+            continue
+        record.update({"outcome": "name-mismatch",
+                       "detail": name_mismatch_detail(component),
+                       "component": component, "last-checked": today})
+        stats["rejected"] += 1
+    log(f"{stats['seen']} legacy mismatch record(s): {len(stats['pruned'])} pruned, "
+        f"{len(stats['stale'])} stale, {len(stats['reclassified'])} reclassified as "
+        f"copy/collision, {len(stats['anchored'])} directory-anchored (left for a "
+        f"targeted scan), {stats['rejected']} rejected as name-mismatch"
+        + (" (dry run, nothing written)" if dry_run else ""))
+    if not dry_run and stats["seen"]:
+        save_ledger(index, ledger)
+    return stats
+

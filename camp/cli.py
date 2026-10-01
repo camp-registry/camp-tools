@@ -605,7 +605,8 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     from . import scan as scan_mod
     results = scan_mod.scan(args.index_dir, queries=args.query or None,
                             limit=args.limit, dry_run=args.dry_run,
-                            recheck_days=args.recheck_days)
+                            recheck_days=args.recheck_days,
+                            allow_mismatch=args.allow_mismatch)
     by_outcome: dict[str, int] = {}
     for result in results:
         by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
@@ -664,7 +665,8 @@ def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
     from . import scan as scan_mod
     results = scan_mod.scan_gitlab(args.index_dir, terms=args.term or None,
                                    limit=args.limit, dry_run=args.dry_run,
-                                   recheck_days=args.recheck_days)
+                                   recheck_days=args.recheck_days,
+                                   allow_mismatch=args.allow_mismatch)
     by_outcome: dict[str, int] = {}
     for result in results:
         by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
@@ -903,6 +905,13 @@ def _cmd_opt_out(args: argparse.Namespace) -> int:
     print(f"{done} listing(s) removed and opted out"
           + (f"; {len(failed)} refused: {', '.join(failed)}" if failed else ""))
     return 1 if failed else 0
+
+
+def _cmd_reclassify_mismatches(args: argparse.Namespace) -> int:
+    from .scan import reclassify_mismatches
+    reclassify_mismatches(args.index_dir, dry_run=args.dry_run,
+                          prune_gone=not args.no_prune_gone)
+    return 0
 
 
 def _cmd_check_collisions(args: argparse.Namespace) -> int:
@@ -1205,6 +1214,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true", help="report without writing entries")
     p.add_argument("--recheck-days", type=int, default=30,
                    help="re-evaluate ledger-rejected repos older than this (0 = always recheck)")
+    p.add_argument("--allow-mismatch", action="store_true",
+                   help="lift the repository-name gate for this targeted run: the "
+                        "human sign-off of a seed request (RFC §8, camp-tools#60)")
     p.set_defaults(func=_cmd_scan)
 
     p = sub.add_parser("advisory", help="scaffold a security advisory (RFC §5.3)")
@@ -1233,6 +1245,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true", help="report without writing entries")
     p.add_argument("--recheck-days", type=int, default=30,
                    help="re-evaluate ledger-rejected repos older than this (0 = always recheck)")
+    p.add_argument("--allow-mismatch", action="store_true",
+                   help="lift the repository-name gate for this targeted run: the "
+                        "human sign-off of a seed request (RFC §8, camp-tools#60)")
     p.set_defaults(func=_cmd_scan_gitlab)
 
     p = sub.add_parser("check-moodle-branches",
@@ -1392,6 +1407,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--reason", default="",
                    help="recorded in the ledger detail, e.g. 'camp-index#42'")
     p.set_defaults(func=_cmd_opt_out)
+
+    p = sub.add_parser("reclassify-mismatches",
+                       help="one-off: move legacy needs-review name mismatches to the "
+                            "name-mismatch rejection, applying the mechanical rules "
+                            "first (camp-tools#60)")
+    p.add_argument("index_dir")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-prune-gone", action="store_true",
+                   help="skip the per-repository existence check")
+    p.set_defaults(func=_cmd_reclassify_mismatches)
 
     p = sub.add_parser("check-collisions",
                        help="report component-name collisions recorded in the scan ledger")
