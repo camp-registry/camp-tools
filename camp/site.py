@@ -1523,6 +1523,32 @@ def _rel_time(iso: str, today: datetime.date) -> str:
     return f"{days // 365} yr ago"
 
 
+def _upstream_newest(metrics: dict) -> tuple[str, dict]:
+    """The upstream's newest version as the host reports it: ('release',
+    latest-release) or ('tag', latest-tag), whichever is newer by date
+    (camp-tools#59). A Release wins ties and undated comparisons, since it
+    is the maintainer's explicit act; a repository that only tags gets its
+    tag. ('', {}) when neither is recorded."""
+    rel = metrics.get("latest-release") or {}
+    tag = metrics.get("latest-tag") or {}
+    if not rel.get("tag"):
+        return ("tag", tag) if tag.get("tag") else ("", {})
+    if not tag.get("tag"):
+        return ("release", rel)
+    if rel.get("date") and tag.get("date") and str(tag["date"]) > str(rel["date"]):
+        return ("tag", tag)
+    return ("release", rel)
+
+
+def _upstream_url(source: str, kind: str, tag: str) -> str:
+    """Where the host shows that version: GitHub's tag page serves plain
+    tags and Releases alike; GitLab has a tags view."""
+    src = source.rstrip("/")
+    if "gitlab" in src:
+        return f"{src}/-/tags/{urllib.parse.quote(tag, safe='')}"
+    return f"{src}/releases/tag/{urllib.parse.quote(tag, safe='')}"
+
+
 def _maintainer_link(m: dict, display: str) -> str:
     """The maintainer's name as a link to the browse search on their
     handle, so every other plugin they maintain is one click away
@@ -2288,7 +2314,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     tier = entry["tier"]
     metrics = entry.get("metrics") or {}
     health = _health(entry, today)
-    upstream = metrics.get("latest-release") or {}
+    upstream_kind, upstream = _upstream_newest(metrics)
     check_doc = checks_mod.load(checks_dir, component)
 
     # Trust strip: the at-a-glance evaluation signals. The two trust
@@ -2689,13 +2715,22 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         facts_text, facts_label = _repo_facts(metrics, entry.get("source", ""))
         dev_bits.append(f'<span aria-label="{escape(facts_label)}">'
                         f'{escape(facts_text)}</span>')
-    # the newest tag on the source repository gets its own row: it is a
-    # host-reported fact, distinct from the verified releases below
+    # the newest version on the source repository gets its own row: a
+    # host-reported fact, distinct from the verified releases below. A
+    # GitHub Release when the maintainer makes them, else the newest tag
+    # (camp-tools#59), linked to the host's page for it with the same
+    # attribution the utility pages carry.
     upstream_row = ""
     if upstream.get("tag"):
         when = f' · {_fmt_date(upstream["date"])}' if upstream.get("date") else ""
-        upstream_row = (f'<div class="kvrow"><span class="fk">Upstream release</span>'
-                        f'<span class="fv">{escape(upstream["tag"])}{when}</span></div>')
+        label = "Upstream release" if upstream_kind == "release" else "Upstream tag"
+        url = _upstream_url(entry["source"], upstream_kind, str(upstream["tag"]))
+        upstream_row = (f'<div class="kvrow"><span class="fk">{label}</span>'
+                        f'<span class="fv"><a class="mono" href="{escape(url)}">'
+                        f'{escape(str(upstream["tag"]))}</a>{when}'
+                        '<div class="attrib" style="margin-top:6px">reported by the '
+                        'source platform · not verified or archived by the registry'
+                        '</div></span></div>')
     if metrics.get("ci"):
         # an observed fact about the repo's own CI, not a registry claim
         # about its results (camp-tools#4)

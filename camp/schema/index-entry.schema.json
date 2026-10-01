@@ -195,6 +195,16 @@
               "format": "date-time"
             }
           }
+        },
+        "latest-tag": {
+          "description": "Upstream's newest git tag by commit date (github.com sources, one GraphQL query), refreshed by `camp enrich`. Distinct from latest-release: many maintainers only tag, and a Release can trail the tags by years. Advisory display data, not a registry assertion (camp-tools#59).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tag"],
+          "properties": {
+            "tag": {"type": "string"},
+            "date": {"type": "string", "format": "date-time"}
+          }
         }
       }
     },

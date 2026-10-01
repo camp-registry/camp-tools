@@ -223,8 +223,11 @@ def test_upstream_release_and_drift_shown(index_dir, entry_path, tmp_path):
     assert "Upstream release" in html and "v9.9.9" in html
     # fixture ledger tag is v1.0.0, upstream v9.9.9 -> drift banner
     assert "not yet verified" in html
-    # the newest upstream tag is its own row, not part of the Development run
-    assert '<span class="fk">Upstream release</span><span class="fv">v9.9.9' in html
+    # the newest upstream version is its own row, not part of the Development
+    # run, and links to the host's page for it (camp-tools#59)
+    assert '<span class="fk">Upstream release</span><span class="fv"><a class="mono" href="' in html
+    assert '/releases/tag/v9.9.9">v9.9.9</a>' in html
+    assert "not verified or archived by the registry" in html
 
 
 def test_repository_facts_name_their_host(index_dir, entry_path, tmp_path):

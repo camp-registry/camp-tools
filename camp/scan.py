@@ -809,7 +809,8 @@ def classify_existing(index_dir: str | Path, candidate_url: str,
 
 def _metrics_dict(*, updated: str | None, stars: int, forks: int,
                   open_issues: int, archived: bool, checked: str,
-                  latest_release: dict | None = None) -> dict:
+                  latest_release: dict | None = None,
+                  latest_tag: dict | None = None) -> dict:
     """Ordered upstream-activity metrics block (schema `metrics`). `updated`
     is omitted when the platform gave no timestamp; `checked` is always set so
     consumers can judge freshness."""
@@ -822,14 +823,87 @@ def _metrics_dict(*, updated: str | None, stars: int, forks: int,
     metrics["archived"] = archived
     if latest_release:
         metrics["latest-release"] = latest_release
+    if latest_tag:
+        metrics["latest-tag"] = latest_tag
     metrics["checked"] = checked
     return metrics
 
 
+def _graphql(query: str, variables: dict, token) -> dict | None:
+    """One GitHub GraphQL call; the parsed `data` object, or None on any
+    failure (auth, network, errors in the response). GraphQL needs a
+    token, so callers pass None through and get None back."""
+    bearer = apptoken.resolve(token)
+    if not bearer:
+        return None
+    body = json.dumps({"query": query, "variables": variables}).encode()
+    req = urllib.request.Request(
+        "https://api.github.com/graphql", data=body, method="POST",
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json",
+                 "Content-Type": "application/json",
+                 "Authorization": f"Bearer {bearer}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            doc = json.loads(resp.read())
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    if doc.get("errors") or not isinstance(doc.get("data"), dict):
+        return None
+    return doc["data"]
+
+
+_NEWEST_TAG_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    refs(refPrefix: "refs/tags/", first: 5,
+         orderBy: {field: TAG_COMMIT_DATE, direction: DESC}) {
+      nodes {
+        name
+        target {
+          ... on Commit { committedDate }
+          ... on Tag { target { ... on Commit { committedDate } } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _fetch_latest_tag(path: str, token) -> dict | None:
+    """The newest tag on a github.com repository by commit date (tag + date),
+    or None (camp-tools#59). Tags are a different thing from GitHub
+    Releases: many maintainers only tag, and a Release can be years behind
+    the tags. REST /tags carries no dates and no useful order; one GraphQL
+    query returns the newest directly, lightweight or annotated."""
+    owner, _, name = path.partition("/")
+    if not owner or not name or "/" in name:
+        return None
+    data = _graphql(_NEWEST_TAG_QUERY, {"owner": owner, "name": name}, token)
+    try:
+        nodes = data["repository"]["refs"]["nodes"]
+    except (TypeError, KeyError):
+        return None
+    # The newest tag that names a version: moving convenience tags such as
+    # `phar-latest` or `stable` carry no digit and are not a release
+    # (live-caught on moosh). Five newest is enough headroom.
+    for node in nodes or []:
+        tag = (node or {}).get("name") or ""
+        if not any(ch.isdigit() for ch in tag):
+            continue
+        target = node.get("target") or {}
+        date = target.get("committedDate") or (target.get("target") or {}).get("committedDate")
+        out = {"tag": tag}
+        if date:
+            out["date"] = date
+        return out
+    return None
+
+
 def _fetch_latest_release(host: str, path: str, token: str | None) -> dict | None:
-    """Upstream's newest formal release (tag + date), or None. Plugins that
-    only tag without releases are skipped — tag-list ordering is not
-    reliably chronological on either platform."""
+    """Upstream's newest formal release (tag + date), or None. Tags-only
+    repositories show nothing here by design; on GitHub the newest tag is
+    recorded separately by _fetch_latest_tag (camp-tools#59)."""
     if host == "github.com":
         status, body, _ = _request(
             f"https://api.github.com/repos/{path}/releases/latest", token)
@@ -1027,6 +1101,7 @@ def _fetch_metrics(source: str, token: str | None, checked: str,
             forks=repo.get("forks_count", 0), open_issues=repo.get("open_issues_count", 0),
             archived=repo.get("archived", False), checked=checked,
             latest_release=_fetch_latest_release("github.com", path, token),
+            latest_tag=_fetch_latest_tag(path, token),
         ), canonical
 
     if "gitlab" in host:
