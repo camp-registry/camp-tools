@@ -907,6 +907,12 @@ def _cmd_opt_out(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _cmd_ledger_prune(args: argparse.Namespace) -> int:
+    from .scan import ledger_prune
+    ledger_prune(args.index_dir, limit=args.limit, dry_run=args.dry_run)
+    return 0
+
+
 def _cmd_reclassify_mismatches(args: argparse.Namespace) -> int:
     from .scan import reclassify_mismatches
     reclassify_mismatches(args.index_dir, dry_run=args.dry_run,
@@ -1407,6 +1413,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--reason", default="",
                    help="recorded in the ledger detail, e.g. 'camp-index#42'")
     p.set_defaults(func=_cmd_opt_out)
+
+    p = sub.add_parser("ledger-prune",
+                       help="rolling pass: drop scan-ledger records whose repository is "
+                            "gone or renamed (camp-tools#61)")
+    p.add_argument("index_dir")
+    p.add_argument("--limit", type=int, default=1500,
+                   help="records probed this run, oldest probe first (default 1500)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=_cmd_ledger_prune)
 
     p = sub.add_parser("reclassify-mismatches",
                        help="one-off: move legacy needs-review name mismatches to the "

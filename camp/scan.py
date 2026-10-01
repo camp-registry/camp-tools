@@ -2341,3 +2341,78 @@ def reclassify_mismatches(index_dir: str | Path, token: str | None = None,
         save_ledger(index, ledger)
     return stats
 
+
+# Outcomes the prune never touches: the index is the authority for written
+# records (enrich tracks those sources), and an opted-out marker is a
+# standing request that must survive the repository being recreated.
+PRUNE_SKIP_OUTCOMES = frozenset({"written", "opted-out"})
+
+
+def ledger_prune(index_dir: str | Path, token: str | None = None,
+                 limit: int | None = 1500, dry_run: bool = False,
+                 log=print) -> dict:
+    """Rolling pass over the scan ledger (camp-tools#61, camp-index#21):
+    probe the records with the oldest `probed` stamp (never probed first)
+    and drop the ones whose repository is gone (404) or renamed (the API
+    answers under another full name; the sweep evaluates the new name on
+    its own). Everything else gets `probed` stamped and stays. Stops early
+    on a rate limit and says so; the next night carries on."""
+    token = token or os.environ.get("GITHUB_TOKEN")
+    index = Path(index_dir)
+    ledger = load_ledger(index)
+    today = datetime.date.today().isoformat()
+    stats = {"probed": 0, "gone": [], "renamed": [], "kept": 0, "rate-limited": False}
+    candidates = sorted(
+        (k for k, r in ledger.items() if r.get("outcome") not in PRUNE_SKIP_OUTCOMES),
+        key=lambda k: (str(ledger[k].get("probed") or ""), k))
+    if limit is not None:
+        candidates = candidates[:limit]
+    for key in candidates:
+        record = ledger[key]
+        host = record.get("host", "github.com")
+        if host == "github.com":
+            status, body, headers = _request(f"https://api.github.com/repos/{key}", token)
+            if status == 403 and headers.get("X-RateLimit-Remaining") == "0":
+                stats["rate-limited"] = True
+                log("  rate limit reached; stopping for tonight")
+                break
+            current = None
+            if status == 200:
+                try:
+                    current = (json.loads(body).get("full_name") or "")
+                except ValueError:
+                    current = ""
+        elif "gitlab" in host:
+            status, body, _ = _request(
+                f"https://{host}/api/v4/projects/{urllib.parse.quote(key, safe='')}", None)
+            current = None
+            if status == 200:
+                try:
+                    current = (json.loads(body).get("path_with_namespace") or "")
+                except ValueError:
+                    current = ""
+        else:
+            record["probed"] = today
+            stats["kept"] += 1
+            continue
+        stats["probed"] += 1
+        if status == 404:
+            stats["gone"].append(key)
+            log(f"  gone: {key}")
+            del ledger[key]
+        elif status == 200 and current and current.lower() != key.lower():
+            stats["renamed"].append((key, current))
+            log(f"  renamed: {key} -> {current} (the sweep evaluates the new name)")
+            del ledger[key]
+        else:
+            # 200 same name, or a transient error: keep, stamp, move on
+            record["probed"] = today
+            stats["kept"] += 1
+    log(f"ledger prune: {stats['probed']} probed, {len(stats['gone'])} gone, "
+        f"{len(stats['renamed'])} renamed, {stats['kept']} kept"
+        + ("; rate-limited, stopped early" if stats["rate-limited"] else "")
+        + (" (dry run, nothing written)" if dry_run else ""))
+    if not dry_run and (stats["gone"] or stats["renamed"] or stats["kept"]):
+        save_ledger(index, ledger)
+    return stats
+
