@@ -1245,3 +1245,69 @@ def test_channel_release_unknown_scheme_and_malformed():
     assert fetch_channel_release("chrome-store:whatever/thing") is None
     assert fetch_channel_release("openvsx") is None
     assert fetch_channel_release("openvsx:") is None
+
+
+# --- scan-gitlab --project: targeted lookup by path ------------------------
+
+_GITLAB_PROJECT = {
+    "path_with_namespace": "adapta/moodle-quiz_outline",
+    "web_url": "https://gitlab.com/adapta/moodle-quiz_outline",
+    "namespace": {"full_path": "adapta", "path": "adapta"},
+    "description": "Quiz outline report",
+    "license": {"key": "gpl-3.0"},
+    "star_count": 1, "default_branch": "main", "archived": False,
+    "visibility": "public",
+}
+
+
+def test_gitlab_project_encodes_path_and_builds_candidate(monkeypatch):
+    """A GROUP/NAME path is looked up directly (URL-encoded) rather than
+    searched: the search endpoint matches project names, not namespace
+    paths, so the runbook's targeted seed found nothing before."""
+    import json as _json
+
+    import camp.scan as scan_mod
+
+    seen = {}
+
+    def fake_request(url, token):
+        seen["url"] = url
+        return 200, _json.dumps(_GITLAB_PROJECT).encode(), {}
+
+    monkeypatch.setattr(scan_mod, "_gitlab_request", fake_request)
+    c = scan_mod._gitlab_project("/adapta/moodle-quiz_outline/", None, log=lambda *a: None)
+    assert seen["url"].startswith(
+        "https://gitlab.com/api/v4/projects/adapta%2Fmoodle-quiz_outline?")
+    assert c.full_name == "adapta/moodle-quiz_outline"
+    assert c.platform == "gitlab" and c.license_spdx == "GPL-3.0"
+
+
+def test_gitlab_project_not_found_or_private_is_none(monkeypatch):
+    import json as _json
+
+    import camp.scan as scan_mod
+
+    monkeypatch.setattr(scan_mod, "_gitlab_request", lambda url, token: (404, b"{}", {}))
+    assert scan_mod._gitlab_project("gone/project", None, log=lambda *a: None) is None
+    private = dict(_GITLAB_PROJECT, visibility="private")
+    monkeypatch.setattr(scan_mod, "_gitlab_request",
+                        lambda url, token: (200, _json.dumps(private).encode(), {}))
+    assert scan_mod._gitlab_project("adapta/moodle-quiz_outline", None,
+                                    log=lambda *a: None) is None
+
+
+def test_scan_gitlab_projects_alone_run_no_sweep(tmp_path, monkeypatch):
+    """--project without --term must not fall back to the default search
+    terms (a targeted seed is not a sweep)."""
+    import camp.scan as scan_mod
+
+    def no_search(*a, **k):
+        raise AssertionError("search must not run for a targeted seed")
+
+    monkeypatch.setattr(scan_mod, "_gitlab_search", no_search)
+    monkeypatch.setattr(scan_mod, "_gitlab_project", lambda path, token, log: None)
+    monkeypatch.setattr(scan_mod.apptoken, "token_from_env", lambda log=print: None)
+    (tmp_path / "plugins").mkdir()
+    results = scan_mod.scan_gitlab(tmp_path, projects=["gone/project"],
+                                   dry_run=True, log=lambda *a: None)
+    assert results == []

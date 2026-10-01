@@ -666,7 +666,8 @@ def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
     results = scan_mod.scan_gitlab(args.index_dir, terms=args.term or None,
                                    limit=args.limit, dry_run=args.dry_run,
                                    recheck_days=args.recheck_days,
-                                   allow_mismatch=args.allow_mismatch)
+                                   allow_mismatch=args.allow_mismatch,
+                                   projects=args.project or None)
     by_outcome: dict[str, int] = {}
     for result in results:
         by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
@@ -1247,6 +1248,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("--term", action="append",
                    help="GitLab project search term (repeatable; default: frankenstyle prefixes)")
+    p.add_argument("--project", action="append", metavar="GROUP/NAME",
+                   help="look one project up by path instead of searching "
+                        "(repeatable; targeted seeds). Search matches project "
+                        "names, not namespace paths, so a seed request's URL "
+                        "goes here. Given alone, no sweep runs.")
     p.add_argument("--limit", type=int, default=50, help="max results per term (default 50)")
     p.add_argument("--dry-run", action="store_true", help="report without writing entries")
     p.add_argument("--recheck-days", type=int, default=30,

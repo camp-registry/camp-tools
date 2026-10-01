@@ -30,6 +30,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1955,6 +1956,52 @@ def _gitlab_request(url: str, token: str | None) -> tuple[int, bytes, dict]:
     return 0, b"", {}
 
 
+def _gitlab_candidate(project: dict) -> Candidate | None:
+    """Build a Candidate from a GitLab projects-API record. None for a
+    non-public project: same rule as the GitHub scanner, tokens see private
+    projects and a public index must never list one."""
+    if project.get("visibility", "public") != "public":
+        return None
+    license_key = (project.get("license") or {}).get("key")
+    return Candidate(
+        full_name=project["path_with_namespace"],
+        html_url=project["web_url"],
+        owner=project["namespace"].get("full_path") or project["namespace"]["path"],
+        description=(project.get("description") or "").strip(),
+        license_spdx=GITLAB_LICENSE_MAP.get(license_key),
+        stars=project.get("star_count", 0),
+        default_branch=project.get("default_branch") or "HEAD",
+        archived=project.get("archived", False),
+        platform="gitlab",
+    )
+
+
+def _gitlab_project(path: str, token: str | None, log) -> Candidate | None:
+    """Fetch one project by its GROUP/NAME path for a targeted seed. The
+    search endpoint matches project names, never namespace paths, so a seed
+    request's URL fed to --term finds nothing while a bare name drags in
+    every same-named copy; this is the exact lookup the runbook needs. A
+    renamed project redirects and comes back under its current path."""
+    path = path.strip("/")
+    url = f"{GITLAB_API}/projects/{urllib.parse.quote(path, safe='')}?license=true"
+    status, body, headers = _gitlab_request(url, token)
+    if status == 429:
+        wait = int(headers.get("Retry-After", "30")) + 1
+        log(f"  rate-limited; sleeping {wait}s")
+        time.sleep(wait)
+        status, body, headers = _gitlab_request(url, token)
+    if status == 404:
+        log(f"  gitlab project not found: {path}")
+        return None
+    if status != 200:
+        log(f"  gitlab project lookup failed (HTTP {status}): {path}")
+        return None
+    candidate = _gitlab_candidate(json.loads(body))
+    if candidate is None:
+        log(f"  gitlab project is not public: {path}")
+    return candidate
+
+
 def _gitlab_search(term: str, limit: int, token: str | None, log) -> list[Candidate]:
     candidates: list[Candidate] = []
     page = 1
@@ -1978,21 +2025,9 @@ def _gitlab_search(term: str, limit: int, token: str | None, log) -> list[Candid
         if not projects:
             break
         for project in projects:
-            # Same rule as the GitHub scanner: tokens see private projects.
-            if project.get("visibility", "public") != "public":
-                continue
-            license_key = (project.get("license") or {}).get("key")
-            candidates.append(Candidate(
-                full_name=project["path_with_namespace"],
-                html_url=project["web_url"],
-                owner=project["namespace"].get("full_path") or project["namespace"]["path"],
-                description=(project.get("description") or "").strip(),
-                license_spdx=GITLAB_LICENSE_MAP.get(license_key),
-                stars=project.get("star_count", 0),
-                default_branch=project.get("default_branch") or "HEAD",
-                archived=project.get("archived", False),
-                platform="gitlab",
-            ))
+            candidate = _gitlab_candidate(project)
+            if candidate is not None:
+                candidates.append(candidate)
         if len(projects) < per_page:
             break
         page += 1
@@ -2032,13 +2067,27 @@ def _gitlab_component(candidate: Candidate, token: str | None) -> tuple[str, str
 def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: int = 50,
                 token: str | None = None, dry_run: bool = False, log=print,
                 recheck_days: int = DEFAULT_RECHECK_DAYS,
-                allow_mismatch: bool = False) -> list[ScanResult]:
-    """Discover Moodle plugins on GitLab.com and write Tier 0 entries."""
+                allow_mismatch: bool = False,
+                projects: list[str] | None = None) -> list[ScanResult]:
+    """Discover Moodle plugins on GitLab.com and write Tier 0 entries.
+    `terms` drive the project search (the sweep); `projects` are GROUP/NAME
+    paths looked up directly (targeted seeds). Naming only projects runs no
+    sweep at all."""
     token = token or os.environ.get("GITLAB_TOKEN")
     # GitHub-side probes (collision classifier) take the same self-refreshing
     # source as the GitHub sweep; GITLAB_TOKEN above is GitLab-only
     github_token = apptoken.token_from_env(log=log)
-    terms = terms or GITLAB_DEFAULT_TERMS
+    if terms is None and not projects:
+        terms = GITLAB_DEFAULT_TERMS
+    sources: list[tuple[str, Callable[[], list[Candidate]]]] = [
+        (f"gitlab search: {term}",
+         lambda term=term: _gitlab_search(term, limit, token, log))
+        for term in terms or []
+    ] + [
+        (f"gitlab project: {path}",
+         lambda path=path: [c for c in (_gitlab_project(path, token, log),) if c])
+        for path in projects or []
+    ]
     index = Path(index_dir)
     today = datetime.date.today().isoformat()
     ledger = load_ledger(index)
@@ -2048,9 +2097,9 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
     seen_components: set[str] = set()
     results: list[ScanResult] = []
 
-    for term in terms:
-        log(f"gitlab search: {term}")
-        for candidate in _gitlab_search(term, limit, token, log):
+    for label, fetch in sources:
+        log(label)
+        for candidate in fetch():
             ledger_key = f"gitlab.com/{candidate.full_name}"
             if ledger_key in seen_repos:
                 continue
