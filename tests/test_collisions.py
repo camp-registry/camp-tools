@@ -296,3 +296,84 @@ def test_recheck_preserves_the_verdict():
         "name-collision", "d", "2026-10-05", component="local_x")
     assert "resolution" not in ledger["third/moodle-local_x"]
 
+
+
+# --- review verdicts and the core-since sign-off (camp-tools#68) ------------
+
+_PARKED = {
+    "outcome": "needs-review",
+    "detail": "declares lifecyclestep_x but tool_lifecycle bundles a subplugin of the same name; "
+              "shadowing review required before listing (camp-tools#16)",
+    "first-seen": "2026-09-04", "last-checked": "2026-09-04",
+    "component": "lifecyclestep_x",
+}
+REVIEW_REF = "https://github.com/camp-registry/camp-index/issues/204"
+
+
+def test_resolve_review_declined_keeps_the_row_out_of_the_sweep(tmp_path):
+    from camp.scan import resolve_review, review_declined, should_skip
+    save_ledger(tmp_path, {RIVAL: dict(_PARKED)})
+    entry = resolve_review(tmp_path, RIVAL, "declined", REVIEW_REF,
+                           decided="2026-10-02", log=lambda *a: None)
+    assert entry["resolution"]["verdict"] == "declined"
+    assert entry["resolution"]["detail"] == _PARKED["detail"]   # the reason it was parked on
+    ledger = load_ledger(tmp_path)
+    assert review_declined(ledger[RIVAL])
+    # long after the recheck window, still skipped
+    assert should_skip(ledger, RIVAL, "2027-06-01", recheck_days=30)
+    # a new parking reason is a new event: re-evaluated
+    ledger[RIVAL]["detail"] = "unknown plugin type 'lifecyclestep' (camp-tools#16)"
+    assert not review_declined(ledger[RIVAL])
+    assert not should_skip(ledger, RIVAL, "2027-06-01", recheck_days=30)
+
+
+def test_resolve_review_refusals(tmp_path):
+    from camp.scan import resolve_review
+    save_ledger(tmp_path, {RIVAL: dict(_PARKED), HOLDER: {
+        "outcome": "bad-license", "detail": "license: none detected",
+        "first-seen": "2026-09-04", "last-checked": "2026-09-04"}})
+    with pytest.raises(ValueError):
+        resolve_review(tmp_path, RIVAL, "maybe", REVIEW_REF, log=lambda *a: None)
+    with pytest.raises(ValueError):
+        resolve_review(tmp_path, RIVAL, "declined", "issue 204", log=lambda *a: None)
+    with pytest.raises(ValueError):
+        resolve_review(tmp_path, HOLDER, "declined", REVIEW_REF, log=lambda *a: None)
+    with pytest.raises(KeyError):
+        resolve_review(tmp_path, "nobody/nothing", "declined", REVIEW_REF, log=lambda *a: None)
+    resolve_review(tmp_path, RIVAL, "declined", REVIEW_REF, log=lambda *a: None)
+    with pytest.raises(ValueError):
+        resolve_review(tmp_path, RIVAL, "listed", REVIEW_REF, log=lambda *a: None)
+    assert resolve_review(tmp_path, RIVAL, "listed", REVIEW_REF, force=True,
+                          log=lambda *a: None)["resolution"]["verdict"] == "listed"
+
+
+def test_allow_core_since_lifts_only_the_mid_window_park(tmp_path, monkeypatch):
+    """The sign-off seeds a pre-integration upstream (bundled since some
+    branch) but never a pure-core component (bundled on every branch)."""
+    (tmp_path / "plugins").mkdir()
+    candidate = Candidate(full_name="uni/moodle-aiprovider_g", owner="uni",
+                          html_url="https://github.com/uni/moodle-aiprovider_g",
+                          description="", license_spdx="GPL-3.0", stars=1,
+                          default_branch="main", archived=False)
+    monkeypatch.setattr(scan, "_search", lambda *a, **k: ([candidate], 1))
+    monkeypatch.setattr(scan, "_fetch_component",
+                        lambda c, t, log: ("ok", "aiprovider_g", "$plugin->component = 'aiprovider_g';"))
+    monkeypatch.setattr(scan, "directory_anchor_detail", lambda *a, **k: None)
+    monkeypatch.setattr(scan, "unknown_type_detail", lambda *a, **k: None)
+    monkeypatch.setattr(scan, "bundled_shadow_detail", lambda *a, **k: None)
+    monkeypatch.setattr(scan.apptoken, "token_from_env", lambda log=print: None)
+
+    monkeypatch.setattr(scan, "core_component_outcome",
+                        lambda c: ("needs-review", "bundled with Moodle since 5.2; human sign-off required"))
+    parked = scan.scan(tmp_path, queries=["repo:uni/moodle-aiprovider_g"], dry_run=True,
+                       recheck_days=0, log=lambda *a: None)
+    assert [r.outcome for r in parked] == ["needs-review"]
+    seeded = scan.scan(tmp_path, queries=["repo:uni/moodle-aiprovider_g"], dry_run=True,
+                       recheck_days=0, allow_core_since=True, log=lambda *a: None)
+    assert [r.outcome for r in seeded] == ["written"]
+
+    monkeypatch.setattr(scan, "core_component_outcome",
+                        lambda c: ("core-component", "ships with every supported Moodle"))
+    refused = scan.scan(tmp_path, queries=["repo:uni/moodle-aiprovider_g"], dry_run=True,
+                        recheck_days=0, allow_core_since=True, log=lambda *a: None)
+    assert [r.outcome for r in refused] == ["core-component"]

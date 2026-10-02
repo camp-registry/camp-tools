@@ -64,10 +64,22 @@ def _table(rows: list[str]) -> str:
             '<tbody>' + "".join(rows) + '</tbody></table></div>')
 
 
+def _verdict(record: dict) -> str:
+    """A recorded human verdict (collision or review, camp-tools#57/#68),
+    appended to the evidence cell so decided rows read as decided."""
+    resolution = record.get("resolution") or {}
+    if not resolution.get("verdict"):
+        return ""
+    ref = resolution.get("ref", "")
+    link = f'<a href="{escape(ref)}">{escape(ref)}</a>' if ref else ""
+    return (f' <span class="verdict">· {escape(resolution["verdict"])} '
+            f'{escape(resolution.get("decided", ""))} {link}</span>')
+
+
 def _row(full_name: str, record: dict) -> str:
     return (f'<tr><td>{_repo_link(full_name, record)}</td>'
             f'<td class="mono">{escape(record.get("component", ""))}</td>'
-            f'<td>{escape(record.get("detail", ""))}</td>'
+            f'<td>{escape(record.get("detail", ""))}{_verdict(record)}</td>'
             f'<td class="dates">{escape(record.get("first-seen", ""))}'
             f' → {escape(record.get("last-checked", ""))}</td></tr>')
 
@@ -154,6 +166,7 @@ h1{{font-size:1.3rem}} h2{{font-size:1.05rem;margin:34px 0 4px}}
 th{{text-align:left;font-family:ui-monospace,monospace;font-size:.72rem;color:var(--muted);border-bottom:1px solid var(--border);padding:5px 10px 5px 0}}
 td{{border-bottom:1px solid var(--border);padding:6px 10px 6px 0;vertical-align:top}}
 td.mono{{font-family:ui-monospace,monospace;font-size:.8rem}} td.dates{{white-space:nowrap;color:var(--muted);font-size:.78rem}}
+.verdict{{color:var(--muted);font-size:.78rem}} .verdict a{{color:inherit}}
 a{{color:var(--accent)}}
 footer{{margin-top:36px;color:var(--muted);font-size:.78rem}}
 </style></head><body>

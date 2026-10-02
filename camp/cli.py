@@ -631,7 +631,8 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     results = scan_mod.scan(args.index_dir, queries=args.query or None,
                             limit=args.limit, dry_run=args.dry_run,
                             recheck_days=args.recheck_days,
-                            allow_mismatch=args.allow_mismatch)
+                            allow_mismatch=args.allow_mismatch,
+                            allow_core_since=args.allow_core_since)
     by_outcome: dict[str, int] = {}
     for result in results:
         by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
@@ -692,7 +693,8 @@ def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
                                    limit=args.limit, dry_run=args.dry_run,
                                    recheck_days=args.recheck_days,
                                    allow_mismatch=args.allow_mismatch,
-                                   projects=args.project or None)
+                                   projects=args.project or None,
+                                   allow_core_since=args.allow_core_since)
     by_outcome: dict[str, int] = {}
     for result in results:
         by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
@@ -833,7 +835,8 @@ def _cmd_enrich(args: argparse.Namespace) -> int:
 
 def _cmd_recheck_licenses(args: argparse.Namespace) -> int:
     from .scan import recheck_noassertion
-    results = recheck_noassertion(args.index_dir, dry_run=args.dry_run)
+    results = recheck_noassertion(args.index_dir, dry_run=args.dry_run,
+                                  allow_core_since=args.allow_core_since)
     by_outcome: dict[str, int] = {}
     for result in results:
         by_outcome[result.outcome] = by_outcome.get(result.outcome, 0) + 1
@@ -998,6 +1001,17 @@ def _cmd_resolve_collision(args: argparse.Namespace) -> int:
     try:
         resolve_collision(args.index_dir, args.repo, args.verdict, args.ref,
                           decided=args.decided, force=args.force)
+    except (ValueError, KeyError) as exc:
+        print(f"error: {exc.args[0] if exc.args else exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_resolve_review(args: argparse.Namespace) -> int:
+    from .scan import resolve_review
+    try:
+        resolve_review(args.index_dir, args.repo, args.verdict, args.ref,
+                       decided=args.decided, force=args.force)
     except (ValueError, KeyError) as exc:
         print(f"error: {exc.args[0] if exc.args else exc}", file=sys.stderr)
         return 1
@@ -1286,6 +1300,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--allow-mismatch", action="store_true",
                    help="lift the repository-name gate for this targeted run: the "
                         "human sign-off of a seed request (RFC §8, camp-tools#60)")
+    p.add_argument("--allow-core-since", action="store_true",
+                   help="lift the core-since park for this targeted run: the "
+                        "human sign-off that this repository is the canonical "
+                        "pre-integration source for older Moodle versions "
+                        "(camp-tools#68); pure-core components stay refused")
     p.set_defaults(func=_cmd_scan)
 
     p = sub.add_parser("advisory", help="scaffold a security advisory (RFC §5.3)")
@@ -1322,6 +1341,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--allow-mismatch", action="store_true",
                    help="lift the repository-name gate for this targeted run: the "
                         "human sign-off of a seed request (RFC §8, camp-tools#60)")
+    p.add_argument("--allow-core-since", action="store_true",
+                   help="lift the core-since park for this targeted run: the "
+                        "human sign-off that this repository is the canonical "
+                        "pre-integration source for older Moodle versions "
+                        "(camp-tools#68); pure-core components stay refused")
     p.set_defaults(func=_cmd_scan_gitlab)
 
     p = sub.add_parser("backfill-supported-range",
@@ -1363,6 +1387,11 @@ def main(argv: list[str] | None = None) -> int:
                        help="re-check NOASSERTION rejections by classifying license file text")
     p.add_argument("index_dir")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--allow-core-since", action="store_true",
+                   help="lift the core-since park for this targeted run: the "
+                        "human sign-off that this repository is the canonical "
+                        "pre-integration source for older Moodle versions "
+                        "(camp-tools#68); pure-core components stay refused")
     p.set_defaults(func=_cmd_recheck_licenses)
 
     p = sub.add_parser("crosscheck-directory",
@@ -1541,6 +1570,19 @@ def main(argv: list[str] | None = None) -> int:
                    help="also list collisions that carry a recorded verdict "
                         "(hidden by default so claim-time CI stops routing them)")
     p.set_defaults(func=_cmd_check_collisions)
+
+    p = sub.add_parser("resolve-review",
+                       help="record a human verdict on a needs-review ledger "
+                            "record (camp-tools#68): declined keeps it out of "
+                            "the sweep while its reason is unchanged")
+    p.add_argument("index_dir")
+    p.add_argument("repo", help="ledger key, e.g. someone/moodle-local_example")
+    p.add_argument("--verdict", required=True, choices=["declined", "listed"])
+    p.add_argument("--ref", required=True,
+                   help="public issue or PR URL where the decision is written down")
+    p.add_argument("--decided", help="decision date YYYY-MM-DD (default: today)")
+    p.add_argument("--force", action="store_true", help="replace an existing verdict")
+    p.set_defaults(func=_cmd_resolve_review)
 
     p = sub.add_parser("resolve-collision",
                        help="record a human verdict on a name-collision ledger "

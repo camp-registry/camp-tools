@@ -155,11 +155,23 @@ def should_skip(ledger: dict, full_name: str, today: str,
         return False
     if record.get("outcome") in PERMANENT_OUTCOMES:
         return True
+    if review_declined(record):
+        return True
     if established and parked_for_unknown_type(record) in established:
         return False
     last = datetime.date.fromisoformat(record["last-checked"])
     age = (datetime.date.fromisoformat(today) - last).days
     return age < recheck_days
+
+
+def review_declined(record: dict) -> bool:
+    """A needs-review record a human declined (camp-tools#68) stays out of
+    the sweep for as long as the reason it was parked on is unchanged: a
+    new reason is a new event, a repeat of the same one is not."""
+    resolution = record.get("resolution") or {}
+    return (record.get("outcome") == "needs-review"
+            and resolution.get("verdict") == "declined"
+            and resolution.get("detail") == record.get("detail"))
 
 
 _UNKNOWN_TYPE_DETAIL = re.compile(r"^unknown plugin type '([a-z][a-z0-9]*)'")
@@ -239,6 +251,44 @@ def resolve_collision(index_dir: str | Path, repo: str, verdict: str, ref: str,
         "verdict": verdict,
         "ref": ref,
         "decided": decided or datetime.date.today().isoformat(),
+    }
+    save_ledger(index, ledger)
+    log(f"resolved: {key}  [{entry.get('component', '?')}]  {verdict}  {ref}")
+    return entry
+
+
+REVIEW_VERDICTS = ("declined", "listed")
+
+
+def resolve_review(index_dir: str | Path, repo: str, verdict: str, ref: str,
+                   decided: str | None = None, force: bool = False,
+                   log=print) -> dict:
+    """Record a human verdict on a needs-review ledger record (camp-tools#68):
+    `declined` (reviewed, not listed) keeps the repository out of the sweep
+    while its parking reason is unchanged; `listed` notes that the seed
+    happened after review (the written record is the authority). The ref
+    must point at where the reasoning was written down."""
+    if verdict not in REVIEW_VERDICTS:
+        raise ValueError(f"verdict must be one of {', '.join(REVIEW_VERDICTS)}")
+    if not ref.startswith("https://"):
+        raise ValueError("ref must be the public issue or pull request URL that records the decision")
+    index = Path(index_dir)
+    ledger = load_ledger(index)
+    key = next((k for k in ledger if k.lower() == repo.lower()), None)
+    if key is None:
+        raise KeyError(f"{repo} is not in the scan ledger")
+    entry = ledger[key]
+    if entry.get("outcome") != "needs-review":
+        raise ValueError(f"{key} is recorded as {entry.get('outcome')!r}, not needs-review")
+    if entry.get("resolution") and not force:
+        prior = entry["resolution"]
+        raise ValueError(f"{key} already resolved: {prior.get('verdict')} ({prior.get('ref')}); "
+                         "pass force to replace it")
+    entry["resolution"] = {
+        "verdict": verdict,
+        "ref": ref,
+        "decided": decided or datetime.date.today().isoformat(),
+        "detail": entry.get("detail", ""),
     }
     save_ledger(index, ledger)
     log(f"resolved: {key}  [{entry.get('component', '?')}]  {verdict}  {ref}")
@@ -1557,7 +1607,8 @@ def enrich_utilities(index_dir: str | Path, token: str | None = None,
 
 def recheck_noassertion(index_dir: str | Path, token: str | None = None,
                         dry_run: bool = False, log=print,
-                        allow_mismatch: bool = False) -> list[ScanResult]:
+                        allow_mismatch: bool = False,
+                        allow_core_since: bool = False) -> list[ScanResult]:
     """Re-examine ledger rejections whose license GitHub couldn't classify
     (NOASSERTION): fetch the actual license file, pattern-match its text,
     and admit repos that turn out to be GPL-family or GPL-compatible."""
@@ -1635,6 +1686,8 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
             continue
 
         core = core_component_outcome(component)
+        if core and core[0] == "needs-review" and allow_core_since:
+            core = None   # signed off: pre-integration upstream (camp-tools#68)
         if core:
             record_outcome(ledger, candidate, core[0], core[1], today,
                            component=component)
@@ -2068,7 +2121,8 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 token: str | None = None, dry_run: bool = False, log=print,
                 recheck_days: int = DEFAULT_RECHECK_DAYS,
                 allow_mismatch: bool = False,
-                projects: list[str] | None = None) -> list[ScanResult]:
+                projects: list[str] | None = None,
+                allow_core_since: bool = False) -> list[ScanResult]:
     """Discover Moodle plugins on GitLab.com and write Tier 0 entries.
     `terms` drive the project search (the sweep); `projects` are GROUP/NAME
     paths looked up directly (targeted seeds). Naming only projects runs no
@@ -2159,6 +2213,8 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
                 continue
 
             core = core_component_outcome(component)
+            if core and core[0] == "needs-review" and allow_core_since:
+                core = None   # signed off: pre-integration upstream (camp-tools#68)
             if core:
                 record_outcome(ledger, candidate, core[0], core[1], today,
                                component=component)
@@ -2195,8 +2251,12 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
 def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 30,
          token: str | None = None, dry_run: bool = False, log=print,
          recheck_days: int = DEFAULT_RECHECK_DAYS,
-         allow_mismatch: bool = False) -> list[ScanResult]:
-    """Run discovery and write Tier 0 entries into the index tree."""
+         allow_mismatch: bool = False,
+         allow_core_since: bool = False) -> list[ScanResult]:
+    """Run discovery and write Tier 0 entries into the index tree.
+    `allow_core_since` is the human sign-off for a targeted seed of a
+    pre-integration upstream (camp-tools#68): the mid-window core-since
+    park is lifted for this run; pure-core components stay refused."""
     # App credentials in the environment give a self-refreshing token source;
     # a sweep runs for hours and a fixed installation token dies after one.
     token = token or apptoken.token_from_env(log=log)
@@ -2288,6 +2348,8 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
                 continue
 
             core = core_component_outcome(component)
+            if core and core[0] == "needs-review" and allow_core_since:
+                core = None   # signed off: pre-integration upstream (camp-tools#68)
             if core:
                 record_outcome(ledger, candidate, core[0], core[1], today,
                                component=component)
