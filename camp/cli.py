@@ -708,10 +708,14 @@ def _cmd_check_moodle_branches(args: argparse.Namespace) -> int:
     if not findings:
         print("moodle branches: table is current with upstream")
         return 0
-    print("UNKNOWN Moodle branches upstream — extend BRANCHES in "
-          "camp/moodleversions.py:", file=sys.stderr)
+    print("Moodle branch table needs a human edit (camp/moodleversions.py):",
+          file=sys.stderr)
     for f in findings:
-        print(f"  {f['name']} (code {f['code']}) — suggested row:\n{f['row']}",
+        kind = {"stable": "new stable branch upstream",
+                "prerelease": "main is at beta or later: admit as pre-release",
+                "promote": "stable branch now exists: promote the pre-release row",
+                }.get(f.get("kind", "stable"), "")
+        print(f"  {f['name']} (code {f['code']}) — {kind}; suggested row:\n{f['row']}",
               file=sys.stderr)
     return 1
 

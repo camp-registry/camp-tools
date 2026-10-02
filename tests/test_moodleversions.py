@@ -52,13 +52,14 @@ def test_check_upstream_flags_unknown_branch():
         "abc\trefs/heads/MOODLE_38_STABLE",     # below floor: ignored
         "abc\trefs/heads/MOODLE_405_STABLE",    # known
         "abc\trefs/heads/MOODLE_502_STABLE",    # known
-        "abc\trefs/heads/MOODLE_503_STABLE",    # NEW
+        "abc\trefs/heads/MOODLE_504_STABLE",    # NEW (5.3 is a known pre-release row)
     ])
-    findings = check_upstream(ls_remote=ls, fetch_first_code=lambda c: 2026102000)
+    findings = check_upstream(ls_remote=ls, fetch_first_code=lambda c: 2027042000,
+                              main_version={})
     assert len(findings) == 1
     f = findings[0]
-    assert (f["code"], f["name"], f["first"]) == (503, "5.3", 2026102000)
-    assert '(503, "5.3", 2026102000),' in f["row"]
+    assert (f["code"], f["name"], f["first"], f["kind"]) == (504, "5.4", 2027042000, "stable")
+    assert '(504, "5.4", 2027042000),' in f["row"]
 
 
 def test_check_upstream_current_table_is_quiet():
@@ -72,10 +73,12 @@ def test_check_upstream_current_table_is_quiet():
 def test_effective_supported_reexpands_against_current_table(monkeypatch):
     import camp.moodleversions as mv
     release = {"supported-moodle": ["5.0", "5.1", "5.2"], "supported-range": [500, 503]}
-    # today's table ends at 5.2: the stored list and the range agree
+    # a table ending at 5.2 (the day the record was published): list and
+    # range agree
+    monkeypatch.setattr(mv, "BRANCHES", [b for b in mv.BRANCHES if b[0] <= 502])
     assert mv.effective_supported(release) == ["5.0", "5.1", "5.2"]
-    # the table gains 5.3 (release day, or beta under camp-tools#65): the
-    # record follows without re-ingest
+    # the table gains 5.3 (at beta under camp-tools#65, or on release day):
+    # the record follows without re-ingest
     monkeypatch.setattr(mv, "BRANCHES", mv.BRANCHES + [(503, "5.3", 2026102000)])
     assert mv.effective_supported(release) == ["5.0", "5.1", "5.2", "5.3"]
     # no range stored (requires-only, override, or pre-field record): list rules
@@ -107,7 +110,7 @@ def test_release_stores_declared_range(plugin_repo, entry_path, tmp_path):
     git(plugin_repo, "tag", "v1.2.0")
     assert main(["release", str(entry_path), "v1.2.0", "--source", str(plugin_repo)]) == 0
     rec = yaml.safe_load(entry_path.read_text())["releases"][-1]
-    assert rec["supported-moodle"] == ["5.0", "5.1", "5.2"]   # 5.3 not in the table yet
+    assert rec["supported-moodle"] == ["5.0", "5.1", "5.2", "5.3"]   # 5.3 = pre-release row
     assert rec["supported-range"] == [500, 503]
 
     (plugin_repo / "version.php").write_text(text.replace("'1.2.0'", "'1.3.0'"))
@@ -154,3 +157,40 @@ def test_backfill_supported_range(index_dir, entry_path):
     stats = supportedrange.backfill(index_dir, fetch=fake_fetch, dry_run=True, log=lambda *a: None)
     assert stats["written"] == 1
     assert "supported-range" not in yaml.safe_load(entry_path.read_text())["releases"][1]
+
+
+# --- pre-release branches (camp-tools#65) -----------------------------------
+
+def test_prerelease_row_is_labelled_not_renamed():
+    from camp.moodleversions import PRERELEASE, branch_names, display_name, maturity
+    assert "5.3" in branch_names()           # matching and tool_camp use the bare name
+    assert PRERELEASE["5.3"] in ("beta", "rc")
+    assert display_name("5.3") == f"5.3 ({PRERELEASE['5.3']})"
+    assert display_name("5.2") == "5.2" and maturity("5.2") is None
+
+
+def test_check_upstream_admits_at_beta_and_promotes_at_stable():
+    import camp.moodleversions as mv
+    ls = "abc\trefs/heads/MOODLE_502_STABLE\n"
+    # alpha on main: nothing to do
+    assert mv.check_upstream(ls_remote=ls, main_version={
+        "branch": 504, "version": 2026110100, "maturity": "MATURITY_ALPHA"}) == []
+    # beta on main for an unknown branch: admit as pre-release
+    f = mv.check_upstream(ls_remote=ls, main_version={
+        "branch": 504, "version": 2026110100, "maturity": "MATURITY_BETA"})
+    assert [(x["kind"], x["code"], x["first"]) for x in f] == [("prerelease", 504, 2026110100)]
+    assert 'PRERELEASE["5.4"] = "beta"' in f[0]["row"]
+    # the known pre-release 5.3 gets its stable branch: promote
+    f = mv.check_upstream(ls_remote=ls + "abc\trefs/heads/MOODLE_503_STABLE\n",
+                          main_version={}, fetch_first_code=lambda c: 2026102000)
+    assert [(x["kind"], x["code"], x["first"]) for x in f] == [("promote", 503, 2026102000)]
+    assert "2026102000" in f[0]["row"] and "remove '5.3' from PRERELEASE" in f[0]["row"]
+    # main at rc for a branch already in the table: quiet
+    assert mv.check_upstream(ls_remote=ls, main_version={
+        "branch": 503, "version": 2026100200, "maturity": "MATURITY_RC"}) == []
+
+
+def test_standard_plugins_prerelease_reads_main():
+    from camp.standardplugins import _branch_ref
+    assert _branch_ref(502) == "MOODLE_502_STABLE"
+    assert _branch_ref(503) == "main"

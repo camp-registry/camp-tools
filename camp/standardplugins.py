@@ -46,6 +46,11 @@ _RAW_BASE = "https://raw.githubusercontent.com/moodle/moodle"
 
 
 def _branch_ref(code: int) -> str:
+    # A pre-release branch (camp-tools#65) has no stable head yet; its
+    # component lists are main's.
+    from .moodleversions import PRERELEASE, _branch_name
+    if _branch_name(code) in PRERELEASE:
+        return "main"
     return f"MOODLE_{code}_STABLE"
 
 

@@ -62,8 +62,11 @@ LABEL_TEXT = {
 # Ordered Moodle branches for range filtering (oldest → newest) — derived
 # from the one source of truth. (The old hand-copied list had silently
 # dropped 3.10.)
-from .moodleversions import branch_names as _branch_names, effective_supported
+from .moodleversions import branch_names as _branch_names, display_name, effective_supported
 VORDER = _branch_names()
+# Branch -> label the site prints ("5.3 (rc)" while 5.3 is a pre-release,
+# camp-tools#65); matching and ordering stay on the bare name.
+VLABEL = {v: display_name(v) for v in VORDER}
 
 MIRROR_URL = "https://github.com/camp-registry/camp-docs/blob/main/MIRRORING.md"
 INDEX_REPO_URL = "https://github.com/camp-registry/camp-index"
@@ -1106,7 +1109,8 @@ document.addEventListener('DOMContentLoaded', function(){
   var pick = document.getElementById('vpick');
   if (!dataEl || !pick) return;
   var DATA = JSON.parse(dataEl.textContent);
-  var releases = DATA.releases, VORDER = DATA.vorder;
+  var releases = DATA.releases, VORDER = DATA.vorder, VLABEL = DATA.vlabel || {};
+  function vl(i){ return VLABEL[VORDER[i]] || VORDER[i]; }
 
   function vkey(v){ return v.split('.').map(function(n){ return +n || 0; }); }
   function vcmp(a, b){
@@ -1128,7 +1132,7 @@ document.addEventListener('DOMContentLoaded', function(){
   var verStatus = document.getElementById('ver-status');
   var announceReady = false;   // initial render must not produce chatter
   function fmtRange(r){
-    return r.lo === r.hi ? VORDER[r.lo] : VORDER[r.lo] + ' – ' + VORDER[r.hi];
+    return r.lo === r.hi ? vl(r.lo) : vl(r.lo) + ' – ' + vl(r.hi);
   }
   // One path renders selection state, so the class and ARIA never diverge.
   function selectRow(v){
@@ -1146,7 +1150,7 @@ document.addEventListener('DOMContentLoaded', function(){
     var zip = document.getElementById('zip-btn');
     if (zip) zip.href = r.zip;
     set('zip-ver', r.v);
-    set('compat', r.lo === r.hi ? VORDER[r.lo] : VORDER[r.lo] + ' – ' + VORDER[r.hi]);
+    set('compat', r.lo === r.hi ? vl(r.lo) : vl(r.lo) + ' – ' + vl(r.hi));
     set('vd-tag', r.tag); set('vd-commit', r.commit);
     set('vd-date', r.date); set('vd-sha', r.sha);
     // Composer command: pinned when the chosen version is not the newest
@@ -1286,7 +1290,7 @@ document.addEventListener('DOMContentLoaded', function(){
       r = releases.reduce(function(a, b){ return vcmp(a.v, b.v) >= 0 ? a : b; });
       render(r, 'No verified release supports Moodle ' + branch +
         ' yet. Newest available is v' + r.v + ' (Moodle ' +
-        VORDER[r.lo] + ' – ' + VORDER[r.hi] + ').');
+        vl(r.lo) + ' – ' + vl(r.hi) + ').');
       return;
     }
     render(r, null);
@@ -1299,7 +1303,7 @@ document.addEventListener('DOMContentLoaded', function(){
       pick.value = VORDER[r.hi];
     var best = bestFor(pick.value);
     render(r, (best && best.v !== r.v)
-      ? 'v' + r.v + ' supports Moodle ' + VORDER[r.lo] + ' – ' + VORDER[r.hi] +
+      ? 'v' + r.v + ' supports Moodle ' + vl(r.lo) + ' – ' + vl(r.hi) +
         '. Newest for Moodle ' + pick.value + ' is v' + best.v + '.'
       : null);
   }
@@ -1640,7 +1644,7 @@ def _cost_text(entry: dict) -> str:
 
 
 def _moodle_range(release: dict) -> str:
-    supported = effective_supported(release)
+    supported = [VLABEL.get(v, v) for v in effective_supported(release)]
     return supported[0] if len(supported) == 1 else f"{supported[0]} – {supported[-1]}"
 
 
@@ -1973,10 +1977,10 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
     vlist = list(reversed(VORDER))
     top_vers, more_vers = vlist[:4], vlist[4:]
     ver_facets = _facet("ver", "", "Any version")
-    ver_facets += "".join(_facet("ver", v, f"Moodle {v}") for v in top_vers)
+    ver_facets += "".join(_facet("ver", v, f"Moodle {VLABEL[v]}") for v in top_vers)
     ver_more = ""
     if more_vers:
-        hidden = "".join(_facet("ver", v, f"Moodle {v}") for v in more_vers)
+        hidden = "".join(_facet("ver", v, f"Moodle {VLABEL[v]}") for v in more_vers)
         ver_more = (f'<div id="more-vers" hidden>{hidden}</div>'
                     f'<button class="facet-more" data-target="more-vers" '
                     f'aria-expanded="false" aria-controls="more-vers" '
@@ -2482,7 +2486,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         latest_v = latest["version"].split(" ")[0]
         if len(covered) > 1 or len(releases_data) > 1:
             options = "".join(
-                f'<option value="{v}">{v}</option>'
+                f'<option value="{v}">{VLABEL[v]}</option>'
                 for v in VORDER[::-1] if v in covered)
             for_moodle = (f'<label class="inst-for" for="vpick">for Moodle</label> '
                           f'<select id="vpick">'
@@ -2529,7 +2533,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         else:
             adv_line = ""
         rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
-                               "package": package})
+                               "vlabel": VLABEL, "package": package})
         install = f"""
   <h2 class="visually-hidden">Download and compatibility</h2>
   <div class="install-card">
@@ -2850,7 +2854,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             if since == VORDER[0]:
                 core_text, core_note = "Ships with Moodle", ""
             else:
-                core_text = f"Ships with Moodle since {since}"
+                core_text = f"Ships with Moodle since {VLABEL.get(since, since)}"
                 core_note = (f"this listing serves Moodle versions "
                              f"before {since}")
         else:

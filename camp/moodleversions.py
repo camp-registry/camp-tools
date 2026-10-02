@@ -35,7 +35,35 @@ BRANCHES = [
     (500, "5.0", 2025041400),
     (501, "5.1", 2025100600),
     (502, "5.2", 2026042000),
+    # 5.3: pre-release row (camp-tools#65). Code = the dev $version when the
+    # row was added; replace with the branching-date code when
+    # MOODLE_503_STABLE appears, and drop the PRERELEASE entry.
+    (503, "5.3", 2026100200),
 ]
+
+# Branches in BRANCHES that Moodle has not released yet, by maturity
+# ("beta" or "rc"), admitted once upstream's main declares MATURITY_BETA
+# (camp-tools#65): feature freeze, when Moodle asks plugin authors to test,
+# and the window the old directory's early-bird reward recognised. Alpha is
+# never admitted. Display decorates these ("5.3 (rc)"); tool_camp installs
+# on such a site like any other because the name is the same.
+PRERELEASE: dict[str, str] = {"5.3": "rc"}
+
+# $maturity constants in core's version.php, lowest first.
+MATURITIES = ["MATURITY_ALPHA", "MATURITY_BETA", "MATURITY_RC", "MATURITY_STABLE"]
+ADMIT_FROM = "MATURITY_BETA"
+
+
+def maturity(name: str) -> str | None:
+    """"beta"/"rc" for a pre-release branch, None for a released one."""
+    return PRERELEASE.get(name)
+
+
+def display_name(name: str) -> str:
+    """The branch as the site prints it: "5.2", or "5.3 (rc)" while 5.3 is
+    a pre-release."""
+    tag = PRERELEASE.get(name)
+    return f"{name} ({tag})" if tag else name
 
 
 def branches_from_supported(supported: list[int]) -> list[str] | None:
@@ -88,17 +116,69 @@ def branch_names() -> list[str]:
     return [name for _, name, _ in BRANCHES]
 
 
-def check_upstream(ls_remote: str | None = None,
-                   fetch_first_code=None) -> list[dict]:
-    """Compare BRANCHES against Moodle's actual stable branches upstream.
+def _branch_name(code: int) -> str:
+    major, minor = divmod(code, 100) if code >= 100 else divmod(code, 10)
+    return f"{major}.{minor}"
 
-    Returns a finding per unknown branch (newer than our floor), each with
-    a ready-made table row when the branching date is fetchable. Run
-    weekly by CI; a finding means a human adds one BRANCHES row and ships.
+
+def fetch_main_version() -> dict | None:
+    """$branch, $version and $maturity from upstream main's core version.php
+    (public/version.php since 5.1), or None when unreachable."""
+    import re
+    import urllib.request
+    for path in ("public/version.php", "version.php"):
+        try:
+            with urllib.request.urlopen(
+                    f"https://raw.githubusercontent.com/moodle/moodle/main/{path}",
+                    timeout=20) as resp:
+                text = resp.read(65536).decode(errors="replace")
+        except Exception:
+            continue
+        branch = re.search(r"^\$branch\s*=\s*'(\d+)'", text, re.M)
+        version = re.search(r"^\$version\s*=\s*(\d{10})", text, re.M)
+        mat = re.search(r"^\$maturity\s*=\s*(MATURITY_[A-Z]+)", text, re.M)
+        if branch and version and mat:
+            return {"branch": int(branch.group(1)), "version": int(version.group(1)),
+                    "maturity": mat.group(1)}
+    return None
+
+
+def _first_code(code: int, fetch_first_code=None) -> int | None:
+    """The branching-date version code of MOODLE_<code>_STABLE, read from
+    its core version.php (public/ since 5.1); None when unreachable."""
+    if fetch_first_code is not None:
+        return fetch_first_code(code)
+    import re
+    import urllib.request
+    for path in ("public/version.php", "version.php"):
+        try:
+            with urllib.request.urlopen(
+                    "https://raw.githubusercontent.com/moodle/moodle/"
+                    f"MOODLE_{code}_STABLE/{path}", timeout=20) as resp:
+                text = resp.read(65536).decode(errors="replace")
+        except Exception:
+            continue
+        m = re.search(r"^\$version\s*=\s*(\d{8})", text, re.M)
+        if m:
+            return int(m.group(1)) * 100
+    return None
+
+
+def check_upstream(ls_remote: str | None = None,
+                   fetch_first_code=None, main_version=None) -> list[dict]:
+    """Compare BRANCHES against Moodle upstream.
+
+    Findings, each with a ready-made table row (run weekly by CI; a finding
+    means a human edits the table and ships):
+    - an unknown stable branch (newer than our floor): add the row;
+    - a known PRERELEASE branch whose stable branch now exists: promote it
+      (fix the first-version code, drop the PRERELEASE entry);
+    - main declares an unknown branch at MATURITY_BETA or later: add it as
+      a pre-release row (camp-tools#65). `main_version` is the dict
+      fetch_main_version() returns; pass {} to skip that probe.
     """
     import re
     import subprocess
-    import urllib.request
 
     if ls_remote is None:
         result = subprocess.run(
@@ -106,36 +186,40 @@ def check_upstream(ls_remote: str | None = None,
             capture_output=True, text=True, timeout=60)
         result.check_returncode()
         ls_remote = result.stdout
+    if main_version is None:
+        main_version = fetch_main_version() or {}
 
     known = {code for code, _, _ in BRANCHES}
     floor = min(known)
     findings = []
-    for match in re.finditer(r"refs/heads/MOODLE_(\d+)_STABLE", ls_remote):
-        code = int(match.group(1))
+    stable_codes = {int(m.group(1)) for m in
+                    re.finditer(r"refs/heads/MOODLE_(\d+)_STABLE", ls_remote)}
+    for code, name, _ in BRANCHES:
+        if name in PRERELEASE and code in stable_codes:
+            first = _first_code(code, fetch_first_code)
+            findings.append({
+                "code": code, "name": name, "first": first, "kind": "promote",
+                "row": (f"    ({code}, \"{name}\", {first or '<branching-date>00'}),  "
+                        f"# and remove {name!r} from PRERELEASE"),
+            })
+    if main_version and main_version.get("branch") not in known:
+        code = main_version["branch"]
+        if (code > max(known) and
+                MATURITIES.index(main_version["maturity"]) >= MATURITIES.index(ADMIT_FROM)):
+            tag = "beta" if main_version["maturity"] == "MATURITY_BETA" else "rc"
+            findings.append({
+                "code": code, "name": _branch_name(code), "first": main_version["version"],
+                "kind": "prerelease",
+                "row": (f"    ({code}, \"{_branch_name(code)}\", {main_version['version']}),  "
+                        f"# pre-release; PRERELEASE[\"{_branch_name(code)}\"] = \"{tag}\""),
+            })
+    for code in sorted(stable_codes):
         if code in known or code < floor:
             continue
-        major, minor = divmod(code, 100) if code >= 100 else divmod(code, 10)
-        name = f"{major}.{minor}"
-        first = None
-        if fetch_first_code is None:
-            # core version.php moved to public/ in 5.1 — try both
-            for path in ("public/version.php", "version.php"):
-                try:
-                    with urllib.request.urlopen(
-                            "https://raw.githubusercontent.com/moodle/moodle/"
-                            f"MOODLE_{match.group(1)}_STABLE/{path}",
-                            timeout=20) as resp:
-                        text = resp.read(65536).decode(errors="replace")
-                except Exception:
-                    continue
-                m = re.search(r"^\$version\s*=\s*(\d{8})", text, re.M)
-                if m:
-                    first = int(m.group(1)) * 100
-                    break
-        else:
-            first = fetch_first_code(code)
+        name = _branch_name(code)
+        first = _first_code(code, fetch_first_code)
         findings.append({
-            "code": code, "name": name, "first": first,
+            "code": code, "name": name, "first": first, "kind": "stable",
             "row": (f"    ({code}, \"{name}\", {first})," if first
                     else f"    ({code}, \"{name}\", <branching-date>00),"),
         })
