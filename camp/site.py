@@ -1561,12 +1561,42 @@ def _maintainer_link(m: dict, display: str) -> str:
             f'title="All plugins by this maintainer">{escape(display)}</a>')
 
 
+def _parse_stamp(value) -> datetime.datetime | None:
+    """ISO timestamp or date string -> aware datetime; None if unparseable."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.UTC)
+    return parsed
+
+
+def _last_activity(entry: dict) -> str | None:
+    """The newest evidence of upstream activity: the metrics push time
+    (refreshed on a rolling schedule, so up to two weeks stale) or the
+    date of the newest verified release, whichever is later. A release
+    landing in the index is proof of activity on its own, so the page
+    should never say "updated 9 weeks ago" under a release from today."""
+    stamps = [(entry.get("metrics") or {}).get("updated")]
+    for release in entry.get("releases") or []:
+        stamps.append(release.get("released") or release.get("published"))
+    best = None
+    for stamp in stamps:
+        parsed = _parse_stamp(stamp)
+        if parsed is not None and (best is None or parsed > best[0]):
+            best = (parsed, stamp)
+    return best[1] if best else None
+
+
 def _health(entry: dict, today: datetime.date) -> tuple[str, str] | None:
     """(css color, label) from upstream activity, or None if unknown."""
     metrics = entry.get("metrics") or {}
     if metrics.get("archived"):
         return ("var(--text-subtle)", "Archived upstream")
-    updated = metrics.get("updated")
+    updated = _last_activity(entry)
     if not updated:
         return None
     try:
@@ -1990,7 +2020,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         rec = {"c": component, "g": component.partition("_")[0],
                "t": entry["tier"], "s": metrics.get("stars", 0),
                "f": metrics.get("forks", 0), "o": metrics.get("open-issues", 0),
-               "u": metrics.get("updated", ""),
+               "u": _last_activity(entry) or "",
                "r": _repo_host_code(entry.get("source", "")),
                "h": HEALTH_CODE.get(health[1], -1) if health else -1,
                "l": entry.get("labels", []),
@@ -2020,7 +2050,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         stars = metrics.get("stars", 0)
         forks = metrics.get("forks", 0)
         openi = metrics.get("open-issues", 0)
-        updated = metrics.get("updated", "")
+        updated = _last_activity(entry) or ""
         tier = entry["tier"]
         latest = _newest_release(entry)
         vlo, vhi = _range_indices(entry)
@@ -2345,8 +2375,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     health_line = ""
     if health:
         color, label = health
-        when = (f' · updated {_rel_time(metrics["updated"], today)}'
-                if metrics.get("updated") else "")
+        activity = _last_activity(entry)
+        when = f' · updated {_rel_time(activity, today)}' if activity else ""
         health_line = (f'<div class="health-line"><span style="color:{color}">'
                        f'<span class="hdot" aria-hidden="true" style="background:{color}"></span>'
                        f'{label}</span>{when}</div>')

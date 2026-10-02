@@ -682,3 +682,40 @@ def test_requires_core_patch_is_a_valid_label(entry_path):
         entry["labels"] = ["needs-patch"]
     _mutate(entry_path, bad)
     assert any("labels" in p for p in validate_entry(entry_path))
+
+
+def test_release_counts_as_activity_for_health_and_updated(index_dir, entry_path, tmp_path):
+    """metrics.updated is a rolling refresh (up to two weeks stale); a
+    verified release landing in the index is proof of activity on its own.
+    The page and the browse record take the newer of the two."""
+    import datetime
+    import json
+    from camp.site import generate as site_generate
+    recent = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=5)
+              ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stale = "2024-01-01T00:00:00Z"
+
+    def mutate(e):
+        e["metrics"] = {"updated": stale, "stars": 1, "forks": 0,
+                        "open-issues": 0, "archived": False, "checked": "2026-07-15"}
+        e["releases"][0]["released"] = recent
+    _mutate(entry_path, mutate)
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "Actively maintained" in html
+    assert "updated 5 d ago" in html
+    assert "Dormant" not in html
+    rec = json.loads((out / "index.json").read_text())["plugins"][0]
+    assert rec["u"] == recent
+    browse = (out / "index.html").read_text()
+    assert f'data-updated="{recent}"' in browse
+
+    # without a newer release the push time still rules (no regression)
+    def revert(e):
+        e["releases"][0].pop("released", None)
+        e["releases"][0]["published"] = "2024-02-01T00:00:00Z"
+    _mutate(entry_path, revert)
+    site_generate(index_dir, "https://repo.test", out)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "Actively maintained" not in html
