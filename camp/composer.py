@@ -23,7 +23,8 @@ from pathlib import Path
 
 from . import plugintypes, standardplugins
 from .advisory import AdvisorySet
-from .moodleversions import branch_names, branches_known_at, next_branch
+from .moodleversions import (branch_names, branches_known_at, effective_supported,
+                             next_branch)
 from .validate import load_entry
 
 PLUGIN_TYPE_PREFIX = "moodle-"
@@ -150,7 +151,7 @@ def package_definition(entry: dict, base_url: str,
                     "zip-sha256": release["zip-sha256"],
                     "tier": entry["tier"],
                     "labels": entry["labels"],
-                    "supported-moodle": release["supported-moodle"],
+                    "supported-moodle": effective_supported(release),
                     "moodle-version": release["moodle-version"],
                     "published": release["published"],
                     # $plugin->dependencies at the tag (camp-tools#20):
@@ -171,7 +172,7 @@ def package_definition(entry: dict, base_url: str,
 
 
 def _core_conflict(release: dict) -> dict:
-    supported = [b for b in release.get("supported-moodle") or []
+    supported = [b for b in effective_supported(release)
                  if b in branch_names()]
     if not supported:
         return {}

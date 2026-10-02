@@ -34,6 +34,7 @@ from pathlib import Path
 import yaml
 
 from . import plugintypes, standardplugins, versionphp
+from .moodleversions import effective_supported
 
 COMPONENT_RE = re.compile(
     r"\$(?:plugin|module)->component\s*=\s*['\"]([a-z][a-z0-9]*_[a-z][a-z0-9_]*)['\"]"
@@ -109,7 +110,7 @@ def _ref_for(entry: dict, branch: str, stable_branches) -> str | None:
     none covering the branch, usually maintains one per Moodle series);
     else the newest release; else the default branch."""
     releases = entry.get("releases") or []
-    covering = [r for r in releases if branch in (r.get("supported-moodle") or [])]
+    covering = [r for r in releases if branch in effective_supported(r)]
     if covering:
         return str(covering[-1]["tag"])
     stable = best_stable_branch(stable_branches(entry["source"]), branch)

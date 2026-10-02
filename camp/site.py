@@ -62,7 +62,7 @@ LABEL_TEXT = {
 # Ordered Moodle branches for range filtering (oldest → newest) — derived
 # from the one source of truth. (The old hand-copied list had silently
 # dropped 3.10.)
-from .moodleversions import branch_names as _branch_names
+from .moodleversions import branch_names as _branch_names, effective_supported
 VORDER = _branch_names()
 
 MIRROR_URL = "https://github.com/camp-registry/camp-docs/blob/main/MIRRORING.md"
@@ -1640,7 +1640,7 @@ def _cost_text(entry: dict) -> str:
 
 
 def _moodle_range(release: dict) -> str:
-    supported = release["supported-moodle"]
+    supported = effective_supported(release)
     return supported[0] if len(supported) == 1 else f"{supported[0]} – {supported[-1]}"
 
 
@@ -1649,7 +1649,7 @@ def _range_indices(entry: dict) -> tuple[int, int]:
     when the entry has no releases — version filters then exclude it."""
     if not entry["releases"]:
         return (-1, -1)
-    supported = _newest_release(entry)["supported-moodle"]
+    supported = effective_supported(_newest_release(entry))
     known = [v for v in supported if v in VORDER]
     if not known:
         return (-1, -1)
@@ -1724,7 +1724,7 @@ def plugins_dataset(entries: list[tuple[dict, dict]], base_url: str,
                 "version": version,
                 "tag": release["tag"],
                 "moodle-version": release["moodle-version"],
-                "supported-moodle": release["supported-moodle"],
+                "supported-moodle": effective_supported(release),
                 "published": release["published"],
                 "download": _zip_url(artifacts_base, component, version),
                 "zip-sha256": release["zip-sha256"],
@@ -2433,7 +2433,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             version = r["version"].split(" ")[0]
             if advisories.is_revoked(component, version):
                 continue
-            known = [v for v in r["supported-moodle"] if v in VORDER]
+            known = [v for v in effective_supported(r) if v in VORDER]
             if not known:
                 continue
             covered.update(known)
@@ -2883,7 +2883,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     dependencies = ((latest or {}).get("dependencies")
                     or entry.get("dependencies") or {})
     if dependencies:
-        supported_range = (latest or {}).get("supported-moodle")
+        supported_range = effective_supported(latest) if latest else None
         dep_items = []
         for dep_component, dep_min in sorted(dependencies.items()):
             listed = bool(known_components) and dep_component in known_components

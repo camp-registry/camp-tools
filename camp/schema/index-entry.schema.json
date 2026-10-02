@@ -256,6 +256,16 @@
               "pattern": "^[0-9]+\\.[0-9]+$"
             }
           },
+          "supported-range": {
+            "description": "The [min, max] branch codes $plugin->supported declared at the tagged commit, e.g. [500, 503]. Publish re-expands supported-moodle from this against the current branch table, so a Moodle branch added later lights up without re-ingest (camp-tools#64). Absent when version.php declared only $plugin->requires, when an author override disagreed with the declaration, or on records that predate the field.",
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "integer",
+              "minimum": 10
+            }
+          },
           "php-min": {
             "description": "$plugin->php at the tagged commit, if declared.",
             "type": "string",

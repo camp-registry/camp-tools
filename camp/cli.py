@@ -141,6 +141,13 @@ def _version_php_field(repo: str, commit: str, field: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def declared_supported_range(repo: str, commit: str) -> list[int] | None:
+    """The [min, max] branch codes $plugin->supported declares at the
+    commit, or None when version.php carries no such range."""
+    from .moodleversions import parse_supported_range
+    return parse_supported_range(_version_php_field(repo, commit, "supported"))
+
+
 def derive_supported_moodle(repo: str, commit: str) -> list[str]:
     """Supported branches from version.php: the explicit $plugin->supported
     range when declared, else just the branch $plugin->requires maps to
@@ -148,9 +155,8 @@ def derive_supported_moodle(repo: str, commit: str) -> list[str]:
     make). Empty list if version.php declares neither."""
     from .moodleversions import branch_from_requires, branches_from_supported
 
-    supported_raw = _version_php_field(repo, commit, "supported")
-    if supported_raw:
-        codes = [int(n) for n in re.findall(r"\d+", supported_raw)]
+    codes = declared_supported_range(repo, commit)
+    if codes:
         branches = branches_from_supported(codes)
         if branches:
             return branches
@@ -227,6 +233,7 @@ def _cmd_release(args: argparse.Namespace) -> int:
         released_ts = build_mod.commit_timestamp(repo, artifact.commit)
 
         derived = derive_supported_moodle(repo, artifact.commit)
+        declared_range = declared_supported_range(repo, artifact.commit)
         if args.supported_moodle:
             supported = [b.strip() for b in args.supported_moodle.split(",")]
             if derived and supported != derived:
@@ -254,6 +261,14 @@ def _cmd_release(args: argparse.Namespace) -> int:
         "commit": artifact.commit,
         "moodle-version": int(moodle_version) if moodle_version else 0,
         "supported-moodle": supported,
+    }
+    # The declared range rides along so publish can re-expand the list
+    # against a later branch table (camp-tools#64). Only when the list IS
+    # that range's expansion: an author override that disagrees wins and
+    # must not be undone at the next publish.
+    if declared_range and supported == derived:
+        record["supported-range"] = declared_range
+    record |= {
         "zip-sha256": artifact.sha256,
         "published": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "released": datetime.datetime.fromtimestamp(released_ts, datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -675,6 +690,15 @@ def _cmd_scan_gitlab(args: argparse.Namespace) -> int:
           ", ".join(f"{count} {outcome}" for outcome, count in sorted(by_outcome.items())))
     if args.dry_run:
         print("(dry run: nothing written)")
+    return 0
+
+
+def _cmd_backfill_supported_range(args: argparse.Namespace) -> int:
+    from . import supportedrange
+    stats = supportedrange.backfill(args.index_dir, dry_run=args.dry_run)
+    print(f"{stats['written']} records given a range, {stats['requires-only']} declare "
+          f"no range, {stats['already']} already had one, {stats['unreachable']} "
+          f"unreachable" + (" (dry run, nothing written)" if args.dry_run else ""))
     return 0
 
 
@@ -1261,6 +1285,15 @@ def main(argv: list[str] | None = None) -> int:
                    help="lift the repository-name gate for this targeted run: the "
                         "human sign-off of a seed request (RFC §8, camp-tools#60)")
     p.set_defaults(func=_cmd_scan_gitlab)
+
+    p = sub.add_parser("backfill-supported-range",
+                       help="record the declared $plugin->supported range on "
+                            "release records that predate the field, read "
+                            "from version.php at each pinned commit "
+                            "(camp-tools#64)")
+    p.add_argument("index_dir")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=_cmd_backfill_supported_range)
 
     p = sub.add_parser("check-moodle-branches",
                        help="fail if Moodle has stable branches our table lacks")

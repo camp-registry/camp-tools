@@ -48,6 +48,31 @@ def branches_from_supported(supported: list[int]) -> list[str] | None:
     return names or None
 
 
+def parse_supported_range(raw: str | None) -> list[int] | None:
+    """The [min, max] branch codes out of a raw $plugin->supported value
+    such as "[500, 503]"; None when it does not carry two integers."""
+    import re
+    if not raw:
+        return None
+    codes = [int(n) for n in re.findall(r"\d+", raw)]
+    return codes if len(codes) == 2 else None
+
+
+def effective_supported(release: dict) -> list[str]:
+    """The branches a release record supports against the CURRENT table.
+    A record stores `supported-moodle` as the list expanded on the day it
+    was published; when it also carries the declared `supported-range`
+    (camp-tools#64), that range is re-expanded here so a branch added to
+    the table later (a new Moodle release) lights up without re-ingest.
+    Falls back to the stored list when the range does not expand."""
+    rng = release.get("supported-range")
+    if rng:
+        expanded = branches_from_supported(list(rng))
+        if expanded:
+            return expanded
+    return list(release.get("supported-moodle") or [])
+
+
 def branch_from_requires(requires: int) -> str | None:
     """The branch a $plugin->requires core version code belongs to."""
     match = None
