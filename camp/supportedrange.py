@@ -48,9 +48,23 @@ def declared_range_in(text: str | None) -> list[int] | None:
     return parse_supported_range(match.group(1)) if match else None
 
 
+_MATURITY_RE = re.compile(r"\$plugin->maturity\s*=\s*([A-Z_0-9]+)\s*;")
+
+
+def declared_maturity_in(text: str | None) -> str | None:
+    from .maturity import parse_declared
+    if not text:
+        return None
+    match = _MATURITY_RE.search(text)
+    return parse_declared(match.group(1)) if match else None
+
+
 def backfill(index_dir: str | Path, token=None, dry_run: bool = False,
-             fetch=fetch_version_php, log=print) -> dict:
+             fetch=fetch_version_php, log=print, field: str = "supported-range") -> dict:
+    """Fill `field` ("supported-range" or "maturity", camp-tools#64/#67) on
+    release records that lack it, from version.php at each pinned commit."""
     token = token or os.environ.get("GITHUB_TOKEN")
+    extract = declared_range_in if field == "supported-range" else declared_maturity_in
     stats = {"written": 0, "requires-only": 0, "already": 0, "unreachable": 0}
     for path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
         entry = yaml.safe_load(path.read_text()) or {}
@@ -59,7 +73,7 @@ def backfill(index_dir: str | Path, token=None, dry_run: bool = False,
             continue
         changed = False
         for release in releases:
-            if release.get("supported-range"):
+            if release.get(field):
                 stats["already"] += 1
                 continue
             text = fetch(entry.get("source", ""), release["commit"], token)
@@ -67,14 +81,14 @@ def backfill(index_dir: str | Path, token=None, dry_run: bool = False,
                 stats["unreachable"] += 1
                 log(f"  unreachable: {entry['component']} {release['tag']}")
                 continue
-            codes = declared_range_in(text)
-            if not codes:
+            value = extract(text)
+            if not value:
                 stats["requires-only"] += 1
                 continue
-            release["supported-range"] = codes
+            release[field] = value
             stats["written"] += 1
             changed = True
-            log(f"  {entry['component']} {release['tag']}: {codes}")
+            log(f"  {entry['component']} {release['tag']}: {value}")
         if changed and not dry_run:
             with open(path, "w") as f:
                 yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)

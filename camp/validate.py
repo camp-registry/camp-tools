@@ -34,6 +34,17 @@ def newest_release(entry: dict) -> dict | None:
                key=lambda r: _version_key(str(r["version"]).split(" ")[0]))
 
 
+def newest_stable_release(entry: dict) -> dict | None:
+    """Highest-versioned release whose maturity is stable (camp-tools#67);
+    the newest pre-release only when the entry has no stable release at
+    all. What every default (page, install card, Composer consumers) shows."""
+    from . import maturity
+    stable = [r for r in entry.get("releases") or [] if not maturity.is_prerelease(r)]
+    if not stable:
+        return newest_release(entry)
+    return newest_release({"releases": stable})
+
+
 def _schema(name: str) -> dict:
     with open(SCHEMA_DIR / name) as f:
         return json.load(f)

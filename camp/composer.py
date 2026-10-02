@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import plugintypes, standardplugins
 from .advisory import AdvisorySet
+from . import maturity
 from .moodleversions import (branch_names, branches_known_at, effective_supported,
                              next_branch)
 from .validate import load_entry
@@ -107,7 +108,10 @@ def package_definition(entry: dict, base_url: str,
         version = release["version"].split(" ")[0]
         if advisories is not None and advisories.is_revoked(component, version):
             continue
-        pkg_version = composer_version(version)
+        # A pre-release carries the stability suffix its maturity implies
+        # (camp-tools#67), so Composer's default minimum-stability skips it.
+        pkg_version = maturity.composer_version_for(release, entry["releases"],
+                                                    composer_version)
         if pkg_version is None:
             if skipped is not None:
                 skipped.append(f"{component} {version}")
@@ -152,6 +156,7 @@ def package_definition(entry: dict, base_url: str,
                     "tier": entry["tier"],
                     "labels": entry["labels"],
                     "supported-moodle": effective_supported(release),
+                    "maturity": maturity.of_release(release),
                     "moodle-version": release["moodle-version"],
                     "published": release["published"],
                     # $plugin->dependencies at the tag (camp-tools#20):

@@ -231,6 +231,14 @@ def _cmd_release(args: argparse.Namespace) -> int:
                       f"locally with 'camp validate-listing .camp/listing.yml'",
                       file=sys.stderr)
         released_ts = build_mod.commit_timestamp(repo, artifact.commit)
+        # $plugin->maturity is the authority on pre-release status; the
+        # release string only warns when it disagrees (camp-tools#67).
+        from . import maturity as maturity_mod
+        declared_maturity = maturity_mod.parse_declared(
+            _version_php_field(repo, artifact.commit, "maturity"))
+        notice = maturity_mod.mismatch_notice(declared_maturity, version)
+        if notice:
+            print(f"warning: {notice}", file=sys.stderr)
 
         derived = derive_supported_moodle(repo, artifact.commit)
         declared_range = declared_supported_range(repo, artifact.commit)
@@ -268,6 +276,8 @@ def _cmd_release(args: argparse.Namespace) -> int:
     # must not be undone at the next publish.
     if declared_range and supported == derived:
         record["supported-range"] = declared_range
+    if declared_maturity:
+        record["maturity"] = declared_maturity
     record |= {
         "zip-sha256": artifact.sha256,
         "published": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -698,6 +708,16 @@ def _cmd_backfill_supported_range(args: argparse.Namespace) -> int:
     stats = supportedrange.backfill(args.index_dir, dry_run=args.dry_run)
     print(f"{stats['written']} records given a range, {stats['requires-only']} declare "
           f"no range, {stats['already']} already had one, {stats['unreachable']} "
+          f"unreachable" + (" (dry run, nothing written)" if args.dry_run else ""))
+    return 0
+
+
+def _cmd_backfill_maturity(args: argparse.Namespace) -> int:
+    from . import supportedrange
+    stats = supportedrange.backfill(args.index_dir, dry_run=args.dry_run,
+                                    field="maturity")
+    print(f"{stats['written']} records given a maturity, {stats['requires-only']} declare "
+          f"none (stable), {stats['already']} already had one, {stats['unreachable']} "
           f"unreachable" + (" (dry run, nothing written)" if args.dry_run else ""))
     return 0
 
@@ -1312,6 +1332,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("index_dir")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=_cmd_backfill_supported_range)
+
+    p = sub.add_parser("backfill-maturity",
+                       help="record $plugin->maturity on release records that "
+                            "predate the field, read from version.php at each "
+                            "pinned commit (camp-tools#67)")
+    p.add_argument("index_dir")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=_cmd_backfill_maturity)
 
     p = sub.add_parser("check-moodle-branches",
                        help="fail if Moodle has stable branches our table lacks")

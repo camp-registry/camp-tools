@@ -364,6 +364,8 @@ footer .build{display:block;margin-top:4px}
 .inst-meta{margin-top:10px;font-family:var(--mono);font-size:0.78125rem;
   color:var(--faint-label)}
 .inst-meta b{color:var(--text);font-weight:600}
+.prerel{display:block;margin-top:10px;font-size:0.78125rem;color:var(--text-muted)}
+.prerel input{margin-right:6px;vertical-align:middle}
 .pick-note{margin-top:10px;font-size:0.78125rem;line-height:1.5;color:var(--warn-text);
   max-width:520px}
 .cmdline{display:flex;align-items:center;gap:10px;margin-top:16px;
@@ -1121,10 +1123,16 @@ document.addEventListener('DOMContentLoaded', function(){
     }
     return 0;
   }
+  var preEl = document.getElementById('prerel');
+  function allowPre(){ return !!(preEl && preEl.checked); }
+  function vname(r){ return r.v + (r.lbl ? ' (' + r.lbl + ')' : ''); }
   function bestFor(branch){
     var i = VORDER.indexOf(branch), best = null;
-    releases.forEach(function(r){
-      if (i >= r.lo && i <= r.hi && (!best || vcmp(r.v, best.v) > 0)) best = r;
+    var pool = releases.filter(function(r){ return allowPre() || r.m === 'stable'; });
+    if (!pool.length) pool = releases;   // nothing stable at all: show what exists
+    pool.forEach(function(r){
+      if (i >= r.lo && i <= r.hi && (!best || vcmp(r.v, best.v) > 0 ||
+          (vcmp(r.v, best.v) === 0 && pool.indexOf(r) > pool.indexOf(best)))) best = r;
     });
     return best;
   }
@@ -1149,7 +1157,7 @@ document.addEventListener('DOMContentLoaded', function(){
     else { note.style.display = 'none'; }
     var zip = document.getElementById('zip-btn');
     if (zip) zip.href = r.zip;
-    set('zip-ver', r.v);
+    set('zip-ver', vname(r));
     set('compat', r.lo === r.hi ? vl(r.lo) : vl(r.lo) + ' – ' + vl(r.hi));
     set('vd-tag', r.tag); set('vd-commit', r.commit);
     set('vd-date', r.date); set('vd-sha', r.sha);
@@ -1321,6 +1329,7 @@ document.addEventListener('DOMContentLoaded', function(){
   pick.value = initial;
   apply(initial);
   announceReady = true;
+  if (preEl) preEl.addEventListener('change', function(){ apply(pick.value); });
   pick.addEventListener('change', function(){
     try { localStorage.setItem('camp-moodle', pick.value); } catch(e){}
     apply(pick.value);
@@ -1405,6 +1414,8 @@ document.addEventListener('DOMContentLoaded', function(){
 
 
 from .validate import newest_release as _newest_release  # noqa: E402
+from .validate import newest_stable_release as _newest_stable  # noqa: E402
+from . import maturity as _maturity  # noqa: E402
 
 
 def _sniff_groups(rules: dict, top: int = 4) -> list[tuple[str, int]]:
@@ -1653,7 +1664,7 @@ def _range_indices(entry: dict) -> tuple[int, int]:
     when the entry has no releases — version filters then exclude it."""
     if not entry["releases"]:
         return (-1, -1)
-    supported = effective_supported(_newest_release(entry))
+    supported = effective_supported(_newest_stable(entry))
     known = [v for v in supported if v in VORDER]
     if not known:
         return (-1, -1)
@@ -2015,7 +2026,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         component = entry["component"]
         metrics = entry.get("metrics") or {}
         health = _health(entry, today)
-        latest = _newest_release(entry)
+        latest = _newest_stable(entry)
         vlo, vhi = _range_indices(entry)
         maints = " ".join(
             str(m.get(k, "")) for m in entry.get("maintainers", [])
@@ -2056,7 +2067,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         openi = metrics.get("open-issues", 0)
         updated = _last_activity(entry) or ""
         tier = entry["tier"]
-        latest = _newest_release(entry)
+        latest = _newest_stable(entry)
         vlo, vhi = _range_indices(entry)
         health = _health(entry, today)
         cost = _cost_text(entry)
@@ -2343,7 +2354,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     plugintype = component.partition("_")[0]
     name = listing.get("name") or component
     summary = (listing.get("summary") or entry.get("summary") or "").strip()
-    latest = _newest_release(entry)
+    latest = _newest_stable(entry)
     package = _package_name(entry)
     tier = entry["tier"]
     metrics = entry.get("metrics") or {}
@@ -2447,6 +2458,10 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                 "date": _fmt_date(r["published"]),
                 "lo": VORDER.index(known[0]), "hi": VORDER.index(known[-1]),
                 "zip": _zip_url(artifacts_base, component, version),
+                # pre-release marking (camp-tools#67): the picker skips
+                # these unless the reader opts in
+                "m": _maturity.of_release(r),
+                "lbl": _maturity.label(r, entry["releases"]),
             }
             vcheck = checks_mod.for_version(check_doc, version.lstrip("v"))
             if vcheck:
@@ -2534,6 +2549,10 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             adv_line = ""
         rel_json = json.dumps({"releases": releases_data, "vorder": VORDER,
                                "vlabel": VLABEL, "package": package})
+        has_prerelease = any(row.get("m") != "stable" for row in releases_data)
+        prerel_toggle = ('<label class="prerel"><input type="checkbox" id="prerel"> '
+                         'Include pre-releases (alpha, beta, rc)</label>'
+                         if has_prerelease else "")
         install = f"""
   <h2 class="visually-hidden">Download and compatibility</h2>
   <div class="install-card">
@@ -2564,6 +2583,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
       {check_line}
       {adv_line}
       {review_line}
+      {prerel_toggle}
       <div class="pick-note" id="pick-note" style="display:none"></div>
       <div class="cmdline"><code id="cmd-text" tabindex="0" role="region"
         aria-label="Install command">{escape(cmd)}</code>
@@ -2582,6 +2602,9 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         def _vrow(r):
             version = r["version"].split(" ")[0]
             v = version.lstrip("v")
+            pre = _maturity.label(r, entry["releases"])
+            if pre:
+                v = f"{v} ({pre})"
             when = _fmt_date(r.get("released", r["published"]))
             rng = _moodle_range(r)
             if advisories.is_revoked(component, version):
@@ -3713,7 +3736,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     if checks_dir:
         for entry, _ in entries:
             doc = checks_mod.load(checks_dir, entry["component"])
-            newest = _newest_release(entry)
+            newest = _newest_stable(entry)
             summary = checks_mod.for_version(
                 doc, newest["version"].split(" ")[0].lstrip("v")) if newest else None
             if summary:

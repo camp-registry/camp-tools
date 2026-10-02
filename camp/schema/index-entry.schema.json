@@ -266,6 +266,11 @@
               "minimum": 10
             }
           },
+          "maturity": {
+            "description": "$plugin->maturity at the tagged commit (camp-tools#67): alpha, beta, rc or stable. Absent when version.php did not declare one, which every consumer reads as stable. Pre-releases get a Composer stability suffix in packages.json and are shown only on opt-in.",
+            "type": "string",
+            "enum": ["alpha", "beta", "rc", "stable"]
+          },
           "php-min": {
             "description": "$plugin->php at the tagged commit, if declared.",
             "type": "string",
