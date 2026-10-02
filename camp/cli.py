@@ -760,6 +760,20 @@ def _cmd_check_name(args: argparse.Namespace) -> int:
 def _cmd_build_directory_map(args: argparse.Namespace) -> int:
     from . import directorymap
     table = directorymap.build_map(args.pluglist)
+    if args.merge:
+        table, stats = directorymap.merge_map(directorymap.load(), table,
+                                              accept=set(args.accept or []))
+        print(f"merge: {len(stats['added'])} added, {len(stats['kept'])} kept "
+              f"(no longer in the directory), {len(stats['applied'])} changed "
+              f"anchors applied, {len(stats['held'])} held for review")
+        for comp, old, new in stats["applied"]:
+            print(f"  applied {comp}: {old} -> {new}")
+        for comp, old, new in stats["held"]:
+            print(f"  HELD {comp}: {old} -> {new}  (pass --accept {comp} to apply)",
+                  file=sys.stderr)
+    if args.dry_run:
+        print(f"(dry run) {len(table['components'])} components; nothing written")
+        return 0
     directorymap.write_map(table)
     print(f"wrote {directorymap.DATA_PATH} "
           f"({len(table['components'])} components)")
@@ -1391,6 +1405,15 @@ def main(argv: list[str] | None = None) -> int:
                             "(camp-tools#30); the committed JSON is the "
                             "durable artifact")
     p.add_argument("pluglist", help="pluglist JSON path or URL")
+    p.add_argument("--merge", action="store_true",
+                   help="fold the pluglist into the committed map instead of "
+                        "replacing it: keep anchors the directory dropped, add "
+                        "new ones, hold re-pointed ones unless --accept'ed "
+                        "(camp-tools#66)")
+    p.add_argument("--accept", action="append", metavar="COMPONENT",
+                   help="with --merge: apply the directory's new repository "
+                        "for this component (repeatable)")
+    p.add_argument("--dry-run", action="store_true", help="report, write nothing")
     p.set_defaults(func=_cmd_build_directory_map)
 
     p = sub.add_parser("check-plugin-types",

@@ -88,6 +88,41 @@ def build_map(pluglist_source: str) -> dict:
             "components": dict(sorted(components.items()))}
 
 
+def merge_map(current: dict, fresh: dict, accept: set[str] | None = None,
+              today: str | None = None) -> tuple[dict, dict]:
+    """Fold a fresh pluglist map into the committed one (camp-tools#66).
+
+    The committed map is durable evidence of what the directory published,
+    so anchors the directory has since dropped are KEPT; components it has
+    listed since are ADDED as-is; a component the directory re-pointed to a
+    different repository is a CHANGE, applied only when named in `accept`
+    (the operator reviewed it), else held at the old anchor and reported.
+    Returns (merged table, stats) with stats listing added, kept, applied
+    and held [(component, old, new)]."""
+    import datetime
+    accept = accept or set()
+    cur, new = current["components"], fresh["components"]
+    merged = dict(cur)
+    stats = {"added": [], "kept": [], "applied": [], "held": []}
+    for comp, url in new.items():
+        if comp not in cur:
+            merged[comp] = url
+            stats["added"].append(comp)
+        elif not same_repo(cur[comp], url):
+            if comp in accept:
+                merged[comp] = url
+                stats["applied"].append((comp, cur[comp], url))
+            else:
+                stats["held"].append((comp, cur[comp], url))
+    for comp in cur:
+        if comp not in new:
+            stats["kept"].append(comp)
+    today = today or datetime.date.today().isoformat()
+    return ({"source": "moodle.org directory pluglist (frozen snapshot, "
+                       f"merged with the live pluglist on {today})",
+             "components": dict(sorted(merged.items()))}, stats)
+
+
 def write_map(table: dict) -> None:
     with open(DATA_PATH, "w") as f:
         json.dump(table, f, indent=1)

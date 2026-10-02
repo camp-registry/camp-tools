@@ -70,3 +70,33 @@ def test_scan_parks_directory_mismatch(tmp_path, monkeypatch):
     record = scan.load_ledger(index)["copyfarm/moodle-mod_attendance"]
     assert "old moodle.org directory published" in record["detail"]
     assert not (index / "plugins" / "mod" / "mod_attendance.yml").exists()
+
+
+def test_merge_map_keeps_adds_holds_and_applies():
+    """camp-tools#66: the committed map is durable evidence, so a refresh
+    folds the live pluglist in rather than replacing it."""
+    import camp.directorymap as dm
+    current = {"source": "s", "components": {
+        "mod_a": "https://github.com/x/moodle-mod_a",        # unchanged
+        "mod_gone": "https://github.com/x/moodle-mod_gone",  # dropped upstream: kept
+        "mod_moved": "https://github.com/old/moodle-mod_moved",
+        "mod_moved2": "https://github.com/old/moodle-mod_moved2",
+        "mod_case": "https://github.com/x/moodle-mod_case"}}
+    fresh = {"source": "s", "components": {
+        "mod_a": "https://github.com/x/moodle-mod_a",
+        "mod_new": "https://gitlab.com/y/moodle-mod_new",      # added
+        "mod_moved": "https://github.com/new/moodle-mod_moved",   # held
+        "mod_moved2": "https://github.com/new/moodle-mod_moved2", # accepted
+        "mod_case": "https://github.com/X/moodle-mod_case.git"}}  # same repo, different spelling
+    merged, stats = dm.merge_map(current, fresh, accept={"mod_moved2"}, today="2026-10-02")
+    c = merged["components"]
+    assert stats["added"] == ["mod_new"] and c["mod_new"].endswith("/y/moodle-mod_new")
+    assert stats["kept"] == ["mod_gone"] and "mod_gone" in c
+    assert stats["held"] == [("mod_moved", "https://github.com/old/moodle-mod_moved",
+                              "https://github.com/new/moodle-mod_moved")]
+    assert c["mod_moved"] == "https://github.com/old/moodle-mod_moved"
+    assert [x[0] for x in stats["applied"]] == ["mod_moved2"]
+    assert c["mod_moved2"] == "https://github.com/new/moodle-mod_moved2"
+    assert c["mod_case"] == "https://github.com/x/moodle-mod_case"   # not a change
+    assert "2026-10-02" in merged["source"]
+    assert list(c) == sorted(c)
