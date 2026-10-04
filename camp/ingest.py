@@ -30,6 +30,7 @@ from pathlib import Path
 import yaml
 
 from .validate import load_entry, newest_release, validate_listing
+from .build import BuildError, ensure_commit
 
 LISTING_PATH = ".camp/listing.yml"
 MANIFEST_NAME = "manifest.json"
@@ -86,6 +87,15 @@ def ingest_entry(entry_path: str | Path, source: str, out_dir: str | Path) -> In
         return result
     release = newest_release(entry)
     commit = release["commit"]
+
+    try:
+        # the ledger commit may have left every ref (tag moved after
+        # publication); fetch it by SHA rather than report a missing listing
+        ensure_commit(source, commit)
+    except BuildError as exc:
+        result.problems.append(f"commit {commit[:12]} not fetchable: {exc}")
+        result.ok = False
+        return result
 
     raw = _blob_at(source, commit, LISTING_PATH)
     if raw is None:

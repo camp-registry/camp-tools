@@ -81,3 +81,28 @@ def test_ingest_rejects_invalid_listing(plugin_repo, entry_path, tmp_path):
     result = ingest_entry(entry_path, str(plugin_repo), out)
     assert not result.ok
     assert not (out / "mod_example.yml").exists()
+
+
+def test_ingest_fetches_ledger_commit_when_the_tag_moved(plugin_repo, entry_path, tmp_path):
+    """A force-moved tag leaves the ledger commit unreachable; ingest must
+    fetch it by SHA and read the listing there, not report it missing."""
+    import subprocess
+    (plugin_repo / "CHANGES.md").write_text("amended after tagging\n")
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "--amend", "--no-edit")
+    git(plugin_repo, "tag", "-f", "v1.0.0")
+    git(plugin_repo, "config", "uploadpack.allowAnySHA1InWant", "true")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "--quiet", "file://" + str(plugin_repo), str(clone)],
+                   check=True, capture_output=True)
+    entry = yaml.safe_load(entry_path.read_text())
+    ledger_commit = entry["releases"][0]["commit"]
+    absent = subprocess.run(["git", "-C", str(clone), "cat-file", "-e", ledger_commit],
+                            capture_output=True)
+    assert absent.returncode != 0, "fixture: the ledger commit must be missing from the clone"
+
+    out = tmp_path / "listings"
+    result = ingest_entry(entry_path, str(clone), out)
+    assert result.ok, result.problems
+    listing = yaml.safe_load((out / "mod_example.yml").read_text())
+    assert listing["name"] == "Example Activity"

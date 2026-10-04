@@ -68,6 +68,19 @@ def resolve_tag(repo: str, tag: str) -> str:
     return _git(repo, "rev-parse", f"{tag}^{{commit}}").decode().strip()
 
 
+def ensure_commit(repo: str, commit: str) -> None:
+    """Make sure `commit` is present in the clone, fetching it by SHA from
+    origin when it is not. A ledger commit can vanish from every ref when
+    the maintainer moves or force-pushes the tag after publication (RFC
+    §4.2); the object usually survives upstream and GitHub serves it by
+    full SHA, so what the registry verified can still be rebuilt."""
+    probe = subprocess.run(["git", "-C", repo, "cat-file", "-e", f"{commit}^{{commit}}"],
+                           capture_output=True)
+    if probe.returncode == 0:
+        return
+    _git(repo, "fetch", "--quiet", "origin", commit)
+
+
 def commit_timestamp(repo: str, commit: str) -> int:
     return int(_git(repo, "log", "-1", "--format=%ct", commit).decode().strip())
 

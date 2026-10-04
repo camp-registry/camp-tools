@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .artifacts import artifact_relpath
-from .build import BuildError, build_zip
+from .build import BuildError, build_zip, ensure_commit
 from .validate import load_entry
 from .verify import _clone
 
@@ -105,7 +105,13 @@ def deposit(index_dir: str | Path, store, log=print) -> ArchiveResult:
     Existing keys are never rewritten: a present object with a matching
     sha256 is counted and skipped; a mismatch is a hard problem (the
     object lock should make it impossible — seeing one means something
-    is deeply wrong and a human must look)."""
+    is deeply wrong and a human must look).
+
+    Artifacts are rebuilt at the ledger *commit*, not the tag name: the
+    archive holds what Index PR verification verified, and a tag moved
+    after publication is verify's finding (RFC §4.2), not a reason to
+    leave the verified artifact unarchived and the publish red. The
+    commit is fetched by SHA when the clone no longer reaches it."""
     result = ArchiveResult()
     by_source: dict[str, list] = {}
     for entry, release in _releases(index_dir):
@@ -132,7 +138,8 @@ def deposit(index_dir: str | Path, store, log=print) -> ArchiveResult:
                 continue
             for entry, release, key in items:
                 try:
-                    artifact = build_zip(repo, release["tag"], entry["component"])
+                    ensure_commit(repo, release["commit"])
+                    artifact = build_zip(repo, release["commit"], entry["component"])
                 except BuildError as exc:
                     result.problems.append(f"{key}: build failed: {exc}")
                     continue

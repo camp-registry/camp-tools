@@ -100,3 +100,26 @@ def test_artifacts_base_switches_urls(index_dir, tmp_path):
     html = (out / "plugin" / "mod_example.html").read_text()
     assert "https://artifacts.test/mod_example/mod_example-1.0.0.zip" in html
     assert "https://repo.test/artifacts/" not in html
+
+
+def test_deposit_archives_the_ledger_commit_when_the_tag_moved(index_dir, entry_path, plugin_repo):
+    """RFC §4.2: a tag moved after publication is verify's finding; the
+    archive still holds exactly what was verified, rebuilt at the ledger
+    commit fetched by SHA, and the publish does not go red for it. The
+    source is served over file:// (reachable objects only) so the clone
+    genuinely lacks the amended-away commit, as a GitHub clone would."""
+    from conftest import git
+    entry = _point_at_local_repo(entry_path, plugin_repo)
+    (plugin_repo / "CHANGES.md").write_text("fixed the changelog after tagging\n")
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "--amend", "--no-edit")
+    git(plugin_repo, "tag", "-f", "v1.0.0")
+    git(plugin_repo, "config", "uploadpack.allowAnySHA1InWant", "true")
+    entry["source"] = "file://" + str(plugin_repo)
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+
+    store = FakeStore()
+    result = deposit(index_dir, store, log=lambda *a: None)
+    assert result.ok, result.problems
+    key = "mod_example/mod_example-1.0.0.zip"
+    assert store.objects[key]["sha256"] == entry["releases"][0]["zip-sha256"]
