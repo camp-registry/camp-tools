@@ -161,16 +161,25 @@ def test_backfill_supported_range(index_dir, entry_path):
 
 # --- pre-release branches (camp-tools#65) -----------------------------------
 
-def test_prerelease_row_is_labelled_not_renamed():
-    from camp.moodleversions import PRERELEASE, branch_names, display_name, maturity
-    assert "5.3" in branch_names()           # matching and tool_camp use the bare name
-    assert PRERELEASE["5.3"] in ("beta", "rc")
-    assert display_name("5.3") == f"5.3 ({PRERELEASE['5.3']})"
-    assert display_name("5.2") == "5.2" and maturity("5.2") is None
-
-
-def test_check_upstream_admits_at_beta_and_promotes_at_stable():
+def test_prerelease_row_is_labelled_not_renamed(monkeypatch):
     import camp.moodleversions as mv
+    # 5.3 is released now (promoted 2026-10-05); replay its pre-release state
+    monkeypatch.setitem(mv.PRERELEASE, "5.3", "rc")
+    assert "5.3" in mv.branch_names()        # matching and tool_camp use the bare name
+    assert mv.display_name("5.3") == "5.3 (rc)" and mv.maturity("5.3") == "rc"
+    assert mv.display_name("5.2") == "5.2" and mv.maturity("5.2") is None
+
+
+def test_released_branch_carries_no_mark():
+    import camp.moodleversions as mv
+    assert mv.PRERELEASE == {}
+    assert mv.display_name("5.3") == "5.3" and mv.maturity("5.3") is None
+    assert dict((c, f) for c, n, f in mv.BRANCHES)[503] == 2026100500
+
+
+def test_check_upstream_admits_at_beta_and_promotes_at_stable(monkeypatch):
+    import camp.moodleversions as mv
+    monkeypatch.setitem(mv.PRERELEASE, "5.3", "rc")
     ls = "abc\trefs/heads/MOODLE_502_STABLE\n"
     # alpha on main: nothing to do
     assert mv.check_upstream(ls_remote=ls, main_version={
@@ -190,7 +199,18 @@ def test_check_upstream_admits_at_beta_and_promotes_at_stable():
         "branch": 503, "version": 2026100200, "maturity": "MATURITY_RC"}) == []
 
 
-def test_standard_plugins_prerelease_reads_main():
+def test_check_upstream_is_quiet_once_promoted():
+    import camp.moodleversions as mv
+    ls = "abc\trefs/heads/MOODLE_502_STABLE\nabc\trefs/heads/MOODLE_503_STABLE\n"
+    # 6.0dev on main at alpha (the state on 2026-10-05): nothing to do
+    assert mv.check_upstream(ls_remote=ls, main_version={
+        "branch": 600, "version": 2026100500, "maturity": "MATURITY_ALPHA"}) == []
+
+
+def test_standard_plugins_prerelease_reads_main(monkeypatch):
+    import camp.moodleversions as mv
     from camp.standardplugins import _branch_ref
     assert _branch_ref(502) == "MOODLE_502_STABLE"
+    assert _branch_ref(503) == "MOODLE_503_STABLE"
+    monkeypatch.setitem(mv.PRERELEASE, "5.3", "rc")
     assert _branch_ref(503) == "main"

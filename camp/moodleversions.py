@@ -35,10 +35,7 @@ BRANCHES = [
     (500, "5.0", 2025041400),
     (501, "5.1", 2025100600),
     (502, "5.2", 2026042000),
-    # 5.3: pre-release row (camp-tools#65). Code = the dev $version when the
-    # row was added; replace with the branching-date code when
-    # MOODLE_503_STABLE appears, and drop the PRERELEASE entry.
-    (503, "5.3", 2026100200),
+    (503, "5.3", 2026100500),
 ]
 
 # Branches in BRANCHES that Moodle has not released yet, by maturity
@@ -47,7 +44,7 @@ BRANCHES = [
 # and the window the old directory's early-bird reward recognised. Alpha is
 # never admitted. Display decorates these ("5.3 (rc)"); tool_camp installs
 # on such a site like any other because the name is the same.
-PRERELEASE: dict[str, str] = {"5.3": "rc"}
+PRERELEASE: dict[str, str] = {}
 
 # $maturity constants in core's version.php, lowest first.
 MATURITIES = ["MATURITY_ALPHA", "MATURITY_BETA", "MATURITY_RC", "MATURITY_STABLE"]
