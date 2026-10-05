@@ -102,3 +102,34 @@ def test_entry_with_latest_tag_validates(tmp_path):
                     "latest-tag": {"tag": "v1.0", "date": "2026-09-01T00:00:00Z"},
                     "checked": "2026-09-30"}}, sort_keys=False))
     assert validate_entry(path) == []
+
+
+def test_upstream_newest_lets_a_newer_release_record_win():
+    """camp-tools#74: the metrics tag lags a verified release by up to two
+    weeks; the newest release record wins when strictly newer."""
+    tag = {"tag": "v5.2.3.03", "date": "2026-09-18T21:38:43Z"}
+    entry = {"releases": [
+        {"tag": "v5.1.8.01", "released": "2026-10-04T14:00:00Z"},
+        {"tag": "v5.2.4.01", "released": "2026-10-04T14:53:51Z"},
+        {"tag": "v0.1", "published": "2020-01-01T00:00:00Z"}]}
+    assert _upstream_newest({"latest-tag": tag}, entry) == (
+        "record", {"tag": "v5.2.4.01", "date": "2026-10-04T14:53:51Z"})
+    # the host's tag is newer: it keeps the row
+    newer = {"tag": "v5.3.0", "date": "2026-10-06T00:00:00Z"}
+    assert _upstream_newest({"latest-tag": newer}, entry) == ("tag", newer)
+    # no metrics at all: the record still fills the row
+    assert _upstream_newest({}, entry)[0] == "record"
+    # no entry: unchanged behaviour
+    assert _upstream_newest({"latest-tag": tag}) == ("tag", tag)
+
+
+def test_labels_follow_the_released_listing():
+    """camp-tools#73: the listing manifest's labels win over the entry copy."""
+    from camp.site import labels_for
+    entry = {"labels": ["fully-free"]}
+    assert labels_for(entry, {"labels": ["fully-free", "requires-core-patch"]}) == [
+        "fully-free", "requires-core-patch"]
+    assert labels_for(entry, {}) == ["fully-free"]
+    assert labels_for(entry, {"labels": []}) == ["fully-free"]
+    assert labels_for(entry, None) == ["fully-free"]
+    assert labels_for({}, {"labels": "oops"}) == []

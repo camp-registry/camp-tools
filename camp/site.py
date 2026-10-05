@@ -1538,21 +1538,35 @@ def _rel_time(iso: str, today: datetime.date) -> str:
     return f"{days // 365} yr ago"
 
 
-def _upstream_newest(metrics: dict) -> tuple[str, dict]:
-    """The upstream's newest version as the host reports it: ('release',
-    latest-release) or ('tag', latest-tag), whichever is newer by date
-    (camp-tools#59). A Release wins ties and undated comparisons, since it
-    is the maintainer's explicit act; a repository that only tags gets its
-    tag. ('', {}) when neither is recorded."""
+def _upstream_newest(metrics: dict, entry: dict | None = None) -> tuple[str, dict]:
+    """The upstream's newest version: ('release', latest-release) or
+    ('tag', latest-tag) as the host reports it, whichever is newer by date
+    (camp-tools#59); a Release wins ties and undated comparisons, since it
+    is the maintainer's explicit act, and a repository that only tags gets
+    its tag. With `entry`, the newest verified release record competes too
+    and wins when it is strictly newer, as ('record', {tag, date}): the
+    metrics are refreshed on a rolling schedule and can lag a release by
+    two weeks, while the record is the registry's own verified fact about
+    that tag (camp-tools#74). ('', {}) when nothing is recorded."""
     rel = metrics.get("latest-release") or {}
     tag = metrics.get("latest-tag") or {}
     if not rel.get("tag"):
-        return ("tag", tag) if tag.get("tag") else ("", {})
-    if not tag.get("tag"):
-        return ("release", rel)
-    if rel.get("date") and tag.get("date") and str(tag["date"]) > str(rel["date"]):
-        return ("tag", tag)
-    return ("release", rel)
+        kind, best = (("tag", tag) if tag.get("tag") else ("", {}))
+    elif not tag.get("tag"):
+        kind, best = ("release", rel)
+    elif rel.get("date") and tag.get("date") and str(tag["date"]) > str(rel["date"]):
+        kind, best = ("tag", tag)
+    else:
+        kind, best = ("release", rel)
+    record = None
+    for release in (entry or {}).get("releases") or []:
+        stamp = release.get("released") or release.get("published")
+        if release.get("tag") and stamp and (record is None or str(stamp) > str(record["date"])):
+            record = {"tag": str(release["tag"]), "date": str(stamp)}
+    if record and (not best.get("tag") or not best.get("date")
+                   or record["date"] > str(best["date"])):
+        return ("record", record)
+    return (kind, best)
 
 
 def _upstream_url(source: str, kind: str, tag: str) -> str:
@@ -1645,8 +1659,21 @@ LABEL_NAMES = {
 }
 
 
-def _cost_text(entry: dict) -> str:
-    labels = entry.get("labels", [])
+def labels_for(entry: dict, listing: dict | None = None) -> list:
+    """The disclosure labels the site shows (camp-tools#73): the released
+    listing manifest's when the plugin has one (the author's own file,
+    pinned by hash on the newest release record and schema-checked at
+    ingest against the same vocabulary), else the entry's copy made at
+    claim time. A manifest edit therefore reaches the page with the next
+    release, as AUTHORS.md says, without an entry pull request."""
+    declared = (listing or {}).get("labels")
+    if isinstance(declared, list) and declared and all(isinstance(x, str) for x in declared):
+        return list(declared)
+    return list(entry.get("labels") or [])
+
+
+def _cost_text(entry: dict, listing: dict | None = None) -> str:
+    labels = labels_for(entry, listing)
     for key in ("paid-service", "freemium"):
         if key in labels:
             return {"paid-service": "Paid service",
@@ -1756,7 +1783,7 @@ def plugins_dataset(entries: list[tuple[dict, dict]], base_url: str,
             "status": entry.get("status", "active"),
             "source": entry["source"],
             "license": entry.get("license"),
-            "labels": entry.get("labels") or [],
+            "labels": labels_for(entry, listing),
             "maintainers": entry.get("maintainers") or [],
             "security-contact": entry.get("security-contact"),
             "page": f"{base_url}/plugin/{component}.html",
@@ -2038,7 +2065,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
                "u": _last_activity(entry) or "",
                "r": _repo_host_code(entry.get("source", "")),
                "h": HEALTH_CODE.get(health[1], -1) if health else -1,
-               "l": entry.get("labels", []),
+               "l": labels_for(entry, listing),
                "m": (listing.get("summary") or entry.get("summary") or "").strip(),
                "n": f"{display} {maints}".strip().lower(),
                "a": vlo, "b": vhi}
@@ -2070,7 +2097,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
         latest = _newest_stable(entry)
         vlo, vhi = _range_indices(entry)
         health = _health(entry, today)
-        cost = _cost_text(entry)
+        cost = _cost_text(entry, listing)
 
         vpill = ""
         if tier >= 2 and latest:
@@ -2103,7 +2130,7 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
    data-group="{escape(plugintype)}" data-tier="{tier}"
    data-stars="{stars}" data-updated="{escape(updated)}"
    data-vlo="{vlo}" data-vhi="{vhi}"
-   data-labels="{escape(' '.join(entry.get('labels', [])))}">
+   data-labels="{escape(' '.join(labels_for(entry, listing)))}">
   <div class="row-main">
     <div class="row-line1"><span class="row-name">{escape(component)}</span>
       {_tier_badge(tier)}{vpill}</div>
@@ -2359,7 +2386,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     tier = entry["tier"]
     metrics = entry.get("metrics") or {}
     health = _health(entry, today)
-    upstream_kind, upstream = _upstream_newest(metrics)
+    upstream_kind, upstream = _upstream_newest(metrics, entry)
     check_doc = checks_mod.load(checks_dir, component)
 
     # Trust strip: the at-a-glance evaluation signals. The two trust
@@ -2399,7 +2426,7 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     # on their own row beneath the strip.
     label_pills = "".join(
         f'<span class="lbl-pill">{escape(LABEL_NAMES[lab])}</span>'
-        for lab in entry.get("labels") or [] if lab in LABEL_NAMES)
+        for lab in labels_for(entry, listing) if lab in LABEL_NAMES)
     labels_row = f'<div class="labels">{label_pills}</div>' if label_pills else ""
     license_id = entry.get("license", "")
     if license_id and not license_id.startswith(("GPL-", "AGPL-", "LGPL-")):
@@ -2781,12 +2808,19 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     if upstream.get("tag"):
         when = f' · {_fmt_date(upstream["date"])}' if upstream.get("date") else ""
         label = "Upstream release" if upstream_kind == "release" else "Upstream tag"
-        url = _upstream_url(entry["source"], upstream_kind, str(upstream["tag"]))
+        url = _upstream_url(entry["source"], "tag" if upstream_kind == "record" else upstream_kind,
+                            str(upstream["tag"]))
+        # The attribution is a fact about the source of the row: a
+        # host-reported tag is unverified; a tag the registry rebuilt and
+        # archived from its own release record is not (camp-tools#74).
+        attrib = ("verified and archived by the registry · newer than the "
+                  "source platform's last reported tag"
+                  if upstream_kind == "record" else
+                  "reported by the source platform · not verified or archived by the registry")
         upstream_row = (f'<div class="kvrow"><span class="fk">{label}</span>'
                         f'<span class="fv"><a class="mono" href="{escape(url)}">'
                         f'{escape(str(upstream["tag"]))}</a>{when}'
-                        '<div class="attrib" style="margin-top:6px">reported by the '
-                        'source platform · not verified or archived by the registry'
+                        f'<div class="attrib" style="margin-top:6px">{attrib}'
                         '</div></span></div>')
     if metrics.get("ci"):
         # an observed fact about the repo's own CI, not a registry claim

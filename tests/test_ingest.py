@@ -106,3 +106,23 @@ def test_ingest_fetches_ledger_commit_when_the_tag_moved(plugin_repo, entry_path
     assert result.ok, result.problems
     listing = yaml.safe_load((out / "mod_example.yml").read_text())
     assert listing["name"] == "Example Activity"
+
+
+def test_ingest_warns_when_listing_labels_differ_from_entry(plugin_repo, entry_path, tmp_path):
+    """camp-tools#73: label drift is reported, not blocked."""
+    (plugin_repo / ".camp" / "listing.yml").write_text(
+        "name: Example Activity\nsummary: s\nlabels: [fully-free, requires-core-patch]\n")
+    git(plugin_repo, "add", "-A")
+    git(plugin_repo, "commit", "-q", "-m", "label added")
+    git(plugin_repo, "tag", "-f", "v1.0.0")
+    from camp.build import resolve_tag, file_sha256_at_commit
+    entry = yaml.safe_load(entry_path.read_text())
+    commit = resolve_tag(str(plugin_repo), "v1.0.0")
+    entry["releases"][0]["commit"] = commit
+    entry["releases"][0]["listing-sha256"] = file_sha256_at_commit(str(plugin_repo), commit, ".camp/listing.yml")
+    entry["labels"] = ["fully-free"]
+    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+    out = tmp_path / "listings"
+    result = ingest_entry(entry_path, str(plugin_repo), out)
+    assert result.ok, result.problems
+    assert any("labels differ from the entry" in w for w in result.warnings), result.warnings

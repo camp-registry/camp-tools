@@ -127,6 +127,14 @@ def ingest_entry(entry_path: str | Path, source: str, out_dir: str | Path) -> In
     result.wrote.append(str(listing_out))
 
     listing = yaml.safe_load(raw)
+    # The site shows the released listing's labels over the entry's copy
+    # (camp-tools#73); say so when they differ, so the drift is visible in
+    # the publish log without blocking anything.
+    declared = listing.get("labels") if isinstance(listing, dict) else None
+    if isinstance(declared, list) and declared and sorted(map(str, declared)) != sorted(map(str, entry.get("labels") or [])):
+        result.warnings.append(
+            f"labels differ from the entry: listing {sorted(map(str, declared))}, "
+            f"entry {sorted(map(str, entry.get('labels') or []))}; the listing is shown")
     screenshots = listing.get("screenshots") or []
     if screenshots:
         try:
