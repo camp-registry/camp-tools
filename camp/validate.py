@@ -108,6 +108,11 @@ def validate_entry(path: str | Path) -> list[str]:
     hint = _claim_hint(entry, errors)
     if hint:
         problems.append(f"hint: {hint}")
+    if isinstance(entry, dict) and "metrics" in entry:
+        # Since camp-tools#70 train two the block has one home; the schema
+        # already rejects it, this says where it goes.
+        problems.append("hint: metrics live in metrics/<type>/<component>.yml, "
+                        "not in the entry; `camp migrate-metrics INDEX` moves the block")
     # The entry's metrics sidecar, when it has one (camp-tools#70): validated
     # with the entry so a broken sidecar surfaces wherever the entry does.
     if isinstance(entry.get("component"), str):

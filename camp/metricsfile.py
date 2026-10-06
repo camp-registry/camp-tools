@@ -9,11 +9,12 @@ first, and the author had to rebase by hand. The block now lives in
 `metrics/<type>/<component>.yml`, written only by the registry's jobs; the
 entry keeps what humans and the publisher write.
 
-Transition (train one): readers take the sidecar when it exists and fall
-back to the entry's block; every writer saves through `save_entry`, which
-moves the block out of any entry it touches, so the index migrates on its
-own from the first nightly run, and `migrate` finishes the rest in one
-commit. Train two drops the fallback and the entry schema's `metrics`.
+The move ran in two trains: train one read the sidecar with the entry's
+block as fallback while every writer saved through `save_entry`, which
+moves the block out of any entry it touches, and `migrate` finished the
+rest in one commit (camp-index 1273c051). Train two, this: the sidecar is
+the only location, the entry schema no longer has `metrics`, and a block
+left in an entry is a validation error with a pointer to `migrate-metrics`.
 """
 
 from __future__ import annotations
@@ -30,14 +31,14 @@ def path_for(index_dir: str | Path, component: str) -> Path:
 
 
 def load(index_dir: str | Path, entry: dict) -> dict:
-    """The metrics for `entry`: the sidecar when present, else the entry's
-    own block (transition), else {}. Never writes."""
+    """The metrics for `entry`: its sidecar when present, else {} (never
+    enriched). A block inside the entry is not read. Never writes."""
     path = path_for(index_dir, entry["component"])
-    if path.exists():
-        with open(path) as f:
-            data = yaml.safe_load(f)
-        return dict(data) if isinstance(data, dict) else {}
-    return dict(entry.get("metrics") or {})
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    return dict(data) if isinstance(data, dict) else {}
 
 
 def attach(index_dir: str | Path, entry: dict) -> dict:
@@ -96,8 +97,8 @@ def orphans(index_dir: str | Path) -> list[str]:
 
 
 def stray_blocks(index_dir: str | Path) -> list[str]:
-    """Entries still carrying a metrics block (what `migrate` has left to
-    move; after train two, a validation error)."""
+    """Entries carrying a metrics block: a validation error since train two,
+    and what `migrate` moves out."""
     found = []
     for path in sorted((Path(index_dir) / "plugins").glob("*/*.yml")):
         with open(path) as f:

@@ -18,12 +18,24 @@ def _index(tmp_path, metrics=True):
     return index, d / "mod_x.yml", entry
 
 
-def test_load_prefers_the_sidecar_and_falls_back_to_the_block(tmp_path):
+def test_load_reads_the_sidecar_only(tmp_path):
     index, path, entry = _index(tmp_path)
-    assert metricsfile.load(index, entry)["stars"] == 3          # block, no sidecar yet
+    assert metricsfile.load(index, entry) == {}                  # a block in the entry is not read
+    assert "metrics" not in metricsfile.attach(index, dict(entry))
     metricsfile.write(index, "mod_x", {"stars": 9, "checked": "2026-10-01"})
-    assert metricsfile.load(index, entry)["stars"] == 9          # sidecar wins
+    assert metricsfile.load(index, entry)["stars"] == 9
     assert metricsfile.load(index, {"component": "mod_none"}) == {}
+
+
+def test_validate_rejects_a_block_left_in_the_entry(tmp_path):
+    from camp.validate import validate_entry
+    index, path, entry = _index(tmp_path)
+    problems = validate_entry(path)
+    assert any("'metrics' was unexpected" in p for p in problems)
+    assert any("migrate-metrics" in p for p in problems)
+    assert metricsfile.stray_blocks(index) == ["mod_x"]
+    metricsfile.migrate(index, log=lambda *a: None)
+    assert validate_entry(path) == []
 
 
 def test_save_entry_moves_the_block_out(tmp_path):

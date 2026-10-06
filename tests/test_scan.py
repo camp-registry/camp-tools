@@ -387,14 +387,15 @@ def test_enrich_stale_days_rolling_refresh(tmp_path, monkeypatch):
     d.mkdir(parents=True)
     fresh = (_dt.date.today() - _dt.timedelta(days=2)).isoformat()
     stale = (_dt.date.today() - _dt.timedelta(days=40)).isoformat()
+    from camp import metricsfile
     for name, checked in (("mod_fresh", fresh), ("mod_stale", stale)):
-        (d / f"{name}.yml").write_text(_yaml.safe_dump({
+        metricsfile.save_entry(index, d / f"{name}.yml", {
             "component": name, "source": f"https://github.com/u/{name}",
             "maintainers": [{"github": "u"}], "tier": 0, "status": "active",
             "releases": [], "license": "GPL-3.0",
             "metrics": {"updated": "2026-01-01T00:00:00Z", "stars": 0,
                         "forks": 0, "open-issues": 0, "archived": False,
-                        "checked": checked}}, sort_keys=False))
+                        "checked": checked}})
 
     calls = []
 
@@ -604,7 +605,8 @@ def test_entry_records_dependencies(tmp_path):
     entry_dir = tmp_path / "plugins" / "mod"
     entry_dir.mkdir(parents=True)
     entry_path = entry_dir / "mod_x.yml"
-    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+    from camp import metricsfile
+    metricsfile.save_entry(tmp_path, entry_path, entry)   # scan writes through the sidecar
     assert validate_entry(entry_path) == []
 
 

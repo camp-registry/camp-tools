@@ -92,16 +92,19 @@ def test_upstream_url_per_host():
     assert _upstream_url("https://gitlab.com/g/p/", "tag", "v1/2") == "https://gitlab.com/g/p/-/tags/v1%2F2"
 
 
-def test_entry_with_latest_tag_validates(tmp_path):
+def test_sidecar_with_latest_tag_validates(tmp_path):
+    from camp import metricsfile
+    from camp.validate import validate_metrics
     path = tmp_path / "plugins" / "local" / "local_x.yml"
     path.parent.mkdir(parents=True)
-    path.write_text(yaml.safe_dump({
+    metricsfile.save_entry(tmp_path, path, {
         "component": "local_x", "source": "https://github.com/h/moodle-local_x",
         "maintainers": [{"github": "h"}], "tier": 0, "releases": [],
         "metrics": {"stars": 0, "forks": 0, "open-issues": 0, "archived": False,
                     "latest-tag": {"tag": "v1.0", "date": "2026-09-01T00:00:00Z"},
-                    "checked": "2026-09-30"}}, sort_keys=False))
+                    "checked": "2026-09-30"}})
     assert validate_entry(path) == []
+    assert validate_metrics(metricsfile.path_for(tmp_path, "local_x")) == []
 
 
 def test_upstream_newest_lets_a_newer_release_record_win():

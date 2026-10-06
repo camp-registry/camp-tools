@@ -11,9 +11,13 @@ from camp.validate import validate_entry
 
 
 def _mutate(entry_path, fn):
-    entry = yaml.safe_load(entry_path.read_text())
+    """Edit the entry as one document, metrics included: the block is read
+    from and written back to the sidecar (camp-tools#70)."""
+    from camp import metricsfile
+    index_dir = entry_path.parent.parent.parent
+    entry = metricsfile.attach(index_dir, yaml.safe_load(entry_path.read_text()))
     fn(entry)
-    entry_path.write_text(yaml.safe_dump(entry, sort_keys=False))
+    metricsfile.save_entry(index_dir, entry_path, entry)
     return entry
 
 

@@ -23,7 +23,8 @@ def _entry(index, plugintype, name, *, checked=None, tier=0, summary="x",
                             "forks": 0, "open-issues": 0, "archived": False,
                             "checked": checked}
     path = d / f"{name}.yml"
-    path.write_text(yaml.safe_dump(entry, sort_keys=False))
+    from camp import metricsfile
+    metricsfile.save_entry(index, path, entry)     # the block lands in the sidecar
     return path
 
 
