@@ -691,8 +691,12 @@ def test_release_counts_as_activity_for_health_and_updated(index_dir, entry_path
     import datetime
     import json
     from camp.site import generate as site_generate
-    recent = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=5)
-              ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # noon of the local date five days back: the page counts whole days
+    # against the local date, so a UTC "now" minus five days read 4 d ago
+    # for a few hours after midnight UTC
+    recent = datetime.datetime.combine(
+        datetime.date.today() - datetime.timedelta(days=5), datetime.time(12, 0)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
     stale = "2024-01-01T00:00:00Z"
 
     def mutate(e):

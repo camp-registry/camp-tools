@@ -82,7 +82,8 @@ def test_refresh_metrics_updates_entry(tmp_path, monkeypatch):
     assert failed == []
     entry = yaml.safe_load(
         (tmp_path / "plugins" / "local" / "local_x.yml").read_text())
-    assert entry["metrics"]["stars"] == 40
+    from camp import metricsfile
+    assert metricsfile.load(tmp_path, entry)["stars"] == 40
     assert entry["tier"] == 1  # everything else untouched
 
 
@@ -102,7 +103,8 @@ def test_refresh_metrics_rename_semantics_match_enrich(tmp_path, monkeypatch):
         (tmp_path / "plugins" / "mod" / "mod_one.yml").read_text())
     assert zero["source"] == "https://github.com/new/home"          # tier 0
     assert one["source"].endswith("o/moodle-mod_one")               # claimed
-    assert one["metrics"]["renamed-to"] == "https://github.com/new/home"
+    from camp import metricsfile
+    assert metricsfile.load(tmp_path, one)["renamed-to"] == "https://github.com/new/home"
 
 
 def test_refresh_metrics_reports_failures(tmp_path, monkeypatch):

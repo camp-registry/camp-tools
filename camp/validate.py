@@ -108,6 +108,14 @@ def validate_entry(path: str | Path) -> list[str]:
     hint = _claim_hint(entry, errors)
     if hint:
         problems.append(f"hint: {hint}")
+    # The entry's metrics sidecar, when it has one (camp-tools#70): validated
+    # with the entry so a broken sidecar surfaces wherever the entry does.
+    if isinstance(entry.get("component"), str):
+        sidecar = (Path(path).resolve().parent.parent.parent / "metrics"
+                   / entry["component"].partition("_")[0] / f"{entry['component']}.yml")
+        if sidecar.exists():
+            problems.extend(f"metrics sidecar: {p}" for p in validate_metrics(sidecar)
+                            if not p.startswith("orphan"))
 
     if problems:
         return problems
@@ -133,6 +141,32 @@ def validate_entry(path: str | Path) -> list[str]:
     if published != sorted(published):
         problems.append("release ledger is not in chronological order of publication")
 
+    return problems
+
+
+def validate_metrics(path: str | Path) -> list[str]:
+    """A metrics sidecar (metrics/<type>/<component>.yml, camp-tools#70):
+    the metrics schema, and an entry it belongs to (an orphan sidecar would
+    keep serving signals for a removed listing)."""
+    import jsonschema
+    path = Path(path)
+    try:
+        with open(path) as f:
+            doc = yaml.safe_load(f)
+    except Exception as exc:
+        return [f"unreadable: {exc}"]
+    if not isinstance(doc, dict):
+        return ["not a mapping"]
+    validator = jsonschema.Draft202012Validator(_schema("metrics.schema.json"))
+    problems = []
+    for error in sorted(validator.iter_errors(doc), key=str):
+        location = "/".join(str(x) for x in error.absolute_path) or "(root)"
+        problems.append(f"{location}: {_describe(error)}")
+    component = path.stem
+    index_dir = path.resolve().parent.parent.parent
+    entry_path = index_dir / "plugins" / component.partition("_")[0] / f"{component}.yml"
+    if not entry_path.exists():
+        problems.append(f"orphan: no entry plugins/{component.partition('_')[0]}/{component}.yml for this sidecar")
     return problems
 
 

@@ -37,6 +37,7 @@ from pathlib import Path
 import yaml
 
 from . import apptoken, directorymap, plugintypes, standardplugins, versionphp
+from . import metricsfile
 from .moodleversions import BRANCHES
 
 USER_AGENT = "camp-seeding-scanner/0.1 (community Moodle plugin repository)"
@@ -1285,9 +1286,7 @@ def fill_repo_ids(index_dir: str | Path, components: list[str] | None = None,
             log(f"  ! {component}: repo id fetch failed ({status})")
             failed.append(component)
             continue
-        with open(path, "w") as f:
-            yaml.safe_dump(_with_repo_id(entry, repo_id), f, sort_keys=False,
-                           allow_unicode=True)
+        metricsfile.save_entry(index, path, _with_repo_id(entry, repo_id))
         log(f"  {component}: source-repo-id {repo_id} ({entry['source']})")
     return failed
 
@@ -1419,7 +1418,7 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
     candidates: list[tuple[str, Path]] = []
     for path in sorted((Path(index_dir) / "plugins").glob("*/*.yml")):
         with open(path) as f:
-            entry = yaml.safe_load(f)
+            entry = metricsfile.attach(index_dir, yaml.safe_load(f))
         if entry.get("status", "active") == "delisted":
             continue
         metrics_checked = (entry.get("metrics") or {}).get("checked", "")
@@ -1435,7 +1434,7 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
 
     for _, path in candidates:
         with open(path) as f:
-            entry = yaml.safe_load(f)
+            entry = metricsfile.attach(index_dir, yaml.safe_load(f))
         changed = False
 
         status, metrics, canonical = _fetch_metrics(
@@ -1471,8 +1470,7 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
             stats[status] += 1
             log(f"  {status}: {entry['source']}")
             entry.setdefault("metrics", {})["checked"] = today
-            with open(path, "w") as f:
-                yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
+            metricsfile.save_entry(index_dir, path, entry)
             continue
         else:
             stats["error"] += 1
@@ -1515,8 +1513,7 @@ def enrich(index_dir: str | Path, token: str | None = None, limit: int | None = 
                     changed = True
 
         if changed:
-            with open(path, "w") as f:
-                yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
+            metricsfile.save_entry(index_dir, path, entry)
             if (stats["metrics"] + stats["summary"]) % 250 == 0:
                 log(f"  … {stats['metrics']} metrics, {stats['summary']} summaries")
 
@@ -1705,10 +1702,9 @@ def recheck_noassertion(index_dir: str | Path, token: str | None = None,
 
         if not dry_run:
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(out_path, "w") as f:
-                yaml.safe_dump(_entry_for(candidate, component, today,
-                                          version_text=_version_text), f,
-                               sort_keys=False, allow_unicode=True)
+            metricsfile.save_entry(index, out_path,
+                                   _entry_for(candidate, component, today,
+                                              version_text=_version_text))
         record_outcome(ledger, candidate, "written",
                        f"listed as {component}; license {spdx} classified from text", today)
         results.append(ScanResult(candidate, "written", component))
@@ -1835,7 +1831,7 @@ def refresh_metrics(index_dir: str | Path, components: list[str],
             failed.append(component)
             continue
         with open(path) as f:
-            entry = yaml.safe_load(f) or {}
+            entry = metricsfile.attach(index_dir, yaml.safe_load(f) or {})
         status, metrics, canonical = _fetch_metrics(
             entry["source"], token, today, log)
         if status != "ok":
@@ -1864,8 +1860,7 @@ def refresh_metrics(index_dir: str | Path, components: list[str],
                 log(f"  {component}: source-repo-id -> {repo_id}")
             elif id_status != "ok":
                 log(f"  {component}: source-repo-id not refreshed ({id_status})")
-        with open(path, "w") as f:
-            yaml.safe_dump(entry, f, sort_keys=False, allow_unicode=True)
+        metricsfile.save_entry(index_dir, path, entry)
         log(f"  refreshed {component} from {entry['source']}")
     return failed
 
@@ -1932,6 +1927,7 @@ def opt_out(index_dir: str | Path, components: list[str], reason: str = "",
             "last-checked": today,
         }
         path.unlink()
+        metricsfile.remove(index, component)   # the sidecar goes with the listing (camp-tools#70)
         log(f"  - {component}  ({repo_key}, opted out)")
 
         # Copy-record sweep (theme_dennis lesson, camp-index#171): other
@@ -2234,10 +2230,9 @@ def scan_gitlab(index_dir: str | Path, terms: list[str] | None = None, limit: in
 
             if not dry_run:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(out_path, "w") as f:
-                    yaml.safe_dump(_entry_for(candidate, component, today,
-                                              version_text=version_text), f,
-                                   sort_keys=False, allow_unicode=True)
+                metricsfile.save_entry(index, out_path,
+                                       _entry_for(candidate, component, today,
+                                                  version_text=version_text))
             record_outcome(ledger, candidate, "written", f"listed as {component}", today)
             seen_components.add(component)
             results.append(ScanResult(candidate, "written", component))
@@ -2369,10 +2364,9 @@ def scan(index_dir: str | Path, queries: list[str] | None = None, limit: int = 3
 
             if not dry_run:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(out_path, "w") as f:
-                    yaml.safe_dump(_entry_for(candidate, component, today,
-                                              version_text=version_text), f,
-                                   sort_keys=False, allow_unicode=True)
+                metricsfile.save_entry(index, out_path,
+                                       _entry_for(candidate, component, today,
+                                                  version_text=version_text))
             record_outcome(ledger, candidate, "written", f"listed as {component}", today)
             seen_components.add(component)
             results.append(ScanResult(candidate, "written", component))

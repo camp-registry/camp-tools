@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://camp-registry.org/schema/metrics.schema.json",
+  "title": "camp registry metrics sidecar",
+  "description": "Upstream repository activity signals for one listed plugin, kept in metrics/<type>/<component>.yml beside its entry and written only by the registry's scheduled jobs (camp-index#522). Advisory data with a `checked` date; not a registry assertion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "checked"
+  ],
+  "properties": {
+    "updated": {
+      "description": "Upstream last-activity timestamp (GitHub pushed_at / GitLab last_activity_at). The maintenance-liveness signal.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "stars": {
+      "description": "Stargazers (GitHub) / stars (GitLab). Popularity proxy.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "forks": {
+      "description": "Fork count. Secondary popularity signal.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "open-issues": {
+      "description": "Open issues (on GitHub this also counts open pull requests, per the API).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "archived": {
+      "description": "True when the maintainer has archived the source repository (upstream is frozen/dead).",
+      "type": "boolean"
+    },
+    "ci": {
+      "description": "The repository's own CI runs this tool, detected from its workflow files (.github/workflows on GitHub, .gitlab-ci.yml on GitLab). An observed fact about the repository, not an author claim and not a registry assertion about the results; fetched for tier 1+ entries by `camp enrich`.",
+      "enum": [
+        "moodle-plugin-ci"
+      ]
+    },
+    "checked": {
+      "description": "Date these metrics were last fetched from the source platform.",
+      "type": "string",
+      "format": "date"
+    },
+    "latest-release": {
+      "description": "Upstream's newest published release (GitHub releases / GitLab releases), refreshed by `camp enrich`. Advisory display data \u2014 distinct from the registry's own verified release ledger.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tag"
+      ],
+      "properties": {
+        "tag": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "latest-tag": {
+      "description": "Upstream's newest git tag by commit date (github.com sources, one GraphQL query), refreshed by `camp enrich`. Distinct from latest-release: many maintainers only tag, and a Release can trail the tags by years. Advisory display data, not a registry assertion (camp-tools#59).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tag"
+      ],
+      "properties": {
+        "tag": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

@@ -61,9 +61,10 @@ def test_enrich_refreshes_stalest_first_regardless_of_path_order(tmp_path, monke
     assert stats["metrics"] == 2
     repos = [u.rsplit("/", 1)[1] for u in calls if "releases" not in u]
     assert repos == ["mod_never", "theme_late"]        # never-checked first, then oldest
-    doc = yaml.safe_load(late.read_text())
-    assert doc["metrics"]["archived"] is True
-    assert doc["metrics"]["checked"] == datetime.date.today().isoformat()
+    from camp import metricsfile
+    doc = metricsfile.load(index, yaml.safe_load(late.read_text()))
+    assert doc["archived"] is True
+    assert doc["checked"] == datetime.date.today().isoformat()
 
 
 def test_enrich_gone_and_unsupported_repos_rotate_out_of_the_queue(tmp_path, monkeypatch):
@@ -79,9 +80,10 @@ def test_enrich_gone_and_unsupported_repos_rotate_out_of_the_queue(tmp_path, mon
 
     assert stats["gone"] == 1 and stats["unsupported"] == 1 and stats["metrics"] == 0
     for path in (gone, bb):
-        doc = yaml.safe_load(path.read_text())
-        assert doc["metrics"]["checked"] == datetime.date.today().isoformat()
-        assert doc["metrics"]["stars"] == 1              # old data kept, only the stamp moves
+        from camp import metricsfile
+        doc = metricsfile.load(index, yaml.safe_load(path.read_text()))
+        assert doc["checked"] == datetime.date.today().isoformat()
+        assert doc["stars"] == 1              # old data kept, only the stamp moves
 
     # Second run the same day: both are fresh now and cost no request.
     calls.clear()

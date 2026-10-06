@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://camp-registry.org/schema/index-entry.schema.json",
   "title": "camp index entry",
-  "description": "One plugin's authoritative record in the camp index (RFC §4.1). Descriptive listing content lives in the plugin repo (.camp/listing.yml); this file holds only what the registry itself asserts or arbitrates: name ownership, tier, and the append-only release ledger.",
+  "description": "One plugin's authoritative record in the camp index (RFC \u00a74.1). Descriptive listing content lives in the plugin repo (.camp/listing.yml); this file holds only what the registry itself asserts or arbitrates: name ownership, tier, and the append-only release ledger.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,7 +14,7 @@
   ],
   "properties": {
     "component": {
-      "description": "Frankenstyle component name; the registry is the arbiter of this mapping (RFC §8).",
+      "description": "Frankenstyle component name; the registry is the arbiter of this mapping (RFC \u00a78).",
       "type": "string",
       "pattern": "^[a-z][a-z0-9]*_[a-z][a-z0-9_]*$"
     },
@@ -76,13 +76,13 @@
       }
     },
     "security-contact": {
-      "description": "Email address or private vulnerability-reporting URL (RFC §5.1); placeholders like 'none' are not a contact. Preference is the source platform's private reporting channel.",
+      "description": "Email address or private vulnerability-reporting URL (RFC \u00a75.1); placeholders like 'none' are not a contact. Preference is the source platform's private reporting channel.",
       "type": "string",
       "minLength": 3,
       "pattern": "^(https?://\\S+|[^@\\s]+@[^@\\s]+\\.[^@\\s]+)$"
     },
     "tier": {
-      "description": "Trust tier (RFC §4.4). 0 = discovered (metadata only), 1 = claimed (author accountable, no verified releases yet), 2 = source-verified, 3 = human-reviewed. Releases may only be listed from tier 2 up.",
+      "description": "Trust tier (RFC \u00a74.4). 0 = discovered (metadata only), 1 = claimed (author accountable, no verified releases yet), 2 = source-verified, 3 = human-reviewed. Releases may only be listed from tier 2 up.",
       "type": "integer",
       "enum": [
         0,
@@ -92,7 +92,7 @@
       ]
     },
     "labels": {
-      "description": "Disclosure labels (RFC §4.7), mirrored from the listing manifest at the latest release and validated by CI heuristics / Tier 3 review.",
+      "description": "Disclosure labels (RFC \u00a74.7), mirrored from the listing manifest at the latest release and validated by CI heuristics / Tier 3 review.",
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
@@ -120,7 +120,7 @@
       "default": "active"
     },
     "moved-to": {
-      "description": "Where the plugin now publishes (a URL, or a Composer package name): the successor pointer for status 'moved' (RFC §6.3), surfaced by clients and emitted as Composer's 'abandoned' replacement so composer warns natively.",
+      "description": "Where the plugin now publishes (a URL, or a Composer package name): the successor pointer for status 'moved' (RFC \u00a76.3), surfaced by clients and emitted as Composer's 'abandoned' replacement so composer warns natively.",
       "type": "string",
       "minLength": 3
     },
@@ -135,11 +135,11 @@
       "format": "date"
     },
     "dependencies": {
-      "description": "Inter-plugin dependencies observed from $plugin->dependencies in version.php on the default branch, written at scan time (Tier 0) or by the `camp enrich` cycle for entries whose newest release record predates the per-release field. Registry-observed data, like supported-moodle — not author-declared listing content. A release record's own dependencies block, observed at the pinned commit, is the authoritative form when present.",
+      "description": "Inter-plugin dependencies observed from $plugin->dependencies in version.php on the default branch, written at scan time (Tier 0) or by the `camp enrich` cycle for entries whose newest release record predates the per-release field. Registry-observed data, like supported-moodle \u2014 not author-declared listing content. A release record's own dependencies block, observed at the pinned commit, is the authoritative form when present.",
       "$ref": "#/$defs/dependencies"
     },
     "metrics": {
-      "description": "Upstream repository activity signals, refreshed periodically by `camp enrich` from the source platform's API (GitHub/GitLab). Advisory only — they help prioritize which discovered plugins to verify next; they are not registry assertions and carry a `checked` date so consumers can judge freshness.",
+      "description": "Upstream repository activity signals, refreshed periodically by `camp enrich` from the source platform's API (GitHub/GitLab). Advisory only \u2014 they help prioritize which discovered plugins to verify next; they are not registry assertions and carry a `checked` date so consumers can judge freshness. Since camp-tools#70 the block lives in the metrics/<type>/<component>.yml sidecar beside the entry; it is accepted here during the transition and read as a fallback when no sidecar exists.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -172,7 +172,9 @@
         },
         "ci": {
           "description": "The repository's own CI runs this tool, detected from its workflow files (.github/workflows on GitHub, .gitlab-ci.yml on GitLab). An observed fact about the repository, not an author claim and not a registry assertion about the results; fetched for tier 1+ entries by `camp enrich`.",
-          "enum": ["moodle-plugin-ci"]
+          "enum": [
+            "moodle-plugin-ci"
+          ]
         },
         "checked": {
           "description": "Date these metrics were last fetched from the source platform.",
@@ -180,7 +182,7 @@
           "format": "date"
         },
         "latest-release": {
-          "description": "Upstream's newest published release (GitHub releases / GitLab releases), refreshed by `camp enrich`. Advisory display data — distinct from the registry's own verified release ledger.",
+          "description": "Upstream's newest published release (GitHub releases / GitLab releases), refreshed by `camp enrich`. Advisory display data \u2014 distinct from the registry's own verified release ledger.",
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -200,10 +202,17 @@
           "description": "Upstream's newest git tag by commit date (github.com sources, one GraphQL query), refreshed by `camp enrich`. Distinct from latest-release: many maintainers only tag, and a Release can trail the tags by years. Advisory display data, not a registry assertion (camp-tools#59).",
           "type": "object",
           "additionalProperties": false,
-          "required": ["tag"],
+          "required": [
+            "tag"
+          ],
           "properties": {
-            "tag": {"type": "string"},
-            "date": {"type": "string", "format": "date-time"}
+            "tag": {
+              "type": "string"
+            },
+            "date": {
+              "type": "string",
+              "format": "date-time"
+            }
           }
         }
       }
@@ -214,7 +223,7 @@
       "maxLength": 40
     },
     "releases": {
-      "description": "Append-only release ledger (RFC §4.2). Entries are never modified or removed once merged; CI enforces this on every pull request. Revocation is expressed by a signed advisory (RFC §5.3), not by editing history.",
+      "description": "Append-only release ledger (RFC \u00a74.2). Entries are never modified or removed once merged; CI enforces this on every pull request. Revocation is expressed by a signed advisory (RFC \u00a75.3), not by editing history.",
       "type": "array",
       "items": {
         "type": "object",
@@ -238,7 +247,7 @@
             "type": "string"
           },
           "commit": {
-            "description": "Commit the tag pointed to at publication. If the tag later moves, verification fails and the maintainer is alerted (RFC §4.2).",
+            "description": "Commit the tag pointed to at publication. If the tag later moves, verification fails and the maintainer is alerted (RFC \u00a74.2).",
             "type": "string",
             "pattern": "^[0-9a-f]{40}$"
           },
@@ -269,7 +278,12 @@
           "maturity": {
             "description": "$plugin->maturity at the tagged commit (camp-tools#67): alpha, beta, rc or stable. Absent when version.php did not declare one, which every consumer reads as stable. Pre-releases get a Composer stability suffix in packages.json and are shown only on opt-in.",
             "type": "string",
-            "enum": ["alpha", "beta", "rc", "stable"]
+            "enum": [
+              "alpha",
+              "beta",
+              "rc",
+              "stable"
+            ]
           },
           "php-min": {
             "description": "$plugin->php at the tagged commit, if declared.",
@@ -286,17 +300,17 @@
             "pattern": "^[0-9a-f]{64}$"
           },
           "listing-sha256": {
-            "description": "SHA-256 of .camp/listing.yml at the tagged commit, pinning the descriptive listing at release (RFC §4.1). Absent when the repo has no manifest yet.",
+            "description": "SHA-256 of .camp/listing.yml at the tagged commit, pinning the descriptive listing at release (RFC \u00a74.1). Absent when the repo has no manifest yet.",
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
           },
           "published": {
-            "description": "UTC timestamp the release was merged into the index. Basis for cooldown policies (RFC §4.4).",
+            "description": "UTC timestamp the release was merged into the index. Basis for cooldown policies (RFC \u00a74.4).",
             "type": "string",
             "format": "date-time"
           },
           "released": {
-            "description": "UTC timestamp the maintainer released this version — the committer date of the tagged commit. This is the user-facing \"last updated\" date; distinct from `published`, which is when CAMP merged it into the index. Absent on entries recorded before this field existed; consumers fall back to `published`.",
+            "description": "UTC timestamp the maintainer released this version \u2014 the committer date of the tagged commit. This is the user-facing \"last updated\" date; distinct from `published`, which is when CAMP merged it into the index. Absent on entries recorded before this field existed; consumers fall back to `published`.",
             "type": "string",
             "format": "date-time"
           }
@@ -344,7 +358,7 @@
       }
     },
     {
-      "description": "From Tier 1 up (claimed listings), the author must declare disclosure labels and a security contact (RFC §4.7, §5.1). Tier 0 discovered listings have neither yet.",
+      "description": "From Tier 1 up (claimed listings), the author must declare disclosure labels and a security contact (RFC \u00a74.7, \u00a75.1). Tier 0 discovered listings have neither yet.",
       "if": {
         "properties": {
           "tier": {

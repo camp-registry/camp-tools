@@ -367,10 +367,11 @@ def test_enrich_detects_renamed_repos(tmp_path, monkeypatch):
     assert stats["renamed"] == 1 and stats["flagged-renames"] == 1
     zero = _yaml.safe_load((index / "plugins" / "mod" / "mod_zero.yml").read_text())
     assert zero["source"] == "https://github.com/newuser/mod_zero"
-    assert "renamed-to" not in (zero.get("metrics") or {})
+    from camp import metricsfile
+    assert "renamed-to" not in metricsfile.load(index, zero)
     claimed = _yaml.safe_load((index / "plugins" / "mod" / "mod_claimed.yml").read_text())
     assert claimed["source"] == "https://github.com/olduser/mod_claimed"
-    assert claimed["metrics"]["renamed-to"] == "https://github.com/newuser/mod_claimed"
+    assert metricsfile.load(index, claimed)["renamed-to"] == "https://github.com/newuser/mod_claimed"
 
 
 def test_enrich_stale_days_rolling_refresh(tmp_path, monkeypatch):
@@ -412,8 +413,9 @@ def test_enrich_stale_days_rolling_refresh(tmp_path, monkeypatch):
                             log=lambda *a: None)
     assert stats["metrics"] == 1                       # only the stale one
     assert all("mod_stale" in u for u in calls)
+    from camp import metricsfile
     doc = _yaml.safe_load((d / "mod_stale.yml").read_text())
-    assert doc["metrics"]["stars"] == 5
+    assert metricsfile.load(index, doc)["stars"] == 5
 
 
 def _repoid_index(tmp_path, entries):
@@ -1182,8 +1184,9 @@ def test_refresh_metrics_records_ci_for_claimed_only(tmp_path, monkeypatch):
     assert failed == []
     claimed = yaml.safe_load((d / "mod_claimed.yml").read_text())
     discovered = yaml.safe_load((d / "mod_discovered.yml").read_text())
-    assert claimed["metrics"]["ci"] == "moodle-plugin-ci"
-    assert "ci" not in discovered["metrics"]
+    from camp import metricsfile
+    assert metricsfile.load(index, claimed)["ci"] == "moodle-plugin-ci"
+    assert "ci" not in metricsfile.load(index, discovered)
     assert calls == ["https://github.com/o/moodle-mod_claimed"]
 
 

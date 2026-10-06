@@ -40,6 +40,7 @@ from . import reviews as reviews_mod
 from .reviews import PLUGIN_URL_PREFIX as MDLSHIELD_PLUGIN_URL
 from .composer import _package_name
 from . import plugintypes, standardplugins
+from . import metricsfile
 from .validate import load_entry
 
 TIER_NAMES = {
@@ -3649,7 +3650,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
 
     entries: list[tuple[dict, dict]] = []
     for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
-        entry = load_entry(entry_path)
+        entry = metricsfile.attach(index_dir, load_entry(entry_path))
         # 'moved' listings keep their pages (with a successor notice);
         # only 'delisted' disappears from the generated site.
         if entry.get("status", "active") == "delisted":

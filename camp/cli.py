@@ -27,7 +27,7 @@ from . import build as build_mod
 from . import composer as composer_mod
 from . import versionphp
 from .validate import (load_entry, validate_entry, validate_listing,
-                       validate_listing_bytes, validate_utility)
+                       validate_listing_bytes, validate_metrics, validate_utility)
 from .verify import verify_entry
 
 
@@ -38,6 +38,8 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         # invariants (camp-docs#4); everything else is a plugin entry.
         if Path(path).resolve().parent.name == "utilities":
             problems = validate_utility(path)
+        elif Path(path).resolve().parent.parent.name == "metrics":
+            problems = validate_metrics(path)
         else:
             problems = validate_entry(path)
         if problems:
@@ -964,6 +966,20 @@ def _cmd_refresh_metrics(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _cmd_migrate_metrics(args: argparse.Namespace) -> int:
+    from . import metricsfile
+    stats = metricsfile.migrate(args.index_dir, dry_run=args.dry_run)
+    orphans = metricsfile.orphans(args.index_dir)
+    for component in orphans:
+        print(f"  ! orphan sidecar: {component} (no entry)", file=sys.stderr)
+    if args.check:
+        stray = metricsfile.stray_blocks(args.index_dir)
+        for component in stray:
+            print(f"  ! entry still carries a metrics block: {component}", file=sys.stderr)
+        return 1 if (orphans or stray) else 0
+    return 0
+
+
 def _cmd_opt_out(args: argparse.Namespace) -> int:
     from .scan import opt_out
     failed = opt_out(args.index_dir, args.components, reason=args.reason)
@@ -1525,6 +1541,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="components to (re-)resolve, overwriting — the "
                         "source-repoint case; omit for the backfill sweep")
     p.set_defaults(func=_cmd_fill_repo_ids)
+
+    p = sub.add_parser("migrate-metrics",
+                       help="move entries' metrics blocks into metrics/<type>/<component>.yml sidecars (camp-tools#70)")
+    p.add_argument("index_dir")
+    p.add_argument("--dry-run", action="store_true", help="count only; write nothing")
+    p.add_argument("--check", action="store_true",
+                   help="exit 1 when any entry still carries a block or any sidecar has no entry")
+    p.set_defaults(func=_cmd_migrate_metrics)
 
     p = sub.add_parser("opt-out",
                        help="remove discovered Tier 0 listings at maintainer "
