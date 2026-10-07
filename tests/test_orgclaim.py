@@ -112,6 +112,8 @@ def test_dry_run_writes_nothing(tmp_path):
     ("security-contact: ''\n", "security-contact"),
     ("labels: [made-up-label]\n", "labels"),
     ("overrides:\n  x:\n    labels: [nope]\n", "labels"),
+    ("overrides:\n  x:\n    maintainers: []\n", "x maintainers"),
+    ("overrides:\n  x:\n    maintainers: [{github: ''}]\n", "x maintainers"),
 ])
 def test_manifest_validation(mutation, message):
     base = yaml.safe_load(MANIFEST)
@@ -188,3 +190,28 @@ def test_load_enrolled(tmp_path):
     (d / "org-claims.yml").write_text(
         "orgs:\n  catalyst:\n    enrolled: '2026-08-17'\n    issue: 230\n")
     assert load_enrolled(tmp_path) == ["catalyst"]
+
+
+def test_maintainers_override_per_component(tmp_path):
+    """One plugin can list an extra maintainer the manifest's default lacks
+    (camp-index#530: format_vsf keeps its co-maintainer under the org
+    claim), on the first claim and on every re-sweep."""
+    doc = yaml.safe_load(MANIFEST)
+    doc["overrides"]["format_shared"] = {"maintainers": [
+        {"github": "brendanheywood"}, {"github": "outsider", "name": "Out Sider"}]}
+    manifest = yaml.safe_dump(doc)
+    fetch = lambda org, repo: manifest.encode()
+    _write_entry(tmp_path, "format_shared")
+    _write_entry(tmp_path, "local_plain")
+    report = org_claim(tmp_path, "catalyst", fetch=fetch)
+    assert sorted(report.claimed) == ["format_shared", "local_plain"]
+    shared = yaml.safe_load((tmp_path / "plugins/format/format_shared.yml").read_text())
+    plain = yaml.safe_load((tmp_path / "plugins/local/local_plain.yml").read_text())
+    assert shared["maintainers"] == [{"github": "brendanheywood"},
+                                     {"github": "outsider", "name": "Out Sider"}]
+    assert shared["labels"] == ["fully-free"]            # labels override independent
+    assert plain["maintainers"] == [{"github": "brendanheywood"}, {"github": "keevan"}]
+    # The watch keeps the override: a re-sweep leaves the extra maintainer in place.
+    assert org_claim(tmp_path, "catalyst", fetch=fetch).updated == []
+    assert yaml.safe_load((tmp_path / "plugins/format/format_shared.yml").read_text(
+        ))["maintainers"][1]["github"] == "outsider"

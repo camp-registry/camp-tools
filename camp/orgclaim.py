@@ -28,7 +28,7 @@ Manifest format::
       - github: someone
     security-contact: https://github.com/org/repo/security   # required
     labels: [fully-free]    # required default, schema vocabulary
-    overrides:              # optional, per-component
+    overrides:              # optional, per-component (labels, maintainers)
       local_example:
         labels: [external-account, paid-service]
     exclude: [local_other]  # optional, components the org does not claim
@@ -109,13 +109,14 @@ def parse_manifest(raw: bytes) -> dict:
         raise ManifestError(f"manifest is not valid YAML: {exc}") from exc
     if not isinstance(manifest, dict):
         raise ManifestError("manifest must be a YAML mapping")
-    maintainers = manifest.get("maintainers")
-    if (not isinstance(maintainers, list) or not maintainers or
-            not all(isinstance(m, dict) and
-                    isinstance(m.get("github"), str) and m["github"].strip()
-                    for m in maintainers)):
-        raise ManifestError(
-            "maintainers must be a non-empty list of {github: account} items")
+    def check_maintainers(maintainers, where):
+        if (not isinstance(maintainers, list) or not maintainers or
+                not all(isinstance(m, dict) and
+                        isinstance(m.get("github"), str) and m["github"].strip()
+                        for m in maintainers)):
+            raise ManifestError(
+                f"{where} maintainers must be a non-empty list of {{github: account}} items")
+    check_maintainers(manifest.get("maintainers"), "default")
     contact = manifest.get("security-contact")
     if not isinstance(contact, str) or not contact.strip():
         raise ManifestError("security-contact is required")
@@ -134,6 +135,8 @@ def parse_manifest(raw: bytes) -> dict:
             raise ManifestError(f"override for {component} must be a mapping")
         if "labels" in settings:
             check_labels(settings["labels"], component)
+        if "maintainers" in settings:
+            check_maintainers(settings["maintainers"], component)
     exclude = manifest.get("exclude") or []
     if not isinstance(exclude, list) or not all(isinstance(c, str) for c in exclude):
         raise ManifestError("exclude must be a list of component names")
@@ -179,11 +182,11 @@ def org_claim(index_dir: str | Path, org: str, manifest_repo: str = MANIFEST_REP
         if entry.get("status", "active") != "active":
             report.skipped.append(component)
             continue
+        override = overrides.get(component, {})
         desired = {
-            "maintainers": [dict(m) for m in manifest["maintainers"]],
+            "maintainers": [dict(m) for m in override.get("maintainers", manifest["maintainers"])],
             "security-contact": manifest["security-contact"],
-            "labels": list(
-                overrides.get(component, {}).get("labels", manifest["labels"])),
+            "labels": list(override.get("labels", manifest["labels"])),
         }
         if entry.get("tier", 0) >= 1:
             if not stamped:
