@@ -51,14 +51,21 @@ def test_checks_stale_commit_not_fully_reused(index_dir, entry_path, tmp_path):
             _entry(entry_path)["releases"][0]["commit"]
 
 
-def test_checks_bumped_checker_invalidates_prior(index_dir, entry_path, tmp_path):
+def test_checks_stale_facet_is_served_by_publish_and_owed_to_refresh(index_dir, entry_path, tmp_path):
+    """A checker bump no longer makes publish recompute the archive
+    (camp-tools#79): a prior summary behind its facet version is served
+    as it is, and `refresh` is what owes the recomputation."""
+    from camp.checks import refresh, stale_facets
     commit = _entry(entry_path)["releases"][0]["commit"]
-    stale = tmp_path / "stale"
-    stale.mkdir()
-    prior = _prior_checks(stale, commit, checker=CHECKER_VERSION + 1)
+    prior = _prior_checks(tmp_path, commit, checker=CHECKER_VERSION - 1)
     out = tmp_path / "checks"
     run_checks(index_dir, out, log=lambda *a: None, reuse=str(prior))
-    assert not (out / "mod_example.json").exists()
+    doc = json.loads((out / "mod_example.json").read_text())
+    assert doc["versions"]["1.0.0"]["warnings"] == 3          # served, not dropped
+    assert stale_facets(doc["versions"]["1.0.0"], doc, commit) == {"code"}
+    # refresh without tools reports the debt instead of guessing
+    stats = refresh(index_dir, log=lambda *a: None, reuse=str(prior))
+    assert stats["imported"] == 1 and stats["pending"] == 1 and stats["computed"] == 0
 
 
 # ---- ingest-all reuse ------------------------------------------------------

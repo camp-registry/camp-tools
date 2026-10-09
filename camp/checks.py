@@ -37,7 +37,16 @@ from .verify import _clone
 # publish are reusable verbatim — unless the checking itself changed.
 # Bump this when the tools or standard change; prior summaries with a
 # different (or missing) value are recomputed.
-CHECKER_VERSION = 5    # 5: phpcs/phplint skip thirdpartylibs.xml locations (camp-tools#78)
+# Checker versions per facet (camp-tools#79): a bump invalidates only the
+# summaries of its own facet, so a phpcs rule change never redoes the AMD
+# rebuilds and vice versa. Each per-version summary records the versions
+# it was computed with under "facets"; summaries from before #79 carry
+# only the document-level "checker" and are mapped by _facets_of.
+CODE_VERSION = 5   # lint + phpcs. 5: skip thirdpartylibs.xml locations (#78)
+AMD_VERSION = 4    # AMD file-set, staleness, rebuild-and-diff. 4: grunt rig (#4)
+FACETS = {"code": CODE_VERSION, "amd": AMD_VERSION}
+CHECKER_VERSION = CODE_VERSION   # document-level field, kept for readers
+STORE_DIRNAME = "checks"         # committed store in the index (camp-index#532)
 
 # Subplugin type prefixes are not in the rig's lib/components.json; the
 # common families the verified corpus actually uses live here. A prefix
@@ -64,9 +73,43 @@ def _fetch_prior(reuse: str, component: str) -> dict | None:
             doc = json.loads((Path(reuse) / f"{component}.json").read_text())
     except Exception:
         return None
-    if not isinstance(doc, dict) or doc.get("checker") != CHECKER_VERSION:
+    if not isinstance(doc, dict) or not isinstance(doc.get("versions"), dict):
         return None
     return doc
+
+
+def _facets_of(summary: dict, doc: dict) -> dict:
+    """The facet versions a summary was computed with. Pre-#79 summaries
+    have none of their own: the document's checker applies to the code
+    facet, and the AMD facet is AMD_VERSION when that checker is at
+    least 4 (the AMD rig landed with checker 4 and has not moved since)."""
+    facets = summary.get("facets")
+    if isinstance(facets, dict):
+        return {k: int(v) for k, v in facets.items()}
+    checker = int(doc.get("checker") or 0)
+    return {"code": checker, "amd": min(checker, AMD_VERSION) if checker else 0}
+
+
+def _materialise(doc: dict | None) -> dict | None:
+    """Give every summary its own "facets" (from the document-level checker
+    when it has none), so the document's checker field can be rewritten
+    without losing what each summary was computed with."""
+    if doc is None:
+        return None
+    for summary in (doc.get("versions") or {}).values():
+        if isinstance(summary, dict) and "facets" not in summary:
+            summary["facets"] = _facets_of(summary, doc)
+    return doc
+
+
+def stale_facets(summary: dict | None, doc: dict, commit: str) -> set[str]:
+    """Which facets of a release's summary need computing: all of them
+    when there is no summary or its commit no longer matches the ledger,
+    else those whose version is behind."""
+    if not summary or summary.get("commit") != commit:
+        return set(FACETS)
+    have = _facets_of(summary, doc)
+    return {f for f, v in FACETS.items() if have.get(f) != v}
 
 
 # Fixed-colour consumers (shields-style badge JSON) map semantic status to
@@ -281,97 +324,208 @@ def for_version(doc: dict | None, version: str) -> dict | None:
     return (doc.get("versions") or {}).get(version)
 
 
+def _compute(repo: Path, r: dict, component: str, needed: set[str],
+             summary: dict | None, moodle_rig: str | Path | None, log) -> dict | None:
+    """One release's summary with the `needed` facets (re)computed at the
+    checked-out commit; other facets are carried over from `summary`.
+    None when the code facet was needed and phpcs produced no report."""
+    out = dict(summary or {})
+    out.update({"tag": r["tag"], "commit": r["commit"]})
+    facets = dict(_facets_of(summary, {}) if summary else {})
+    if "code" in needed:
+        totals = _phpcs_totals(repo)
+        if totals is None:
+            return None
+        out.update({"phplint": _phplint(repo), **totals})
+        facets["code"] = CODE_VERSION
+    if "amd" in needed:
+        out.pop("amd", None)
+        amd = _amd_fileset(repo)
+        if amd is not None:
+            amd["stale"] = _amd_stale(repo, amd)
+            if moodle_rig:
+                rebuild = _amd_rebuild(repo, Path(moodle_rig), component)
+                if rebuild is not None:
+                    amd["rebuild"] = rebuild
+                else:
+                    log(f"checks: {component}@{r['tag']}: rebuild unavailable "
+                        "(rig cannot run this plugin); no verdict recorded")
+            out["amd"] = amd
+        facets["amd"] = AMD_VERSION
+    out["facets"] = {k: facets[k] for k in sorted(facets)}
+    return out
+
+
+def _version_key(release: dict) -> str:
+    return release["version"].split(" ")[0].lstrip("v")
+
+
+def _released_entries(index_dir: Path):
+    from .advisory import AdvisorySet
+    advisories = AdvisorySet.load(index_dir)
+    for entry_path in sorted(index_dir.glob("plugins/*/*.yml")):
+        entry = load_entry(entry_path)
+        if not entry["releases"] or entry.get("status", "active") == "delisted":
+            continue
+        releases = [r for r in entry["releases"]
+                    if not advisories.is_revoked(entry["component"], r["version"].split(" ")[0])]
+        yield entry, releases
+
+
+def _write_doc(path: Path, doc: dict) -> None:
+    doc["checker"] = CHECKER_VERSION
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, sort_keys=True) + "\n")
+
+
+def _compute_versions(entry: dict, doc: dict, work: list[tuple[str, dict, set[str]]],
+                      moodle_rig, log) -> int:
+    """Clone once, then (re)compute the listed (version, release, facets).
+    Returns how many summaries were written into doc["versions"]."""
+    component = entry["component"]
+    versions = doc.setdefault("versions", {})
+    done = 0
+    with tempfile.TemporaryDirectory(prefix="camp-checks-") as tmp:
+        repo = Path(tmp) / "src"
+        try:
+            _clone(entry["source"], str(repo))
+        except Exception as exc:
+            log(f"checks: {component}: {exc}")
+            return 0
+        for version, r, needed in work:
+            try:
+                subprocess.run(["git", "-C", str(repo), "checkout", "--quiet",
+                                r["commit"]], check=True, capture_output=True)
+            except Exception as exc:
+                log(f"checks: {component}@{version}: {exc}")
+                continue
+            prior = versions.get(version)
+            summary = _compute(repo, r, component, needed,
+                               prior if prior and prior.get("commit") == r["commit"] else None,
+                               moodle_rig, log)
+            if summary is None:
+                log(f"checks: {component}@{version}: no phpcs report; skipped")
+                continue
+            versions[version] = summary
+            done += 1
+            log(f"checks: {component}@{version}: {'+'.join(sorted(needed))}: "
+                f"{summary.get('errors', '?')} errors, {summary.get('warnings', '?')} warnings")
+    return done
+
+
 def run_checks(index_dir: str | Path, out_dir: str | Path, log=print,
                reuse: str | None = None,
-               moodle_rig: str | Path | None = None) -> int:
-    """Compute summaries for every non-revoked release of every entry.
-    Existing per-version results with matching commits are kept (checks
-    are commit-deterministic); only new or changed versions run. `reuse`
-    seeds from the previously published site (its /checks base URL, or a
-    directory) so a fresh CI runner only computes what's actually new."""
+               moodle_rig: str | Path | None = None,
+               store: str | Path | None = None) -> int:
+    """Publish-time summaries for every released entry into `out_dir`.
+
+    Sources, in order: the committed store (`<index>/checks/`, camp-index#532),
+    what `out_dir` already holds, then `reuse` (the previously published
+    site's /checks base URL, or a directory). Publish computes only a
+    release that has no summary at all, so a new release's check line
+    appears with the release; a summary whose facet is behind its version
+    is served as it is and left to `refresh`, so a checker bump never
+    runs the whole archive inside a publish."""
+    index = Path(index_dir)
     have_tools = bool(shutil.which("php") and shutil.which("phpcs"))
     if not have_tools:
         log("checks: php/phpcs not on PATH; reusing prior summaries only")
-    from .advisory import AdvisorySet
-    advisories = AdvisorySet.load(index_dir)
+    store_dir = Path(store) if store else index / STORE_DIRNAME
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     today = datetime.date.today().isoformat()
     written = 0
-    for entry_path in sorted(Path(index_dir).glob("plugins/*/*.yml")):
-        entry = load_entry(entry_path)
-        if not entry["releases"] or entry.get("status", "active") == "delisted":
-            continue
+    for entry, releases in _released_entries(index):
         component = entry["component"]
-        doc = load(out, component)
+        doc = _materialise(load(store_dir, component) or load(out, component))
         fetched = None
         if doc is None and reuse:
-            fetched = _fetch_prior(reuse, component)
+            fetched = _materialise(_fetch_prior(reuse, component))
             doc = fetched
         if doc is None:
             doc = {"component": component, "versions": {}}
-        doc["checker"] = CHECKER_VERSION
         versions = doc.setdefault("versions", {})
-        pending = []
-        for r in entry["releases"]:
-            version = r["version"].split(" ")[0].lstrip("v")
-            if advisories.is_revoked(component, r["version"].split(" ")[0]):
-                continue
-            if versions.get(version, {}).get("commit") == r["commit"]:
-                continue
-            pending.append((version, r))
-        if not pending:
-            if fetched is not None:
-                # entirely reused from the previous publish: persist it so
-                # the site (and the next publish) can read it from here
-                (out / f"{component}.json").write_text(
-                    json.dumps(doc, sort_keys=True) + "\n")
-                log(f"checks: {component}: reused "
-                    f"{len(versions)} summaries from prior publish")
-            continue
-        if not have_tools:
-            log(f"checks: {component}: {len(pending)} version(s) need tools; "
+        missing = [(_version_key(r), r, set(FACETS)) for r in releases
+                   if versions.get(_version_key(r), {}).get("commit") != r["commit"]]
+        if missing and have_tools:
+            done = _compute_versions(entry, doc, missing, moodle_rig, log)
+            written += done
+            if done:
+                doc["checked"] = today
+        elif missing:
+            log(f"checks: {component}: {len(missing)} version(s) need tools; "
                 "skipped (never guessed)")
-            if fetched is not None:
-                (out / f"{component}.json").write_text(
-                    json.dumps(doc, sort_keys=True) + "\n")
-            continue
-        with tempfile.TemporaryDirectory(prefix="camp-checks-") as tmp:
-            repo = Path(tmp) / "src"
-            try:
-                _clone(entry["source"], str(repo))
-            except Exception as exc:
-                log(f"checks: {component}: {exc}")
-                continue
-            for version, r in pending:
-                try:
-                    subprocess.run(["git", "-C", str(repo), "checkout", "--quiet",
-                                    r["commit"]], check=True, capture_output=True)
-                except Exception as exc:
-                    log(f"checks: {component}@{version}: {exc}")
-                    continue
-                phplint = _phplint(repo)
-                totals = _phpcs_totals(repo)
-                if totals is None:
-                    log(f"checks: {component}@{version}: no phpcs report; skipped")
-                    continue
-                versions[version] = {"tag": r["tag"], "commit": r["commit"],
-                                     "phplint": phplint, **totals}
-                amd = _amd_fileset(repo)
-                if amd is not None:
-                    amd["stale"] = _amd_stale(repo, amd)
-                    if moodle_rig:
-                        rebuild = _amd_rebuild(repo, Path(moodle_rig), component)
-                        if rebuild is not None:
-                            amd["rebuild"] = rebuild
-                        else:
-                            log(f"checks: {component}@{version}: rebuild "
-                                "unavailable (rig cannot run this plugin); "
-                                "no verdict recorded")
-                    versions[version]["amd"] = amd
-                written += 1
-                log(f"checks: {component}@{version}: "
-                    f"{totals['errors']} errors, {totals['warnings']} warnings")
-        doc["checked"] = today
-        (out / f"{component}.json").write_text(json.dumps(doc, sort_keys=True) + "\n")
+        elif fetched is not None:
+            log(f"checks: {component}: reused {len(versions)} summaries from prior publish")
+        if versions:
+            _write_doc(out / f"{component}.json", doc)
     return written
+
+
+def refresh(index_dir: str | Path, log=print, budget: int | None = None,
+            moodle_rig: str | Path | None = None, reuse: str | None = None) -> dict:
+    """Fill and age the committed store (`<index>/checks/`, camp-index#532):
+    compute summaries that are missing or whose facet is behind its
+    version, up to `budget` releases this run, missing first and then the
+    stalest documents first, so a checker bump drains over a few runs and
+    every run keeps what it did. A store document the previous publish
+    already has (`reuse`) is imported rather than recomputed. Documents
+    for entries that no longer have releases are removed."""
+    index = Path(index_dir)
+    store_dir = index / STORE_DIRNAME
+    have_tools = bool(shutil.which("php") and shutil.which("phpcs"))
+    today = datetime.date.today().isoformat()
+    stats = {"computed": 0, "imported": 0, "pending": 0, "removed": 0}
+    docs: dict[str, tuple[dict, dict, list]] = {}
+    worklist: list[tuple[int, str, str, str, dict, set[str]]] = []
+    live = set()
+    for entry, releases in _released_entries(index):
+        component = entry["component"]
+        live.add(component)
+        doc = _materialise(load(store_dir, component))
+        if doc is None and reuse:
+            doc = _materialise(_fetch_prior(reuse, component))
+            if doc is not None:
+                stats["imported"] += 1
+                _write_doc(store_dir / f"{component}.json", doc)
+        if doc is None:
+            doc = {"component": component, "versions": {}}
+        docs[component] = (entry, doc, releases)
+        versions = doc.get("versions", {})
+        for r in releases:
+            version = _version_key(r)
+            needed = stale_facets(versions.get(version), doc, r["commit"])
+            if needed:
+                # missing summaries (rank 0) ahead of stale ones (rank 1);
+                # within a rank, the document checked longest ago first
+                rank = 0 if versions.get(version, {}).get("commit") != r["commit"] else 1
+                worklist.append((rank, str(doc.get("checked") or ""), component,
+                                 version, r, needed))
+    for path in sorted(store_dir.glob("*.json")) if store_dir.is_dir() else []:
+        if path.stem not in live:
+            path.unlink()
+            stats["removed"] += 1
+    worklist.sort(key=lambda w: (w[0], w[1], w[2], w[3]))
+    if budget is not None:
+        chosen, worklist = worklist[:budget], worklist[budget:]
+    else:
+        chosen, worklist = worklist, []
+    stats["pending"] = len(worklist)
+    if chosen and not have_tools:
+        log(f"checks: php/phpcs not on PATH; {len(chosen)} release(s) left pending")
+        stats["pending"] += len(chosen)
+        return stats
+    by_component: dict[str, list] = {}
+    for _, _, component, version, r, needed in chosen:
+        by_component.setdefault(component, []).append((version, r, needed))
+    for component, work in by_component.items():
+        entry, doc, _ = docs[component]
+        done = _compute_versions(entry, doc, work, moodle_rig, log)
+        stats["computed"] += done
+        stats["pending"] += len(work) - done
+        if done:
+            doc["checked"] = today
+            _write_doc(store_dir / f"{component}.json", doc)
+    log(f"checks-refresh: {stats['computed']} computed, {stats['imported']} imported, "
+        f"{stats['removed']} removed, {stats['pending']} still pending")
+    return stats

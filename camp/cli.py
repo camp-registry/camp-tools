@@ -472,7 +472,14 @@ def _cmd_scan_malware(args: argparse.Namespace) -> int:
 def _cmd_checks(args: argparse.Namespace) -> int:
     from .checks import run_checks
     run_checks(args.index_dir, args.out_dir, reuse=args.reuse,
-               moodle_rig=args.moodle_rig)
+               moodle_rig=args.moodle_rig, store=args.store)
+    return 0
+
+
+def _cmd_checks_refresh(args: argparse.Namespace) -> int:
+    from .checks import refresh
+    refresh(args.index_dir, budget=args.budget, moodle_rig=args.moodle_rig,
+            reuse=args.reuse)
     return 0
 
 
@@ -1266,7 +1273,20 @@ def main(argv: list[str] | None = None) -> int:
                    help="Moodle checkout with node_modules installed; enables "
                         "the AMD rebuild-and-diff verdict (camp-tools#4). "
                         "Omitted: the rebuild records nothing, never guesses")
+    p.add_argument("--store", help="committed checks store to read first "
+                   "(default: <index_dir>/checks, camp-index#532)")
     p.set_defaults(func=_cmd_checks)
+
+    p = sub.add_parser("checks-refresh",
+                       help="fill and age the committed checks store (<index>/checks): "
+                            "missing summaries first, then facets behind their "
+                            "checker version, up to --budget releases (camp-tools#79)")
+    p.add_argument("index_dir")
+    p.add_argument("--budget", type=int, help="releases to compute this run (default: all)")
+    p.add_argument("--moodle-rig", help="as for `checks`")
+    p.add_argument("--reuse", help="previously published /checks base URL or dir: "
+                   "documents the store lacks are imported, not recomputed")
+    p.set_defaults(func=_cmd_checks_refresh)
 
     p = sub.add_parser("ingest-all",
                        help="ingest listings for every released entry (one clone "
