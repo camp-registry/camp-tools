@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import datetime
 import json
+import posixpath
+from xml.etree import ElementTree
 import os
 import shutil
 import subprocess
@@ -35,7 +37,7 @@ from .verify import _clone
 # publish are reusable verbatim — unless the checking itself changed.
 # Bump this when the tools or standard change; prior summaries with a
 # different (or missing) value are recomputed.
-CHECKER_VERSION = 4    # 4: AMD rebuild-and-diff via a Moodle grunt rig (camp-tools#4)
+CHECKER_VERSION = 5    # 5: phpcs/phplint skip thirdpartylibs.xml locations (camp-tools#78)
 
 # Subplugin type prefixes are not in the rig's lib/components.json; the
 # common families the verified corpus actually uses live here. A prefix
@@ -97,8 +99,39 @@ def load(checks_dir: str | Path | None, component: str) -> dict | None:
     return doc if isinstance(doc, dict) else None
 
 
+def thirdparty_locations(root: Path) -> list[str]:
+    """Locations declared in the plugin's thirdpartylibs.xml, normalised
+    (no leading ./ or trailing /), relative to the plugin root. Moodle's
+    own tooling and moodle-plugin-ci skip these for code checks: a bundled
+    library is not the author's code. Missing or unreadable
+    manifest: nothing is skipped."""
+    manifest = root / "thirdpartylibs.xml"
+    if not manifest.is_file():
+        return []
+    try:
+        tree = ElementTree.parse(manifest)
+    except ElementTree.ParseError:
+        return []
+    found = []
+    for library in tree.getroot().iter("library"):
+        raw = (library.findtext("location") or "").strip()
+        location = posixpath.normpath(raw.strip("/")) if raw else ""
+        if location in ("", ".") or location.startswith("../"):
+            continue
+        found.append(location)
+    return found
+
+
+def _is_thirdparty(path: Path, root: Path, locations: list[str]) -> bool:
+    rel = path.relative_to(root).as_posix()
+    return any(rel == loc or rel.startswith(loc + "/") for loc in locations)
+
+
 def _phplint(root: Path) -> bool:
+    skip = thirdparty_locations(root)
     for f in root.rglob("*.php"):
+        if _is_thirdparty(f, root, skip):
+            continue
         result = subprocess.run(["php", "-l", str(f)], capture_output=True)
         if result.returncode != 0:
             return False
@@ -106,10 +139,13 @@ def _phplint(root: Path) -> bool:
 
 
 def _phpcs_totals(root: Path) -> dict | None:
-    result = subprocess.run(
-        ["phpcs", "--standard=moodle", "--extensions=php",
-         "--report=json", "-q", str(root)],
-        capture_output=True, text=True)
+    cmd = ["phpcs", "--standard=moodle", "--extensions=php", "--report=json", "-q"]
+    skip = thirdparty_locations(root)
+    if skip:
+        # phpcs matches ignore patterns against the full path; a declared
+        # directory covers everything beneath it, a declared file itself.
+        cmd.append("--ignore=" + ",".join(f"{root}/{loc}" for loc in skip))
+    result = subprocess.run(cmd + [str(root)], capture_output=True, text=True)
     try:
         report = json.loads(result.stdout or "{}")
         totals = report["totals"]
