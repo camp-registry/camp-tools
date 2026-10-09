@@ -144,3 +144,44 @@ def test_refresh_removes_documents_for_entries_without_releases(tmp_path, monkey
     monkeypatch.setattr(checks.shutil, "which", lambda name: "/usr/bin/" + name)
     stats = checks.refresh(index, log=lambda *a: None)
     assert stats["removed"] == 1 and not (store / "mod_gone.json").exists()
+
+
+def test_compute_fetches_a_ledger_commit_the_clone_no_longer_reaches(tmp_path, monkeypatch):
+    """A tag moved after publication leaves the ledger commit unreachable
+    from any ref (camp-index#69); the checks job fetches it by SHA like
+    ingest and archive do, instead of leaving the release pending forever."""
+    import subprocess
+    origin = tmp_path / "origin"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@x"}
+    (origin / "version.php").write_text("<?php\n")
+    subprocess.run(["git", "-C", str(origin), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(origin), "commit", "-q", "-m", "one"], check=True, env=env)
+    published = subprocess.run(["git", "-C", str(origin), "rev-parse", "HEAD"],
+                               capture_output=True, text=True, check=True).stdout.strip()
+    (origin / "version.php").write_text("<?php\n// moved\n")
+    subprocess.run(["git", "-C", str(origin), "commit", "-q", "-am", "two"], check=True, env=env)
+    # a shallow clone of the moved tip: the published commit is not local
+    def shallow_clone(source, dest):
+        subprocess.run(["git", "clone", "-q", "--depth", "1", source, dest], check=True)
+    monkeypatch.setattr(checks, "_clone", shallow_clone)
+    monkeypatch.setattr(checks, "_phpcs_totals",
+                        lambda root: {"errors": 0, "warnings": 0, "files": 0, "rules": {}})
+    monkeypatch.setattr(checks, "_phplint", lambda root: True)
+    monkeypatch.setattr(checks, "_amd_fileset", lambda root: None)
+    monkeypatch.setattr(checks.subprocess, "run", _allow_sha_fetch(subprocess.run, origin))
+    entry = {"component": "block_x", "source": str(origin)}
+    doc = {"component": "block_x", "versions": {}}
+    done = checks._compute_versions(entry, doc, [("1.0", {"tag": "v1.0", "commit": published},
+                                                  {"code"})], None, lambda *a: None)
+    assert done == 1 and doc["versions"]["1.0"]["commit"] == published
+
+
+def _allow_sha_fetch(real_run, origin):
+    """Local file origins refuse `fetch <sha>` unless the server allows it;
+    turn that on for the test's origin, as GitHub does for any SHA."""
+    import subprocess
+    subprocess.run(["git", "-C", str(origin), "config", "uploadpack.allowAnySHA1InWant", "true"],
+                   check=True)
+    return real_run

@@ -31,6 +31,7 @@ import urllib.request
 from pathlib import Path
 
 from .validate import load_entry
+from .build import ensure_commit
 from .verify import _clone
 
 # Check results are commit-deterministic, so summaries from the previous
@@ -394,10 +395,14 @@ def _compute_versions(entry: dict, doc: dict, work: list[tuple[str, dict, set[st
             return 0
         for version, r, needed in work:
             try:
+                # The ledger commit may have left every ref (tag moved after
+                # publication, #69); fetch it by SHA as ingest and archive do.
+                ensure_commit(str(repo), r["commit"])
                 subprocess.run(["git", "-C", str(repo), "checkout", "--quiet",
                                 r["commit"]], check=True, capture_output=True)
             except Exception as exc:
-                log(f"checks: {component}@{version}: {exc}")
+                log(f"checks: {component}@{version}: commit {r['commit'][:12]} "
+                    f"not checkable: {exc}")
                 continue
             prior = versions.get(version)
             summary = _compute(repo, r, component, needed,
