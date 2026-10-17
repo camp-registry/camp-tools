@@ -37,7 +37,7 @@ from .advisory import AdvisorySet, version_matches
 from . import badge as badge_mod
 from . import checks as checks_mod
 from . import reviews as reviews_mod
-from .reviews import PLUGIN_URL_PREFIX as MDLSHIELD_PLUGIN_URL
+from .reviews import plugin_page as mdlshield_plugin_page
 from .composer import _package_name
 from . import plugintypes, standardplugins
 from . import metricsfile
@@ -2356,6 +2356,14 @@ def _review_badge(review: dict, component: str, badge_src) -> str:
 MDLSHIELD_REVIEWED_BADGE = "https://img.shields.io/badge/MDL%20Shield-Reviewed-0f766e"
 
 
+def _linked(href: str, inner: str) -> str:
+    """A review badge wrapped in its link, or bare when the feed gave no
+    URL to link: an unlinked badge beats a guessed path that 404s."""
+    if not href:
+        return inner
+    return f'<a href="{escape(href)}" class="msbadge-link">{inner}</a>'
+
+
 def _reviewed_badge(badge_src) -> str:
     """The strip's generic review signal: grades are per-release claims,
     so the strip says only that published reviews exist. Same shields
@@ -2405,13 +2413,12 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         meta_bits = [_tier_badge(tier)]
     # The strip's review signal is deliberately generic: a grade is a
     # per-release claim, so the strip only says reviews exist and links
-    # to MDL Shield's plugin page. The graded pills render where a
+    # to the plugin's page at MDL Shield as the feed names it (never a
+    # constructed path, camp-tools#80). The graded pills render where a
     # version is on screen — the install card and the Project history.
     if reviews:
-        meta_bits.append(
-            f'<a href="{MDLSHIELD_PLUGIN_URL}{escape(component)}" '
-            f'class="msbadge-link">'
-            f'{_reviewed_badge(badge_src)}</a>')
+        meta_bits.append(_linked(mdlshield_plugin_page(reviews),
+                                 _reviewed_badge(badge_src)))
     # Health is a conclusion derived from update recency — it renders as
     # one phrase with its evidence, on its own line. Stars are popularity,
     # not trust: they live with the other repo metrics in Development.
@@ -2505,12 +2512,10 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
             # identically); absence renders nothing, per the feed's model.
             review = (reviews or {}).get(str(r.get("moodle-version", "")))
             if review:
-                rev_href = escape(review["review_url"]
-                                  or MDLSHIELD_PLUGIN_URL + component)
                 row["review_html"] = (
-                    f'<a href="{rev_href}" class="msbadge-link">'
-                    f'{_review_badge(review, component, badge_src)}</a>'
-                    f' <span class="rev-when">reviewed '
+                    _linked(review["review_url"] or mdlshield_plugin_page(reviews),
+                            _review_badge(review, component, badge_src))
+                    + f' <span class="rev-when">reviewed '
                     f'{escape(review["reviewed_at"])}</span>')
             # Advisories are per-release claims, like the security review:
             # the warning follows the selected release in the install card.
@@ -3015,9 +3020,8 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
         for mv in sorted(reviews, key=lambda m: reviews[m]["reviewed_at"],
                          reverse=True):
             review = reviews[mv]
-            chip_target = review["review_url"] or MDLSHIELD_PLUGIN_URL + component
-            chip = (f'<a href="{escape(chip_target)}" class="msbadge-link">'
-                    f'{_review_badge(review, component, badge_src)}</a>')
+            chip = _linked(review["review_url"] or mdlshield_plugin_page(reviews),
+                           _review_badge(review, component, badge_src))
             when = (f' · {escape(review["reviewed_at"])}'
                     if review["reviewed_at"] else "")
             note = "" if mv in ledger_mvs else " · not in the archive"
@@ -3025,14 +3029,15 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
                 f'<div class="rev-item"><span class="abadges">{chip}</span> '
                 f'{escape(review["release"])}{when}{note}</div>')
         plural = "s" if len(rev_items) != 1 else ""
+        page = mdlshield_plugin_page(reviews)
+        more = (f' · <a href="{escape(page)}">more at mdlshield.com</a>'
+                if page else "")
         kv_rows.append(
             '<div class="kvrow"><span class="fk">Security review</span>'
             f'<span class="fv">{"".join(rev_items)}'
             f'<div class="attrib" style="margin-top:6px">published review{plural} '
             f'of the moodle.org distribution · fetched by the registry from '
-            f'mdlshield.com · '
-            f'<a href="{MDLSHIELD_PLUGIN_URL}{escape(component)}">more at '
-            f'mdlshield.com</a></div></span></div>')
+            f'mdlshield.com{more}</div></span></div>')
     if badge_chips:
         kv_rows.append('<div class="kvrow"><span class="fk">Author badges</span>'
                        f'<span class="fv"><span class="abadges">{"".join(badge_chips)}'

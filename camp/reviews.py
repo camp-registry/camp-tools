@@ -98,6 +98,12 @@ def fetch_feed(source: str) -> dict[str, dict[str, dict]] | None:
         versions = plugin.get("versions")
         if not isinstance(versions, dict):
             continue
+        # The plugin's own page on the reviewer's site, when the feed names
+        # one (plugin-level `plugin_url`); carried on every review of the
+        # plugin so callers holding the per-component dict can reach it.
+        plugin_url = str(plugin.get("plugin_url", ""))
+        if not plugin_url.startswith(REVIEW_URL_PREFIX):
+            plugin_url = ""
         for version, entries in versions.items():
             if not isinstance(entries, list):
                 continue
@@ -105,8 +111,27 @@ def fetch_feed(source: str) -> dict[str, dict[str, dict]] | None:
             if not reviews:
                 continue
             reviews.sort(key=lambda r: r["reviewed_at"], reverse=True)
+            reviews[0]["plugin_url"] = plugin_url
             out.setdefault(str(component)[:100], {})[str(version)[:20]] = reviews[0]
     return out
+
+
+def plugin_page(reviews: dict[str, dict] | None) -> str:
+    """Where "more at mdlshield.com" goes for one component: the plugin
+    page the feed names, else the newest published review's own URL.
+
+    Never a constructed path: `/plugins/<component>` exists only for
+    plugins reviewed from the marketplace, and a repository-origin review
+    (publisher-submitted) lives under `/reviews/publisher/<handle>/...`
+    instead — local_wisa's strip badge 404'd that way (camp-tools#80).
+    The site links only what the feed said; "" means link nothing."""
+    if not reviews:
+        return ""
+    for review in reviews.values():
+        if review.get("plugin_url"):
+            return review["plugin_url"]
+    newest = max(reviews.values(), key=lambda r: r["reviewed_at"])
+    return newest.get("review_url", "")
 
 
 # The strip and Project row show MDL Shield's own badge rendering —

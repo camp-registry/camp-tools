@@ -183,3 +183,46 @@ def test_official_badge_selfhosted_with_fallback(index_dir, tmp_path, monkeypatc
     html2 = (out2 / "plugin" / "mod_example.html").read_text()
     assert 'src="/mdlshield/' not in html2
     assert '<span class="abadge"><span class="l">MDL Shield</span>' in html2
+
+
+def test_plugin_url_sanitized_and_carried(tmp_path):
+    """A plugin-level page URL rides on every review when on-host; an
+    off-host one is dropped, never linked."""
+    from camp.reviews import plugin_page
+    feed = fetch_feed(_feed(tmp_path, {
+        "mod_example": {"plugin_url": "https://mdlshield.com/plugins/mod_example",
+                        "versions": {"1": [_review("1", "v1")]}},
+        "mod_other": {"plugin_url": "https://evil.example/mod_other",
+                      "versions": {"1": [_review("1", "v1", url="https://mdlshield.com/reviews/o")]}},
+    }))
+    assert feed["mod_example"]["1"]["plugin_url"] == "https://mdlshield.com/plugins/mod_example"
+    assert plugin_page(feed["mod_example"]) == "https://mdlshield.com/plugins/mod_example"
+    assert feed["mod_other"]["1"]["plugin_url"] == ""
+    # no plugin page named: the newest review's own URL stands in
+    assert plugin_page(feed["mod_other"]) == "https://mdlshield.com/reviews/o"
+    assert plugin_page(None) == ""
+
+
+def test_strip_links_only_feed_urls_never_a_constructed_plugin_path(index_dir, tmp_path):
+    """camp-tools#80: /plugins/<component> exists only for marketplace
+    plugins; a repository-origin review (local_wisa) 404'd there. The strip
+    and the 'more at' link go where the feed points."""
+    url = "https://mdlshield.com/reviews/publisher/ltnc/mod_example"
+    feed = _feed(tmp_path, {"mod_example": {"versions": {
+        "2026011500": [_review("2026011500", "1.0.0", url=url)]}}})
+    out = tmp_path / "site"
+    site_generate(index_dir, "https://repo.test", out, reviews_source=feed)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert "mdlshield.com/plugins/mod_example" not in html
+    assert f'<a href="{url}" class="msbadge-link">' in html          # strip + chips
+    assert f'<a href="{url}">more at mdlshield.com</a>' in html
+
+    # the feed names the plugin page: strip and 'more at' prefer it
+    feed = _feed(tmp_path, {"mod_example": {
+        "plugin_url": "https://mdlshield.com/plugins/mod_example",
+        "versions": {"2026011500": [_review("2026011500", "1.0.0", url=url)]}}})
+    site_generate(index_dir, "https://repo.test", out, reviews_source=feed)
+    html = (out / "plugin" / "mod_example.html").read_text()
+    assert '<a href="https://mdlshield.com/plugins/mod_example" class="msbadge-link">' in html
+    assert '<a href="https://mdlshield.com/plugins/mod_example">more at mdlshield.com</a>' in html
+    assert f'<a href="{url}" class="msbadge-link">' in html            # chips keep their own review
