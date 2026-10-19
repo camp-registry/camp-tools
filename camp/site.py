@@ -1591,6 +1591,21 @@ def _maintainer_link(m: dict, display: str) -> str:
             f'title="All plugins by this maintainer">{escape(display)}</a>')
 
 
+def _maintainers_row(maintainers: list, sub: str = "") -> str:
+    """The Maintainer row: every maintainer as a linked name, in the
+    order the entry lists them (camp-tools#77). Each one is accountable
+    for the plugin and each name is a browse-search link, so none is
+    folded into a count. The label is plural when there are several."""
+    names = ", ".join(
+        _maintainer_link(m, m.get("name") or m.get("github") or m.get("gitlab")
+                         or "maintainer")
+        for m in maintainers)
+    label = "Maintainers" if len(maintainers) > 1 else "Maintainer"
+    return (f'<div class="kvrow"><span class="fk">{label}</span>'
+            f'<span class="fv"><div class="mt-name">{names}</div>'
+            f'{sub}</span></div>')
+
+
 def _parse_stamp(value) -> datetime.datetime | None:
     """ISO timestamp or date string -> aware datetime; None if unparseable."""
     if not value or not isinstance(value, str):
@@ -2864,21 +2879,10 @@ def _detail_page(entry: dict, listing: dict, base_url: str,
     issues_url = declared_links.get("issues") or entry["source"] + "/issues"
     maintainers = entry.get("maintainers") or []
     if maintainers:
-        m = maintainers[0]
-        mt_name = m.get("name") or m.get("github") or m.get("gitlab") or "maintainer"
-        others = len(maintainers) - 1
         rel_n = len(entry["releases"])
-        sub_bits = []
-        if rel_n:
-            sub_bits.append(f'{rel_n} release{"s" if rel_n != 1 else ""} in the archive')
-        if others > 0:
-            sub_bits.append(f'+{others} co-maintainer{"s" if others != 1 else ""}')
-        mt_sub = (f'<div class="mt-sub">{escape(" · ".join(sub_bits))}</div>'
-                  if sub_bits else "")
-        kv_rows.append(
-            f'<div class="kvrow"><span class="fk">Maintainer</span>'
-            f'<span class="fv"><div class="mt-name">{_maintainer_link(m, mt_name)}</div>'
-            f'{mt_sub}</span></div>')
+        mt_sub = (f'<div class="mt-sub">{rel_n} release{"s" if rel_n != 1 else ""}'
+                  f' in the archive</div>' if rel_n else "")
+        kv_rows.append(_maintainers_row(maintainers, mt_sub))
     kv_rows.append(f'<div class="kvrow"><span class="fk">Source repository</span>'
                    f'<span class="fv mono" style="font-size:0.78125rem;word-break:break-all">'
                    f'<a href="{escape(entry["source"])}">'
@@ -3161,12 +3165,7 @@ def _utility_page(entry: dict, today: datetime.date) -> str:
     kv_rows = []
     maintainers = entry.get("maintainers") or []
     if maintainers:
-        m = maintainers[0]
-        mt_name = m.get("name") or m.get("github") or m.get("gitlab") or "maintainer"
-        kv_rows.append(
-            f'<div class="kvrow"><span class="fk">Maintainer</span>'
-            f'<span class="fv"><div class="mt-name">{_maintainer_link(m, mt_name)}</div>'
-            f'</span></div>')
+        kv_rows.append(_maintainers_row(maintainers))
     repo_label = "Project repository" if closed else "Source repository"
     repo_attrib = ('<div class="attrib" style="margin-top:6px">documentation '
                    'and issue tracking — the source code itself is not '
