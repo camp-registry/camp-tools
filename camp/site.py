@@ -70,6 +70,20 @@ VORDER = _branch_names()
 VLABEL = {v: display_name(v) for v in VORDER}
 
 MIRROR_URL = "https://github.com/camp-registry/camp-docs/blob/main/MIRRORING.md"
+
+# Page-view counting with Umami. The tracker is a fixed copy in camp/assets/,
+# served from this site, so a change to the analytics server cannot change the
+# code running on registry pages. data-domains keeps the local preview, forks
+# and mirrors from reporting. tests/test_site_analytics.py pins the copy's hash.
+ANALYTICS_TAG = (
+    '<script defer src="/assets/app.js" '
+    'data-host-url="https://static.expu.to" '
+    'data-website-id="a9119be7-02dd-48ae-a7cb-af96423dfeff" '
+    'data-domains="camp-registry.org" '
+    'data-exclude-search="true" '
+    'data-exclude-hash="true" '
+    'data-do-not-track="true"></script>'
+)
 INDEX_REPO_URL = "https://github.com/camp-registry/camp-index"
 AUTHORS_GUIDE_URL = "https://github.com/camp-registry/camp-docs/blob/main/AUTHORS.md"
 
@@ -1871,6 +1885,7 @@ def _page(title: str, body: str, *, description: str = "", extra_js: str = "") -
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>{CSS}</style>
 <script>{THEME_JS}</script>
+{ANALYTICS_TAG}
 </head>
 <body>
 <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -1922,6 +1937,7 @@ def _footer(wrap: bool = True) -> str:
   <a href="https://github.com/camp-registry/camp-index/blob/main/LICENSE-DATA.md">ODbL</a>,
   advisories CC BY 4.0.</span>
   <span class="fine">Not affiliated with or endorsed by Moodle Pty Ltd.
+  <a href="/privacy.html">Privacy</a>.
   <span class="build">camp-tools v{TOOLS_VERSION} · built {built}</span></span>
 </footer>""")
     return f'<div class="wrap">{inner}</div>' if wrap else inner
@@ -2174,9 +2190,10 @@ def _browse_page(entries: list[tuple[dict, dict]], today: datetime.date,
     <div><h3 class="kicker">Verified against source</h3>
       <p>Packages are rebuilt from the maintainer’s tagged release and
       hash-compared. A match is the only way to earn the badge.</p></div>
-    <div><h3 class="kicker">No accounts, no tracking</h3>
+    <div><h3 class="kicker">No accounts, no per-site tracking</h3>
       <p>Browsing and installing need no registration. The archive keeps no
-      per-site data and mirrors see only anonymous downloads.</p></div>
+      per-site data and mirrors see only anonymous downloads. The website
+      counts page views in aggregate: <a href="/privacy.html">privacy</a>.</p></div>
     <div><h3 class="kicker">Mirrorable by anyone</h3>
       <p>The whole archive is a static file tree plus a public git index.
       One rsync job makes a full mirror.</p></div>
@@ -3444,6 +3461,54 @@ def _removed_page(removals: list[tuple[str, dict]]) -> str:
                              "their maintainer's request.")
 
 
+def _privacy_page() -> str:
+    """What the website and archive record (RFC §4.6). Every statement about
+    the page-view script is checkable against camp/assets/app.js."""
+    body = f"""
+{_header()}
+<div class="detail">
+<main id="main-content" tabindex="-1">
+  <h1>Privacy</h1>
+  <p class="dsummary">What the CAMP website records, and how long it is kept.</p>
+  <div class="prose">
+  <h2>Page views</h2>
+  <p>Pages on camp-registry.org count visits with
+  <a href="https://umami.is">Umami</a>, an open-source analytics tool. The
+  analytics server at static.expu.to is run by Exputo, one of the companies and
+  individuals involved in CAMP, which is an independent project. The script is a
+  fixed copy served from this site:
+  <a href="/assets/app.js">app.js</a>
+  (<a href="/assets/app.js.LICENSE.txt">licence</a>).</p>
+  <p>Each page view sends the page address without its query string or fragment,
+  the page title, the referring page, your screen size and your browser language.
+  From the request, the server also works out your browser, operating system,
+  device type and approximate location (country, region and city).</p>
+  <p>Your IP address is used to work out that location and a visitor ID that
+  changes every month. Umami does not store the address itself.</p>
+  <p>The script sets no cookies and writes nothing to browser storage. Browsers
+  that send a Do Not Track signal are not counted.</p>
+  <h2>How long it is kept</h2>
+  <p>Page-view statistics are kept until deleted. No deletion is scheduled.</p>
+  <h2>What is not counted</h2>
+  <p>The script runs only in web pages. The tool_camp Moodle plugin and Composer
+  do not run it, so update checks and downloads are not part of these statistics.
+  Security warnings work by downloading the full advisory feed and matching it on
+  your own site. CAMP keeps no per-site accounts or lists of installed plugins.</p>
+  <h2>Hosting providers and mirrors</h2>
+  <p>GitHub Pages serves this website. Cloudflare and Backblaze serve package
+  downloads. These providers keep their own logs under their own policies.
+  <a href="{MIRROR_URL}">Mirrors</a> are run independently of the project.</p>
+  <h2>Questions</h2>
+  <p>Open an issue in
+  <a href="https://github.com/camp-registry/camp-docs/issues">camp-docs</a>.</p>
+  </div>
+</main></div>
+{_footer()}"""
+    return _page("Privacy · CAMP", body,
+                 description="What the CAMP website records and how long it "
+                             "is kept.")
+
+
 def _doc_page(md_text: str | None, *, doc: str, title: str, heading: str,
               blurb: str, description: str) -> str:
     """A camp-docs file rendered as a site page, single-sourced: the publish
@@ -3518,10 +3583,11 @@ def _how_page() -> str:
       <p>Every published package is rebuilt deterministically from the
       maintainer’s tagged source and byte-compared. The hash match is
       public and anyone can reproduce it.</p></div>
-    <div class="tcard"><h3 class="kicker">No accounts, no tracking</h3>
+    <div class="tcard"><h3 class="kicker">No accounts, no per-site tracking</h3>
       <p>No registration to browse or install. Security warnings work by
       downloading the full advisory feed and matching locally — the
-      archive never learns what your site runs.</p></div>
+      archive never learns what your site runs. The website counts page
+      views in aggregate: <a href="/privacy.html">privacy</a>.</p></div>
     <div class="tcard"><h3 class="kicker">Mirrorable by anyone</h3>
       <p>The archive is a static file tree plus a public git index. A full
       mirror is one rsync job, and mirrors need no trust: clients verify
@@ -3705,6 +3771,7 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
         names_mod.names_dataset(index_dir), separators=(",", ":")))
     (out / "names.html").write_text(_names_page())
     (out / "contribute.html").write_text(_contribute_page())
+    (out / "privacy.html").write_text(_privacy_page())
     removals = sorted(names_mod.removals(Path(index_dir)).items(),
                       key=lambda kv: kv[1].get("last-checked", ""),
                       reverse=True)
@@ -3792,6 +3859,9 @@ def generate(index_dir: str | Path, base_url: str, out_dir: str | Path,
     fonts_src = Path(__file__).resolve().parent / "fonts"
     if fonts_src.exists():
         shutil.copytree(fonts_src, out / "fonts", dirs_exist_ok=True)
+
+    shutil.copytree(Path(__file__).resolve().parent / "assets", out / "assets",
+                    dirs_exist_ok=True)
 
     icons_src = Path(__file__).resolve().parent / "icons"
     if icons_src.exists():
