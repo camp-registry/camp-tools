@@ -30,6 +30,9 @@ from .validate import (load_entry, validate_entry, validate_listing,
                        validate_listing_bytes, validate_metrics, validate_utility)
 from .verify import verify_entry
 
+SEED_REQUEST_URL = ("https://github.com/camp-registry/camp-index/issues/new"
+                    "?template=seed-request.yml")
+
 
 def _cmd_validate(args: argparse.Namespace) -> int:
     failed = False
@@ -174,6 +177,15 @@ def _cmd_release(args: argparse.Namespace) -> int:
     """Compute a new release record and append it to the entry file."""
     _update_notice()
     entry_path = Path(args.entry)
+    # A tag pushed before the listing exists lands here from the release
+    # workflow. Name the fix instead of ending in a traceback.
+    if not entry_path.exists():
+        print(f"error: {entry_path.stem} is not listed on camp yet, so there "
+              f"is no entry to add this release to. Request a seed "
+              f"({SEED_REQUEST_URL}), claim the listing once it exists, then "
+              f"re-run this workflow at the tag. No new tag is needed.",
+              file=sys.stderr)
+        return 1
     entry = load_entry(entry_path)
     component = entry["component"]
 

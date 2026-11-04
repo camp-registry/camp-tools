@@ -589,6 +589,18 @@ def test_release_refuses_non_tag_refs(entry_path, plugin_repo, capsys):
     assert "not a tag" in captured.err
 
 
+def test_release_names_the_fix_when_not_listed(plugin_repo, tmp_path, capsys):
+    """A tag pushed before the listing exists gets the next step, not a
+    traceback (format_spiffy's v0.1.0 run, camp-index#674)."""
+    missing = tmp_path / "plugins" / "format" / "format_spiffy.yml"
+    rc = main(["release", str(missing), "v1.0.0", "--source", str(plugin_repo)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "format_spiffy is not listed on camp yet" in err
+    assert "template=seed-request.yml" in err
+    assert not missing.exists()
+
+
 def test_release_accepts_real_tag(entry_path, plugin_repo, tmp_path, capsys):
     import subprocess
     subprocess.run(["git", "-C", str(plugin_repo), "tag", "v2.0.0"], check=True)
