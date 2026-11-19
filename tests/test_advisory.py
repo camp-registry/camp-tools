@@ -53,7 +53,7 @@ def test_advisory_misplaced_file_fails(index_dir, tmp_path):
     path = _write_advisory(index_dir)
     stray = tmp_path / "CAMP-2026-0001.yml"
     stray.write_text(path.read_text())
-    assert any("belongs at" in p for p in validate_advisory(stray))
+    assert "file belongs at advisories/CAMP-2026-0001.yml" in validate_advisory(stray)
 
 
 def test_advisory_old_percomponent_layout_fails(index_dir):

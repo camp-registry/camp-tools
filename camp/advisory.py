@@ -116,7 +116,7 @@ def validate_advisory(path: str | Path, index_dir: str | Path | None = None) -> 
 
     expected = Path(ADVISORIES_RELPATH) / f"{advisory['id']}.yml"
     if Path(path).parts[-2:] != expected.parts:
-        problems.append(f"file belongs at index/{expected}")
+        problems.append(f"file belongs at {expected.as_posix()}")
 
     try:
         version_matches("1.0.0", advisory["affected-versions"])
