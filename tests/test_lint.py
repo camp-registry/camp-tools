@@ -78,7 +78,10 @@ def test_scaffold_creates_valid_listing(tmp_path):
     scaffold(tmp_path)
     assert validate_listing(tmp_path / ".camp" / "listing.yml") == []
     assert "block_demo" in (tmp_path / ".camp" / "listing.yml").read_text()
-    assert "export-ignore" in (tmp_path / ".gitattributes").read_text()
+    gitattributes = (tmp_path / ".gitattributes").read_text()
+    assert ".github export-ignore" in gitattributes
+    # tests/ ships, as on moodle.org (camp-tools#83)
+    assert not any(line.split()[:1] == ["tests"] for line in gitattributes.splitlines())
 
     # second run is a no-op
     actions, fine = scaffold(tmp_path, check_only=True)

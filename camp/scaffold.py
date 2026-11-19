@@ -11,13 +11,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+# tests/ is deliberately absent: Moodle core and moodle.org plugin ZIPs ship
+# it, and Moodle's PHPUnit/Behat init picks it up from installed plugins
+# (camp-tools#83). Excluding it is the author's call, not a default.
 EXPORT_IGNORE = [
     "# Keep development files out of camp distribution ZIPs (git archive semantics)",
     ".github export-ignore",
     ".gitattributes export-ignore",
     ".gitignore export-ignore",
     ".camp export-ignore",
-    "tests export-ignore",
     "node_modules export-ignore",
 ]
 
