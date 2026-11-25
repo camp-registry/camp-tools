@@ -475,7 +475,7 @@ def _cmd_scan_malware(args: argparse.Namespace) -> int:
         print("MALWARE DETECTED — this is a hard failure")
         return 1
     if args.require_engine and not result.engines_run:
-        print("no scan engine available and --require-engine set")
+        print("no scan engine completed a scan and --require-engine set")
         return 1
     print("clean" + (" (no engine ran — advisory only)" if not result.engines_run else ""))
     return 0
